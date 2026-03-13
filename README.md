@@ -116,7 +116,6 @@ That starts a local relay on your Mac, opens an `ngrok` tunnel, and prints a QR 
 If `ngrok` reports that the endpoint is already online, stop the old tunnel first:
 
 ```sh
-pkill ngrok || true
 remodex stop
 remodex up
 ```

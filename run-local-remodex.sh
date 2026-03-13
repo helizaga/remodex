@@ -6,6 +6,7 @@ BRIDGE_DIR="$ROOT_DIR/phodex-bridge"
 PORT="${REMODEX_LOCAL_PORT:-9000}"
 BIND_HOST="${REMODEX_LOCAL_BIND_HOST:-127.0.0.1}"
 REFRESH_ENABLED="${REMODEX_REFRESH_ENABLED:-true}"
+EXPLICIT_RELAY_URL="${REMODEX_RELAY:-${PHODEX_RELAY:-}}"
 STATE_DIR="${HOME}/.remodex-local"
 BRIDGE_PID_FILE="${STATE_DIR}/bridge.pid"
 RELAY_PID_FILE="${STATE_DIR}/relay.pid"
@@ -97,7 +98,9 @@ require_command() {
 
 preflight_up() {
   require_command "node" "Install Node.js and make sure 'node' is in your PATH."
-  require_command "ngrok" "Install ngrok and make sure 'ngrok' is in your PATH."
+  if [[ -z "$EXPLICIT_RELAY_URL" ]]; then
+    require_command "ngrok" "Install ngrok and make sure 'ngrok' is in your PATH."
+  fi
 
   if [[ -z "${REMODEX_CODEX_ENDPOINT:-}" && -z "${PHODEX_CODEX_ENDPOINT:-}" ]]; then
     require_command "codex" "Install the Codex CLI or set REMODEX_CODEX_ENDPOINT to an existing app-server URL."
@@ -164,11 +167,6 @@ ngrok_log_contains() {
 cleanup_ngrok_state() {
   if [[ -f "$TUNNEL_PID_FILE" ]]; then
     stop_pid_file "tunnel" "$TUNNEL_PID_FILE"
-  fi
-
-  if pgrep -x ngrok >/dev/null 2>&1; then
-    pkill -x ngrok 2>/dev/null || true
-    sleep 1
   fi
 
   rm -f "$NGROK_LOG_FILE"
@@ -243,7 +241,11 @@ trap cleanup EXIT INT TERM
 
 echo "[remodex-local] bind host: $BIND_HOST"
 echo "[remodex-local] desktop refresh: $REFRESH_ENABLED"
-echo "[remodex-local] mode: remote tunnel"
+if [[ -n "$EXPLICIT_RELAY_URL" ]]; then
+  echo "[remodex-local] mode: explicit relay override"
+else
+  echo "[remodex-local] mode: remote tunnel"
+fi
 
 preflight_up
 
@@ -255,43 +257,65 @@ fi
 
 echo "$$" > "$BRIDGE_PID_FILE"
 
-if curl -fsS "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
-  echo "[remodex-local] reusing existing local relay on :$PORT"
-else
-  NODE_PATH="$BRIDGE_DIR/node_modules" \
-    node "$ROOT_DIR/relay/local-server.js" --host "$BIND_HOST" --port "$PORT" &
-  relay_pid=$!
-  started_relay=1
-  echo "$relay_pid" > "$RELAY_PID_FILE"
+if [[ -n "$EXPLICIT_RELAY_URL" ]]; then
+  RELAY_URL="$EXPLICIT_RELAY_URL"
+  if [[ "$RELAY_URL" == "$LOCAL_RELAY_URL" || "$RELAY_URL" == "ws://localhost:${PORT}/relay" ]]; then
+    if curl -fsS "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
+      echo "[remodex-local] reusing existing local relay on :$PORT"
+    else
+      NODE_PATH="$BRIDGE_DIR/node_modules" \
+        node "$ROOT_DIR/relay/local-server.js" --host "$BIND_HOST" --port "$PORT" &
+      relay_pid=$!
+      started_relay=1
+      echo "$relay_pid" > "$RELAY_PID_FILE"
 
-  if ! wait_for_relay; then
-    echo "[remodex-local] failed to start local relay on :$PORT" >&2
-    exit 1
+      if ! wait_for_relay; then
+        echo "[remodex-local] failed to start local relay on :$PORT" >&2
+        exit 1
+      fi
+    fi
+    echo "[remodex-local] local relay url: $LOCAL_RELAY_URL"
   fi
-fi
+  echo "[remodex-local] relay url: $RELAY_URL"
+else
+  if curl -fsS "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
+    echo "[remodex-local] reusing existing local relay on :$PORT"
+  else
+    NODE_PATH="$BRIDGE_DIR/node_modules" \
+      node "$ROOT_DIR/relay/local-server.js" --host "$BIND_HOST" --port "$PORT" &
+    relay_pid=$!
+    started_relay=1
+    echo "$relay_pid" > "$RELAY_PID_FILE"
 
-rm -f "$NGROK_LOG_FILE"
-start_ngrok_tunnel
+    if ! wait_for_relay; then
+      echo "[remodex-local] failed to start local relay on :$PORT" >&2
+      exit 1
+    fi
+  fi
 
-if ! wait_for_ngrok; then
-  if ngrok_log_contains 'ERR_NGROK_334'; then
-    echo "[remodex-local] ngrok endpoint collision detected; retrying after local cleanup" >&2
-    start_ngrok_tunnel
-    if ! wait_for_ngrok; then
+  rm -f "$NGROK_LOG_FILE"
+  start_ngrok_tunnel
+
+  if ! wait_for_ngrok; then
+    if ngrok_log_contains 'ERR_NGROK_334'; then
+      echo "[remodex-local] ngrok endpoint collision detected; retrying after local cleanup" >&2
+      start_ngrok_tunnel
+      if ! wait_for_ngrok; then
+        echo "[remodex-local] failed to start ngrok tunnel" >&2
+        report_ngrok_failure
+        exit 1
+      fi
+    else
       echo "[remodex-local] failed to start ngrok tunnel" >&2
       report_ngrok_failure
       exit 1
     fi
-  else
-    echo "[remodex-local] failed to start ngrok tunnel" >&2
-    report_ngrok_failure
-    exit 1
   fi
-fi
 
-RELAY_URL="$(discover_ngrok_relay_url)"
-echo "[remodex-local] local relay url: $LOCAL_RELAY_URL"
-echo "[remodex-local] relay url: $RELAY_URL"
+  RELAY_URL="$(discover_ngrok_relay_url)"
+  echo "[remodex-local] local relay url: $LOCAL_RELAY_URL"
+  echo "[remodex-local] relay url: $RELAY_URL"
+fi
 
 cd "$BRIDGE_DIR"
 REMODEX_RELAY="$RELAY_URL" \
