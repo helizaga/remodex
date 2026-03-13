@@ -127,6 +127,10 @@ function startBridge() {
       return;
     }
 
+    if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) {
+      return;
+    }
+
     logConnectionStatus("connecting");
     const nextSocket = new WebSocket(relaySessionUrl, {
       headers: { "x-role": "mac" },
@@ -134,6 +138,13 @@ function startBridge() {
     socket = nextSocket;
 
     nextSocket.on("open", () => {
+      if (!isActiveRelaySocket(socket, nextSocket)) {
+        if (nextSocket.readyState === WebSocket.OPEN) {
+          nextSocket.close();
+        }
+        return;
+      }
+
       clearReconnectTimer();
       reconnectAttempt = 0;
       logConnectionStatus("connected");
@@ -145,6 +156,10 @@ function startBridge() {
     });
 
     nextSocket.on("message", (data) => {
+      if (!isActiveRelaySocket(socket, nextSocket)) {
+        return;
+      }
+
       const message = typeof data === "string" ? data : data.toString("utf8");
       if (secureTransport.handleIncomingWireMessage(message, {
         sendControlMessage(controlMessage) {
@@ -161,16 +176,22 @@ function startBridge() {
     });
 
     nextSocket.on("close", (code) => {
-      logConnectionStatus("disconnected");
-      if (socket === nextSocket) {
-        socket = null;
+      if (!isActiveRelaySocket(socket, nextSocket)) {
+        return;
       }
+
+      logConnectionStatus("disconnected");
+      socket = null;
       stopContextUsageWatcher();
       desktopRefresher.handleTransportReset();
       scheduleRelayReconnect(code);
     });
 
     nextSocket.on("error", () => {
+      if (!isActiveRelaySocket(socket, nextSocket)) {
+        return;
+      }
+
       logConnectionStatus("disconnected");
     });
   }
@@ -478,4 +499,8 @@ function readString(value) {
   return typeof value === "string" && value ? value : null;
 }
 
-module.exports = { startBridge };
+function isActiveRelaySocket(currentSocket, candidateSocket) {
+  return currentSocket === candidateSocket;
+}
+
+module.exports = { startBridge, isActiveRelaySocket };

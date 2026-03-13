@@ -37,7 +37,7 @@ enum GitActionsError: LocalizedError {
         case "missing_branch", "missing_branch_name": return "Branch name is required."
         case "confirmation_required": return "Confirmation is required for this action."
         case "stash_pop_conflict": return "Stash pop failed due to conflicts."
-        case "missing_local_repo": return "Run `remodex up` from an existing local directory first."
+        case "missing_local_repo": return "Run `./run-local-remodex.sh up` from the repo root on your Mac first."
         case "missing_working_directory":
             return fallback ?? "The selected local folder is not available on this Mac."
         default: return fallback ?? "Git operation failed."

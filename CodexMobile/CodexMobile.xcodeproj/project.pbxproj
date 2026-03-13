@@ -596,9 +596,6 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PHODEX_API_URL = "https://api.phodex.app";
-				PHODEX_CHATGPT_CALLBACK_SCHEME = phodex;
-				PHODEX_CHATGPT_CALLBACK_URL = "https://api.phodex.app/api/account/chatgpt/callback";
 				PHODEX_DEFAULT_RELAY_URL = "";
 				PRODUCT_BUNDLE_IDENTIFIER = com.emanueledipietro.Remodex;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -646,9 +643,6 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PHODEX_API_URL = "https://api.phodex.app";
-				PHODEX_CHATGPT_CALLBACK_SCHEME = phodex;
-				PHODEX_CHATGPT_CALLBACK_URL = "https://api.phodex.app/api/account/chatgpt/callback";
 				PHODEX_DEFAULT_RELAY_URL = "";
 				PRODUCT_BUNDLE_IDENTIFIER = com.emanueledipietro.Remodex;
 				PRODUCT_NAME = "$(TARGET_NAME)";

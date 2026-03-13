@@ -56,20 +56,20 @@ struct OnboardingView: View {
                             VStack(spacing: 14) {
                                 OnboardingStepRow(
                                     number: "1",
-                                    title: "Install the package",
-                                    command: "npm install -g remodex@latest"
+                                    title: "Open the repo root",
+                                    subtitle: "Clone this fork on your Mac if it is not there already."
                                 )
 
                                 OnboardingStepRow(
                                     number: "2",
-                                    title: "Start the relay",
-                                    command: "remodex up"
+                                    title: "Start the bridge",
+                                    command: "./run-local-remodex.sh up"
                                 )
 
                                 OnboardingStepRow(
                                     number: "3",
                                     title: "Scan the QR code",
-                                   
+                                    subtitle: "Use the QR scanner inside Remodex after the launcher prints the pairing code."
                                 )
                             }
 

@@ -172,22 +172,12 @@ cleanup_ngrok_state() {
   rm -f "$NGROK_LOG_FILE"
 }
 
-start_ngrok_tunnel() {
-  cleanup_ngrok_state
-  ngrok http "http://127.0.0.1:${PORT}" --log=stdout --log-format=json >"$NGROK_LOG_FILE" 2>&1 &
-  tunnel_pid=$!
-  started_tunnel=1
-  echo "$tunnel_pid" > "$TUNNEL_PID_FILE"
-}
-
-report_ngrok_failure() {
+extract_ngrok_collision_endpoint() {
   if [[ ! -f "$NGROK_LOG_FILE" ]]; then
-    echo "[remodex-local] ngrok exited before writing a log file." >&2
-    return
+    return 1
   fi
 
-  if grep -q 'ERR_NGROK_334' "$NGROK_LOG_FILE" 2>/dev/null; then
-    endpoint="$(node -e '
+  node -e '
 const fs = require("fs");
 const logPath = process.argv[1];
 for (const line of fs.readFileSync(logPath, "utf8").split(/\n+/)) {
@@ -206,9 +196,142 @@ for (const line of fs.readFileSync(logPath, "utf8").split(/\n+/)) {
   }
 }
 process.exit(1);
-' "$NGROK_LOG_FILE" 2>/dev/null || true)"
+' "$NGROK_LOG_FILE"
+}
+
+auto_clear_ngrok_collision() {
+  local endpoint_url="$1"
+  local api_key="${NGROK_API_KEY:-}"
+
+  if [[ -z "$endpoint_url" || -z "$api_key" ]]; then
+    return 1
+  fi
+
+  echo "[remodex-local] attempting automatic ngrok recovery for: $endpoint_url" >&2
+
+  local endpoint_json
+  if ! endpoint_json="$(curl -fsS \
+    --url "https://api.ngrok.com/endpoints" \
+    --header "Authorization: Bearer ${api_key}" \
+    --header "ngrok-version: 2" \
+    --header "Content-Type: application/json")"; then
+    echo "[remodex-local] could not query ngrok endpoints API for automatic recovery" >&2
+    return 1
+  fi
+
+  local session_ids
+  session_ids="$(printf '%s' "$endpoint_json" | node -e '
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { input += chunk; });
+process.stdin.on("end", () => {
+  let parsed;
+  try {
+    parsed = JSON.parse(input);
+  } catch {
+    process.exit(1);
+  }
+  const endpoints = Array.isArray(parsed?.endpoints) ? parsed.endpoints : [];
+  const ids = endpoints
+    .filter((endpoint) => endpoint?.url === process.argv[1] || endpoint?.public_url === process.argv[1])
+    .map((endpoint) => endpoint?.tunnel_session?.id)
+    .filter((value) => typeof value === "string" && value.length > 0);
+  if (ids.length === 0) {
+    process.exit(2);
+  }
+  process.stdout.write(ids.join("\n"));
+});
+') "$endpoint_url")"
+
+  local parser_status=$?
+  if [[ $parser_status -eq 2 ]]; then
+    echo "[remodex-local] ngrok API did not report an active tunnel session for that endpoint" >&2
+    return 1
+  fi
+  if [[ $parser_status -ne 0 || -z "$session_ids" ]]; then
+    echo "[remodex-local] could not parse ngrok endpoint metadata for automatic recovery" >&2
+    return 1
+  fi
+
+  local stopped_any=0
+  local session_id
+  while IFS= read -r session_id; do
+    [[ -z "$session_id" ]] && continue
+    echo "[remodex-local] stopping conflicting ngrok tunnel session: $session_id" >&2
+    if curl -fsS \
+      --request POST \
+      --url "https://api.ngrok.com/tunnel_sessions/${session_id}/stop" \
+      --header "Authorization: Bearer ${api_key}" \
+      --header "ngrok-version: 2" \
+      --header "Content-Type: application/json" \
+      --data "{\"id\":\"${session_id}\"}" >/dev/null; then
+      stopped_any=1
+    fi
+  done <<< "$session_ids"
+
+  if [[ $stopped_any -eq 0 ]]; then
+    echo "[remodex-local] automatic ngrok recovery could not stop the conflicting session" >&2
+    return 1
+  fi
+
+  echo "[remodex-local] waiting for ngrok to release the endpoint" >&2
+  sleep 2
+  return 0
+}
+
+recover_ngrok_collision() {
+  local endpoint_url="$1"
+  local max_attempts=6
+  local attempt=1
+
+  while (( attempt <= max_attempts )); do
+    if [[ -n "$endpoint_url" ]]; then
+      auto_clear_ngrok_collision "$endpoint_url" || true
+    fi
+
+    if (( attempt < max_attempts )); then
+      echo "[remodex-local] waiting for ngrok endpoint release (${attempt}/${max_attempts})" >&2
+      sleep 5
+    fi
+
+    start_ngrok_tunnel
+    if wait_for_ngrok; then
+      return 0
+    fi
+
+    if ! ngrok_log_contains 'ERR_NGROK_334'; then
+      return 1
+    fi
+
+    endpoint_url="$(extract_ngrok_collision_endpoint 2>/dev/null || printf '%s' "$endpoint_url")"
+    attempt=$((attempt + 1))
+  done
+
+  return 1
+}
+
+start_ngrok_tunnel() {
+  cleanup_ngrok_state
+  ngrok http "http://127.0.0.1:${PORT}" --log=stdout --log-format=json >"$NGROK_LOG_FILE" 2>&1 &
+  tunnel_pid=$!
+  started_tunnel=1
+  echo "$tunnel_pid" > "$TUNNEL_PID_FILE"
+}
+
+report_ngrok_failure() {
+  if [[ ! -f "$NGROK_LOG_FILE" ]]; then
+    echo "[remodex-local] ngrok exited before writing a log file." >&2
+    return
+  fi
+
+  if grep -q 'ERR_NGROK_334' "$NGROK_LOG_FILE" 2>/dev/null; then
+    endpoint="$(extract_ngrok_collision_endpoint 2>/dev/null || true)"
     echo "[remodex-local] ngrok endpoint is already online${endpoint:+: $endpoint}" >&2
-    echo "[remodex-local] stop the other ngrok session or free the endpoint in the ngrok dashboard, then retry." >&2
+    if [[ -n "${NGROK_API_KEY:-}" ]]; then
+      echo "[remodex-local] automatic recovery using NGROK_API_KEY did not succeed; free the endpoint in ngrok or retry later." >&2
+    else
+      echo "[remodex-local] set NGROK_API_KEY to allow automatic cloud-session cleanup, or free the endpoint in ngrok and retry." >&2
+    fi
     return
   fi
 
@@ -301,9 +424,12 @@ else
       echo "[remodex-local] ngrok endpoint collision detected; retrying after local cleanup" >&2
       start_ngrok_tunnel
       if ! wait_for_ngrok; then
-        echo "[remodex-local] failed to start ngrok tunnel" >&2
-        report_ngrok_failure
-        exit 1
+        collision_endpoint="$(extract_ngrok_collision_endpoint 2>/dev/null || true)"
+        if ! recover_ngrok_collision "$collision_endpoint"; then
+          echo "[remodex-local] failed to start ngrok tunnel" >&2
+          report_ngrok_failure
+          exit 1
+        fi
       fi
     else
       echo "[remodex-local] failed to start ngrok tunnel" >&2
