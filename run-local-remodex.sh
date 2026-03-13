@@ -156,6 +156,32 @@ process.exit(1);
 ' "$NGROK_LOG_FILE"
 }
 
+ngrok_log_contains() {
+  local pattern="$1"
+  [[ -f "$NGROK_LOG_FILE" ]] && grep -q "$pattern" "$NGROK_LOG_FILE" 2>/dev/null
+}
+
+cleanup_ngrok_state() {
+  if [[ -f "$TUNNEL_PID_FILE" ]]; then
+    stop_pid_file "tunnel" "$TUNNEL_PID_FILE"
+  fi
+
+  if pgrep -x ngrok >/dev/null 2>&1; then
+    pkill -x ngrok 2>/dev/null || true
+    sleep 1
+  fi
+
+  rm -f "$NGROK_LOG_FILE"
+}
+
+start_ngrok_tunnel() {
+  cleanup_ngrok_state
+  ngrok http "http://127.0.0.1:${PORT}" --log=stdout --log-format=json >"$NGROK_LOG_FILE" 2>&1 &
+  tunnel_pid=$!
+  started_tunnel=1
+  echo "$tunnel_pid" > "$TUNNEL_PID_FILE"
+}
+
 report_ngrok_failure() {
   if [[ ! -f "$NGROK_LOG_FILE" ]]; then
     echo "[remodex-local] ngrok exited before writing a log file." >&2
@@ -245,15 +271,22 @@ else
 fi
 
 rm -f "$NGROK_LOG_FILE"
-ngrok http "http://127.0.0.1:${PORT}" --log=stdout --log-format=json >"$NGROK_LOG_FILE" 2>&1 &
-tunnel_pid=$!
-started_tunnel=1
-echo "$tunnel_pid" > "$TUNNEL_PID_FILE"
+start_ngrok_tunnel
 
 if ! wait_for_ngrok; then
-  echo "[remodex-local] failed to start ngrok tunnel" >&2
-  report_ngrok_failure
-  exit 1
+  if ngrok_log_contains 'ERR_NGROK_334'; then
+    echo "[remodex-local] ngrok endpoint collision detected; retrying after local cleanup" >&2
+    start_ngrok_tunnel
+    if ! wait_for_ngrok; then
+      echo "[remodex-local] failed to start ngrok tunnel" >&2
+      report_ngrok_failure
+      exit 1
+    fi
+  else
+    echo "[remodex-local] failed to start ngrok tunnel" >&2
+    report_ngrok_failure
+    exit 1
+  fi
 fi
 
 RELAY_URL="$(discover_ngrok_relay_url)"
