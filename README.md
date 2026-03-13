@@ -25,7 +25,7 @@ Control [Codex](https://openai.com/index/codex/) from your iPhone. Remodex is a 
 - QR pairing with automatic reconnect
 - Shared thread history with Codex on your Mac
 
-This fork hardens the Mac-side defaults by removing any silent hosted-relay fallback. The same TestFlight app still works, and `remodex up` now uses your explicit `ngrok` tunnel path by default.
+This fork hardens the Mac-side defaults by removing any silent hosted-relay fallback. The same TestFlight app still works, and the repo-local launcher opens an explicit `ngrok` tunnel by default.
 
 > **I am very early in this project. Expect bugs.**
 >
@@ -33,7 +33,7 @@ This fork hardens the Mac-side defaults by removing any silent hosted-relay fall
 
 ## Get the App
 
-Install the Remodex app from [TestFlight](https://testflight.apple.com/join/PKZhBUVM) before you run `remodex up`.
+Install the Remodex app from [TestFlight](https://testflight.apple.com/join/PKZhBUVM) before you run the launcher.
 
 Once the app is installed, onboarding inside Remodex walks you through pairing and scanning the QR from inside the app.
 
@@ -55,7 +55,7 @@ If you scan the pairing QR with a generic camera or QR reader before installing 
                                         └─────────────┘                           └─────────────┘
 ```
 
-1. Run `remodex up` on your Mac — a QR code appears in the terminal
+1. Run `./run-local-remodex.sh up` on your Mac — a QR code appears in the terminal
 2. Scan it with the Remodex iOS app to pair
 3. Your phone sends instructions to Codex through the bridge and receives responses in real-time
 4. The bridge handles git operations, desktop refresh, and session persistence locally
@@ -83,47 +83,51 @@ This is a monorepo with a local bridge, an iOS app target, and its tests:
 ## Prerequisites
 
 - **Node.js** v18+
+- **`ngrok`** installed and authenticated on your Mac
 - **[Codex CLI](https://github.com/openai/codex)** installed and in your PATH
 - **[Codex desktop app](https://openai.com/index/codex/)** (optional — for viewing threads on your Mac)
 - **[Remodex iOS app via TestFlight](https://testflight.apple.com/join/PKZhBUVM)** installed on your iPhone or iPad before scanning the pairing QR
 - **macOS** (for desktop refresh features — the core bridge works on any OS)
 - **Xcode 16+** (only if building the iOS app from source)
 
-## Install the Bridge
+## Clone the Fork
 
-<sub>Install from npm with `@latest` so you always get the newest bridge fixes.</sub>
+```sh
+git clone https://github.com/helizaga/remodex.git
+cd remodex
+```
+
+The default remote workflow in this fork is driven by [`run-local-remodex.sh`](./run-local-remodex.sh). It starts the local relay, opens the `ngrok` tunnel, and launches the bridge. On first run, the launcher installs bridge dependencies automatically if needed.
+
+## Optional CLI Install
+
+If you also want the upstream CLI commands such as `remodex resume` and `remodex watch`, install the npm package globally:
 
 ```sh
 npm install -g remodex@latest
 ```
-
-To update an existing global install later:
-
-```sh
-npm install -g remodex@latest
-```
-
-If you only want to try Remodex, you can install it from npm and run it without cloning this repository.
 
 ## Quick Start
 
 ```sh
-remodex up
+./run-local-remodex.sh up
 ```
 
 That starts a local relay on your Mac, opens an `ngrok` tunnel, and prints a QR code that the existing TestFlight app can scan from anywhere.
 
+If you want the shorter `remodex up` / `remodex stop` workflow on your own machine, add a shell function that forwards those two commands to [`run-local-remodex.sh`](./run-local-remodex.sh) and lets every other `remodex ...` command fall through to the installed npm binary.
+
 If `ngrok` reports that the endpoint is already online, stop the old tunnel first:
 
 ```sh
-remodex stop
-remodex up
+./run-local-remodex.sh stop
+./run-local-remodex.sh up
 ```
 
 If you want to use a relay directly instead, set it explicitly:
 
 ```sh
-REMODEX_RELAY=ws://127.0.0.1:9000/relay remodex up
+REMODEX_RELAY=ws://127.0.0.1:9000/relay ./run-local-remodex.sh up
 ```
 
 ## Local Development
@@ -136,10 +140,12 @@ npm start
 
 ## Commands
 
-### `remodex up`
+### `./run-local-remodex.sh up`
 
-Starts the bridge:
+Starts the fork launcher and bridge:
 
+- Starts or reuses the local relay on your Mac
+- Opens the default `ngrok` tunnel unless `REMODEX_RELAY` is set explicitly
 - Spawns `codex app-server` (or connects to an existing endpoint)
 - Connects the Mac bridge to the relay session endpoint
 - Displays a QR code for phone pairing
@@ -149,7 +155,7 @@ Starts the bridge:
 
 ### `remodex resume`
 
-Reopens the last active thread in Codex.app on your Mac.
+Reopens the last active thread in Codex.app on your Mac. This command comes from the installed npm CLI, not the fork launcher.
 
 ```sh
 remodex resume
@@ -158,7 +164,7 @@ remodex resume
 
 ### `remodex watch [threadId]`
 
-Tails the event log for a thread in real-time.
+Tails the event log for a thread in real-time. This command comes from the installed npm CLI, not the fork launcher.
 
 ```sh
 remodex watch
@@ -184,20 +190,20 @@ All optional. Sensible defaults are provided.
 
 ```sh
 # Start the default remote workflow
-remodex up
+./run-local-remodex.sh up
 
 # Connect to an existing Codex instance
-REMODEX_CODEX_ENDPOINT=ws://localhost:8080 remodex up
+REMODEX_CODEX_ENDPOINT=ws://localhost:8080 ./run-local-remodex.sh up
 
 # Stop the bridge, relay, and tunnel
-remodex stop
+./run-local-remodex.sh stop
 ```
 
 ## Pairing and Safety
 
 - Remodex is local-first: Codex, git operations, and workspace actions run on your Mac, while the iPhone acts as a paired remote control.
 - The pairing QR now carries the relay base URL, the session ID, and the bridge identity key used to bootstrap end-to-end encryption. After a successful scan, the iPhone stores that pairing in Keychain and tries to reconnect automatically on relaunch or when the app returns to the foreground.
-- This fork has no hosted relay fallback. The default path is your explicit `ngrok` tunnel via `remodex up`, or you can set `REMODEX_RELAY` to your own relay endpoint.
+- This fork has no hosted relay fallback. The default path is the explicit `ngrok` tunnel started by [`run-local-remodex.sh`](./run-local-remodex.sh), or you can set `REMODEX_RELAY` to your own relay endpoint.
 - If you want to inspect or self-host the relay, the server code is available in [`relay/`](relay/).
 - On the iPhone, the default agent permission mode is `On-Request`. Switching the app to `Full access` auto-approves runtime approval prompts from the agent.
 
@@ -257,7 +263,7 @@ Remodex works with both the Codex CLI and the Codex desktop app (`Codex.app`). U
 
 ```sh
 # Enable the old deep-link refresh workaround manually
-REMODEX_REFRESH_ENABLED=true remodex up
+REMODEX_REFRESH_ENABLED=true ./run-local-remodex.sh up
 ```
 
 This triggers a debounced deep-link bounce (`codex://settings` → `codex://threads/<id>`) that forces the desktop app to remount the current thread without interrupting any running tasks. While a turn is running, Remodex also watches the persisted rollout for that thread and issues occasional throttled refreshes so long responses become visible on Mac without a full app relaunch. If the local desktop path is unavailable, the bridge self-disables desktop refresh for the rest of that run instead of retrying noisily forever.
@@ -291,7 +297,7 @@ Not for Remodex itself. You need Codex CLI set up and working independently.
 The core bridge (relay + Codex forwarding + git) works on any OS. Desktop refresh (AppleScript) is macOS-only.
 
 **What happens if I close the terminal?**
-The bridge stops. Run `remodex up` again — your phone will reconnect when it detects the relay session.
+The bridge stops. Run `./run-local-remodex.sh up` again — your phone will reconnect when it detects the relay session.
 
 **Can I connect to a remote Codex instance?**
 Yes — set `REMODEX_CODEX_ENDPOINT=ws://host:port` to skip spawning a local `codex app-server`.
