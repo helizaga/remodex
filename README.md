@@ -25,11 +25,7 @@ Control [Codex](https://openai.com/index/codex/) from your iPhone. Remodex is a 
 - QR pairing with automatic reconnect
 - Shared thread history with Codex on your Mac
 
-Right now, testing the full phone-to-Mac flow still depends on `api.phodex.app`.
-
-Right now I'm letting people use the hosted relay for free while I test things and clean up the experience. Longer term, the open-source path is for self-hosted setups, and the App Store version is meant to cover the managed relay and ongoing maintenance.
-
-The current TestFlight phase is free while I validate the app over the next few days. After that, the iOS app is planned to move to the App Store as a one-time paid app. That decision is mainly to help cover the cost of the VPS behind the pairing flow and the ongoing development/support needed to keep Remodex working well; final pricing will be shared separately.
+This fork hardens the Mac-side defaults by removing any silent hosted-relay fallback. The same TestFlight app still works, and `remodex up` now uses your explicit `ngrok` tunnel path by default.
 
 > **I am very early in this project. Expect bugs.**
 >
@@ -115,7 +111,21 @@ If you only want to try Remodex, you can install it from npm and run it without 
 remodex up
 ```
 
-Open the Remodex app, follow the onboarding flow, then scan the QR code from inside the app and start coding.
+That starts a local relay on your Mac, opens an `ngrok` tunnel, and prints a QR code that the existing TestFlight app can scan from anywhere.
+
+If `ngrok` reports that the endpoint is already online, stop the old tunnel first:
+
+```sh
+pkill ngrok || true
+remodex stop
+remodex up
+```
+
+If you want to use a relay directly instead, set it explicitly:
+
+```sh
+REMODEX_RELAY=ws://127.0.0.1:9000/relay remodex up
+```
 
 ## Local Development
 
@@ -165,7 +175,7 @@ All optional. Sensible defaults are provided.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `REMODEX_RELAY` | `wss://api.phodex.app/relay` | Relay base URL used for QR pairing and phone/Mac session routing |
+| `REMODEX_RELAY` | — | Explicit relay base URL used for QR pairing and phone/Mac session routing |
 | `REMODEX_CODEX_ENDPOINT` | — | Connect to an existing Codex WebSocket instead of spawning a local `codex app-server` |
 | `REMODEX_REFRESH_ENABLED` | `false` | Auto-refresh Codex.app when phone activity is detected (`true` enables it explicitly) |
 | `REMODEX_REFRESH_DEBOUNCE_MS` | `1200` | Debounce window (ms) for coalescing refresh events |
@@ -174,21 +184,21 @@ All optional. Sensible defaults are provided.
 | `CODEX_HOME` | `~/.codex` | Codex data directory (used here for `sessions/` rollout files) |
 
 ```sh
-# Enable desktop refresh explicitly
-REMODEX_REFRESH_ENABLED=true remodex up
+# Start the default remote workflow
+remodex up
 
 # Connect to an existing Codex instance
 REMODEX_CODEX_ENDPOINT=ws://localhost:8080 remodex up
 
-# Use a custom relay endpoint (`ws://` is unencrypted)
-REMODEX_RELAY=ws://localhost:9000/relay remodex up
+# Stop the bridge, relay, and tunnel
+remodex stop
 ```
 
 ## Pairing and Safety
 
 - Remodex is local-first: Codex, git operations, and workspace actions run on your Mac, while the iPhone acts as a paired remote control.
 - The pairing QR now carries the relay base URL, the session ID, and the bridge identity key used to bootstrap end-to-end encryption. After a successful scan, the iPhone stores that pairing in Keychain and tries to reconnect automatically on relaunch or when the app returns to the foreground.
-- The default relay is `wss://api.phodex.app/relay`, so the socket itself is protected with TLS in transit, and Remodex wraps application payloads in end-to-end encryption after the secure handshake completes.
+- This fork has no hosted relay fallback. The default path is your explicit `ngrok` tunnel via `remodex up`, or you can set `REMODEX_RELAY` to your own relay endpoint.
 - If you want to inspect or self-host the relay, the server code is available in [`relay/`](relay/).
 - On the iPhone, the default agent permission mode is `On-Request`. Switching the app to `Full access` auto-approves runtime approval prompts from the agent.
 
@@ -291,10 +301,7 @@ Yes — set `REMODEX_CODEX_ENDPOINT=ws://host:port` to skip spawning a local `co
 The desktop app reads session data from disk (`~/.codex/sessions`) but doesn't live-reload when an external process writes new data. Remodex keeps desktop refresh off by default for now because the current workaround bounces the Codex app route and can feel disruptive. If you still want that workaround, enable it explicitly with `REMODEX_REFRESH_ENABLED=true`.
 
 **Can I self-host the relay server?**
-Yes. The default hosted relay runs on my VPS, and the relay server code is available in [`relay/`](relay/) if you want to inspect it or run your own compatible relay. Then point Remodex at your relay with `REMODEX_RELAY`.
-
-**Is the default hosted relay safe for sensitive work?**
-For everyday use, it is now much stronger than a plain relay: traffic is protected in transit with TLS, application payloads are end-to-end encrypted after the secure handshake, and all Codex execution still happens on your Mac. The relay can still observe connection metadata and handshake control messages, so if you want the tightest control over routing and metadata exposure, set `REMODEX_RELAY` to a relay you run yourself.
+Yes. This fork’s built-in default is the local relay plus `ngrok`, but the relay server code is available in [`relay/`](relay/) if you want to run your own compatible relay and point Remodex at it with `REMODEX_RELAY`.
 
 ## License
 

@@ -19,6 +19,10 @@ function wait(ms) {
 
 test("readBridgeConfig keeps safe defaults and explicit overrides", () => {
   const macConfig = readBridgeConfig({ env: {}, platform: "darwin" });
+  const explicitRelayConfig = readBridgeConfig({
+    env: { REMODEX_RELAY: "ws://127.0.0.1:9000/relay" },
+    platform: "darwin",
+  });
   const macEndpointConfig = readBridgeConfig({
     env: { REMODEX_CODEX_ENDPOINT: "ws://localhost:8080" },
     platform: "darwin",
@@ -44,6 +48,8 @@ test("readBridgeConfig keeps safe defaults and explicit overrides", () => {
   });
 
   assert.equal(macConfig.refreshEnabled, false);
+  assert.equal(macConfig.relayUrl, "");
+  assert.equal(explicitRelayConfig.relayUrl, "ws://127.0.0.1:9000/relay");
   assert.equal(macEndpointConfig.refreshEnabled, false);
   assert.equal(linuxConfig.refreshEnabled, false);
   assert.equal(linuxCommandConfig.refreshEnabled, false);

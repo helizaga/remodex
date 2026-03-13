@@ -1,8 +1,8 @@
 # Relay
 
-This folder contains the thin WebSocket relay used by the default hosted Remodex pairing flow.
+This folder contains the thin WebSocket relay used by the self-hosted Remodex pairing flow.
 
-In production, the default hosted relay runs on my VPS. If you want, you can inspect this code, fork it, and host the same relay yourself.
+In this fork, the relay is expected to run under your control, either on your Mac, your LAN, or infrastructure you manage.
 
 ## What It Does
 

@@ -22,6 +22,13 @@ const { createBridgeSecureTransport } = require("./secure-transport");
 
 function startBridge() {
   const config = readBridgeConfig();
+  if (!config.relayUrl) {
+    console.error("[remodex] No relay is configured.");
+    console.error(
+      "[remodex] Use ./run-local-remodex.sh or set REMODEX_RELAY explicitly."
+    );
+    process.exit(1);
+  }
   const sessionId = uuidv4();
   const relayBaseUrl = config.relayUrl.replace(/\/+$/, "");
   const relaySessionUrl = `${relayBaseUrl}/${sessionId}`;

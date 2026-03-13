@@ -521,6 +521,11 @@ function readBridgeConfig({ env = process.env, platform = process.platform } = {
     "",
     env
   );
+  const explicitRelayUrl = readFirstDefinedEnv(
+    ["REMODEX_RELAY", "PHODEX_RELAY"],
+    "",
+    env
+  );
   const refreshCommand = readFirstDefinedEnv(
     ["REMODEX_REFRESH_COMMAND", "PHODEX_ON_PHONE_MESSAGE"],
     "",
@@ -530,11 +535,7 @@ function readBridgeConfig({ env = process.env, platform = process.platform } = {
   // Desktop refresh is opt-in for now because Codex.app still lacks true live updates.
   const defaultRefreshEnabled = false;
   return {
-    relayUrl: readFirstDefinedEnv(
-      ["REMODEX_RELAY", "PHODEX_RELAY"],
-      "wss://api.phodex.app/relay",
-      env
-    ),
+    relayUrl: explicitRelayUrl,
     refreshEnabled: explicitRefreshEnabled == null
       ? defaultRefreshEnabled
       : explicitRefreshEnabled,

@@ -4,8 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 BRIDGE_DIR="$ROOT_DIR/phodex-bridge"
 PORT="${REMODEX_LOCAL_PORT:-9000}"
-BIND_HOST="${REMODEX_LOCAL_BIND_HOST:-0.0.0.0}"
-LAN_HOST="${REMODEX_LOCAL_HOST:-$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || hostname)}"
+BIND_HOST="${REMODEX_LOCAL_BIND_HOST:-127.0.0.1}"
 REFRESH_ENABLED="${REMODEX_REFRESH_ENABLED:-true}"
 STATE_DIR="${HOME}/.remodex-local"
 BRIDGE_PID_FILE="${STATE_DIR}/bridge.pid"
@@ -13,7 +12,13 @@ RELAY_PID_FILE="${STATE_DIR}/relay.pid"
 TUNNEL_PID_FILE="${STATE_DIR}/tunnel.pid"
 NGROK_LOG_FILE="${STATE_DIR}/ngrok.log"
 COMMAND="${1:-up}"
-RELAY_URL="ws://${LAN_HOST}:${PORT}/relay"
+LOCAL_RELAY_URL="ws://127.0.0.1:${PORT}/relay"
+RELAY_URL=""
+
+if [[ "$COMMAND" != "up" && "$COMMAND" != "stop" ]]; then
+  echo "Usage: ./run-local-remodex.sh [up|stop]" >&2
+  exit 1
+fi
 
 if [[ ! -d "$BRIDGE_DIR/node_modules" ]]; then
   echo "[remodex-local] installing bridge dependencies"
@@ -77,6 +82,28 @@ read_live_pid() {
   return 1
 }
 
+require_command() {
+  local command_name="$1"
+  local install_hint="$2"
+
+  if command -v "$command_name" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  echo "[remodex-local] missing required command: $command_name" >&2
+  echo "[remodex-local] $install_hint" >&2
+  exit 1
+}
+
+preflight_up() {
+  require_command "node" "Install Node.js and make sure 'node' is in your PATH."
+  require_command "ngrok" "Install ngrok and make sure 'ngrok' is in your PATH."
+
+  if [[ -z "${REMODEX_CODEX_ENDPOINT:-}" && -z "${PHODEX_CODEX_ENDPOINT:-}" ]]; then
+    require_command "codex" "Install the Codex CLI or set REMODEX_CODEX_ENDPOINT to an existing app-server URL."
+  fi
+}
+
 wait_for_relay() {
   local attempts=20
   local delay_s=0.25
@@ -98,6 +125,9 @@ wait_for_ngrok() {
   for ((i=1; i<=attempts; i++)); do
     if [[ -f "$NGROK_LOG_FILE" ]] && grep -q '"msg":"started tunnel"' "$NGROK_LOG_FILE" 2>/dev/null; then
       return 0
+    fi
+    if [[ -f "$NGROK_LOG_FILE" ]] && grep -q 'ERR_NGROK_' "$NGROK_LOG_FILE" 2>/dev/null; then
+      return 1
     fi
     sleep "$delay_s"
   done
@@ -126,6 +156,42 @@ process.exit(1);
 ' "$NGROK_LOG_FILE"
 }
 
+report_ngrok_failure() {
+  if [[ ! -f "$NGROK_LOG_FILE" ]]; then
+    echo "[remodex-local] ngrok exited before writing a log file." >&2
+    return
+  fi
+
+  if grep -q 'ERR_NGROK_334' "$NGROK_LOG_FILE" 2>/dev/null; then
+    endpoint="$(node -e '
+const fs = require("fs");
+const logPath = process.argv[1];
+for (const line of fs.readFileSync(logPath, "utf8").split(/\n+/)) {
+  if (!line.trim()) continue;
+  let obj;
+  try {
+    obj = JSON.parse(line);
+  } catch {
+    continue;
+  }
+  const err = typeof obj.err === "string" ? obj.err : "";
+  const match = err.match(/The endpoint '"'"'([^'"'"']+)'"'"' is already online/);
+  if (match) {
+    process.stdout.write(match[1]);
+    process.exit(0);
+  }
+}
+process.exit(1);
+' "$NGROK_LOG_FILE" 2>/dev/null || true)"
+    echo "[remodex-local] ngrok endpoint is already online${endpoint:+: $endpoint}" >&2
+    echo "[remodex-local] stop the other ngrok session or free the endpoint in the ngrok dashboard, then retry." >&2
+    return
+  fi
+
+  echo "[remodex-local] ngrok failed to start. Recent log output:" >&2
+  tail -20 "$NGROK_LOG_FILE" >&2 || true
+}
+
 cleanup() {
   local status=$?
   rm -f "$BRIDGE_PID_FILE"
@@ -149,8 +215,11 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
-echo "[remodex-local] lan host: $LAN_HOST"
+echo "[remodex-local] bind host: $BIND_HOST"
 echo "[remodex-local] desktop refresh: $REFRESH_ENABLED"
+echo "[remodex-local] mode: remote tunnel"
+
+preflight_up
 
 if existing_bridge_pid="$(read_live_pid "$BRIDGE_PID_FILE")"; then
   echo "[remodex-local] bridge already running (pid ${existing_bridge_pid})"
@@ -175,28 +244,21 @@ else
   fi
 fi
 
-if [[ "$COMMAND" == "remote" ]]; then
-  if ! command -v ngrok >/dev/null 2>&1; then
-    echo "[remodex-local] ngrok is required for remote mode" >&2
-    exit 1
-  fi
+rm -f "$NGROK_LOG_FILE"
+ngrok http "http://127.0.0.1:${PORT}" --log=stdout --log-format=json >"$NGROK_LOG_FILE" 2>&1 &
+tunnel_pid=$!
+started_tunnel=1
+echo "$tunnel_pid" > "$TUNNEL_PID_FILE"
 
-  rm -f "$NGROK_LOG_FILE"
-  ngrok http "http://127.0.0.1:${PORT}" --log=stdout --log-format=json >"$NGROK_LOG_FILE" 2>&1 &
-  tunnel_pid=$!
-  started_tunnel=1
-  echo "$tunnel_pid" > "$TUNNEL_PID_FILE"
-
-  if ! wait_for_ngrok; then
-    echo "[remodex-local] failed to start ngrok tunnel" >&2
-    exit 1
-  fi
-
-  RELAY_URL="$(discover_ngrok_relay_url)"
-  echo "[remodex-local] relay url: $RELAY_URL"
-else
-  echo "[remodex-local] relay url: $RELAY_URL"
+if ! wait_for_ngrok; then
+  echo "[remodex-local] failed to start ngrok tunnel" >&2
+  report_ngrok_failure
+  exit 1
 fi
+
+RELAY_URL="$(discover_ngrok_relay_url)"
+echo "[remodex-local] local relay url: $LOCAL_RELAY_URL"
+echo "[remodex-local] relay url: $RELAY_URL"
 
 cd "$BRIDGE_DIR"
 REMODEX_RELAY="$RELAY_URL" \

@@ -7,14 +7,19 @@
 import Foundation
 
 enum AppEnvironment {
-    private static let defaultRelayURLInfoPlistKey = "PHODEX_DEFAULT_RELAY_URL"
+    private static let defaultRelayURLInfoPlistKeys = [
+        "PHODEX_DEFAULT_RELAY_URL",
+        "PHODEX_DEFAULT_WS_URL",
+    ]
 
-    // Keeps a working default relay when no explicit value is configured.
-    static let defaultRelayURLString = "wss://api.phodex.app/relay"
+    // Fail closed unless the app bundle explicitly opts into a relay endpoint.
+    static let defaultRelayURLString = ""
 
     static var relayBaseURL: String {
-        if let infoURL = resolvedString(forInfoPlistKey: defaultRelayURLInfoPlistKey) {
-            return infoURL
+        for key in defaultRelayURLInfoPlistKeys {
+            if let infoURL = resolvedString(forInfoPlistKey: key) {
+                return normalizedRelayURLString(infoURL)
+            }
         }
         return defaultRelayURLString
     }
@@ -36,5 +41,13 @@ private extension AppEnvironment {
         }
 
         return trimmedValue
+    }
+
+    static func normalizedRelayURLString(_ rawValue: String) -> String {
+        if rawValue.hasSuffix("/ws") {
+            return "\(rawValue.dropLast(3))/relay"
+        }
+
+        return rawValue
     }
 }

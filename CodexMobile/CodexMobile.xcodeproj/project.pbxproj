@@ -599,7 +599,7 @@
 				PHODEX_API_URL = "https://api.phodex.app";
 				PHODEX_CHATGPT_CALLBACK_SCHEME = phodex;
 				PHODEX_CHATGPT_CALLBACK_URL = "https://api.phodex.app/api/account/chatgpt/callback";
-				PHODEX_DEFAULT_WS_URL = "wss://api.phodex.app/ws";
+				PHODEX_DEFAULT_RELAY_URL = "";
 				PRODUCT_BUNDLE_IDENTIFIER = com.emanueledipietro.Remodex;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -649,7 +649,7 @@
 				PHODEX_API_URL = "https://api.phodex.app";
 				PHODEX_CHATGPT_CALLBACK_SCHEME = phodex;
 				PHODEX_CHATGPT_CALLBACK_URL = "https://api.phodex.app/api/account/chatgpt/callback";
-				PHODEX_DEFAULT_WS_URL = "wss://api.phodex.app/ws";
+				PHODEX_DEFAULT_RELAY_URL = "";
 				PRODUCT_BUNDLE_IDENTIFIER = com.emanueledipietro.Remodex;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";

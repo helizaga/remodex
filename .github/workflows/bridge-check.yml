@@ -5,10 +5,14 @@ on:
     paths:
       - ".github/workflows/bridge-check.yml"
       - "phodex-bridge/**"
+      - "relay/**"
+      - "run-local-remodex.sh"
   pull_request:
     paths:
       - ".github/workflows/bridge-check.yml"
       - "phodex-bridge/**"
+      - "relay/**"
+      - "run-local-remodex.sh"
 
 jobs:
   bridge-check:
@@ -29,7 +33,17 @@ jobs:
         working-directory: phodex-bridge
         run: npm ci
 
+      - name: Run bridge tests
+        working-directory: phodex-bridge
+        run: npm test
+
       - name: Verify bridge entrypoints load
         working-directory: phodex-bridge
         run: |
           node -e "const mod = require('./src'); const names = ['startBridge', 'openLastActiveThread', 'watchThreadRollout']; for (const name of names) { if (typeof mod[name] !== 'function') { throw new Error('Missing export: ' + name); } }"
+
+      - name: Syntax-check fork launcher and relay
+        run: |
+          bash -n run-local-remodex.sh
+          node --check relay/local-server.js
+          node --check relay/relay.js

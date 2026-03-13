@@ -51,8 +51,8 @@
 	<string>$(PHODEX_CHATGPT_CALLBACK_SCHEME)</string>
 	<key>PHODEX_CHATGPT_CALLBACK_URL</key>
 	<string>$(PHODEX_CHATGPT_CALLBACK_URL)</string>
-	<key>PHODEX_DEFAULT_WS_URL</key>
-	<string>$(PHODEX_DEFAULT_WS_URL)</string>
+	<key>PHODEX_DEFAULT_RELAY_URL</key>
+	<string>$(PHODEX_DEFAULT_RELAY_URL)</string>
 	<key>UIAppFonts</key>
 	<array>
 		<string>JetBrainsMono-Regular.ttf</string>
