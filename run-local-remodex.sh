@@ -12,6 +12,7 @@ BRIDGE_PID_FILE="${STATE_DIR}/bridge.pid"
 RELAY_PID_FILE="${STATE_DIR}/relay.pid"
 TUNNEL_PID_FILE="${STATE_DIR}/tunnel.pid"
 NGROK_LOG_FILE="${STATE_DIR}/ngrok.log"
+BRIDGE_LOG_FILE="${STATE_DIR}/bridge.log"
 COMMAND="${1:-up}"
 LOCAL_RELAY_URL="ws://127.0.0.1:${PORT}/relay"
 RELAY_URL=""
@@ -45,7 +46,7 @@ stop_pid_file() {
   fi
 
   if kill -0 "$pid" 2>/dev/null; then
-    kill "$pid" 2>/dev/null || true
+    terminate_pid "$pid"
     echo "[remodex-local] stopped ${label} (pid ${pid})"
   else
     echo "[remodex-local] ${label} not running"
@@ -54,7 +55,64 @@ stop_pid_file() {
   rm -f "$pid_file"
 }
 
+terminate_pid() {
+  local pid="$1"
+  local attempts=10
+
+  kill "$pid" 2>/dev/null || true
+  for ((i=1; i<=attempts; i++)); do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.2
+  done
+
+  kill -9 "$pid" 2>/dev/null || true
+}
+
+find_repo_launcher_pids() {
+  {
+    pgrep -f "${ROOT_DIR}/run-local-remodex.sh up" 2>/dev/null || true
+    pgrep -f '(^|.*/)run-local-remodex\.sh up($| )' 2>/dev/null || true
+  } | awk 'NF { print $1 }' | sort -u
+}
+
+cleanup_repo_launcher_orphans() {
+  local action_label="$1"
+  local pid
+  while IFS= read -r pid; do
+    [[ -z "$pid" ]] && continue
+    [[ "$pid" == "$$" ]] && continue
+    if kill -0 "$pid" 2>/dev/null; then
+      terminate_pid "$pid"
+      echo "[remodex-local] stopped stale launcher during ${action_label} (pid ${pid})"
+    fi
+  done < <(find_repo_launcher_pids)
+}
+
+find_repo_worker_pids() {
+  {
+    pgrep -f "${ROOT_DIR}/relay/local-server.js" 2>/dev/null || true
+    pgrep -f 'node ./bin/remodex\.js up' 2>/dev/null || true
+    pgrep -f "ngrok http http://127.0.0.1:${PORT}" 2>/dev/null || true
+  } | awk 'NF { print $1 }' | sort -u
+}
+
+cleanup_repo_worker_orphans() {
+  local action_label="$1"
+  local pid
+  while IFS= read -r pid; do
+    [[ -z "$pid" ]] && continue
+    if kill -0 "$pid" 2>/dev/null; then
+      terminate_pid "$pid"
+      echo "[remodex-local] stopped stale worker during ${action_label} (pid ${pid})"
+    fi
+  done < <(find_repo_worker_pids)
+}
+
 if [[ "$COMMAND" == "stop" ]]; then
+  cleanup_repo_launcher_orphans "stop"
+  cleanup_repo_worker_orphans "stop"
   stop_pid_file "bridge" "$BRIDGE_PID_FILE"
   stop_pid_file "tunnel" "$TUNNEL_PID_FILE"
   stop_pid_file "relay" "$RELAY_PID_FILE"
@@ -372,6 +430,9 @@ fi
 
 preflight_up
 
+cleanup_repo_launcher_orphans "startup"
+cleanup_repo_worker_orphans "startup"
+
 if existing_bridge_pid="$(read_live_pid "$BRIDGE_PID_FILE")"; then
   echo "[remodex-local] bridge already running (pid ${existing_bridge_pid})"
   echo "[remodex-local] stop the existing session before starting a new one"
@@ -444,6 +505,8 @@ else
 fi
 
 cd "$BRIDGE_DIR"
+echo "[remodex-local] bridge log: $BRIDGE_LOG_FILE"
+rm -f "$BRIDGE_LOG_FILE"
 REMODEX_RELAY="$RELAY_URL" \
 REMODEX_REFRESH_ENABLED="$REFRESH_ENABLED" \
-node ./bin/remodex.js up
+node ./bin/remodex.js up 2>&1 | tee -a "$BRIDGE_LOG_FILE"

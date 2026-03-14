@@ -1,7 +1,11 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { isActiveRelaySocket, nextRelayReconnectDelayMs } = require("../src/bridge");
+const {
+  isActiveRelaySocket,
+  nextRelayReconnectDelayMs,
+  shouldShutdownOnRelayCloseCode,
+} = require("../src/bridge");
 
 test("isActiveRelaySocket only accepts the current relay socket", () => {
   const currentSocket = { id: "current" };
@@ -18,4 +22,11 @@ test("nextRelayReconnectDelayMs backs off exponentially and caps the delay", () 
   assert.equal(nextRelayReconnectDelayMs(3), 4_000);
   assert.equal(nextRelayReconnectDelayMs(6), 30_000);
   assert.equal(nextRelayReconnectDelayMs(10), 30_000);
+});
+
+test("shouldShutdownOnRelayCloseCode only fails closed for invalid relay sessions", () => {
+  assert.equal(shouldShutdownOnRelayCloseCode(4000), true);
+  assert.equal(shouldShutdownOnRelayCloseCode(4001), false);
+  assert.equal(shouldShutdownOnRelayCloseCode(4002), false);
+  assert.equal(shouldShutdownOnRelayCloseCode(1006), false);
 });

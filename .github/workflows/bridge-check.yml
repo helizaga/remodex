@@ -37,6 +37,9 @@ jobs:
         working-directory: phodex-bridge
         run: npm test
 
+      - name: Run relay tests
+        run: node --test relay/*.test.js
+
       - name: Verify bridge entrypoints load
         working-directory: phodex-bridge
         run: |

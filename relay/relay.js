@@ -3,10 +3,12 @@
 // Layer: Standalone server module
 // Exports: setupRelay, getRelayStats
 
-const { WebSocket } = require("ws");
+const path = require("path");
 
-const CLEANUP_DELAY_MS = 60_000;
-const HEARTBEAT_INTERVAL_MS = 30_000;
+const { WebSocket } = loadWsModule();
+
+const CLEANUP_DELAY_MS = 15_000;
+const HEARTBEAT_INTERVAL_MS = 15_000;
 const CLOSE_CODE_SESSION_UNAVAILABLE = 4002;
 const CLOSE_CODE_IPHONE_REPLACED = 4003;
 
@@ -24,6 +26,8 @@ function setupRelay(wss) {
       ws._relayAlive = false;
       ws.ping();
     }
+
+    sweepSessions();
   }, HEARTBEAT_INTERVAL_MS);
 
   wss.on("close", () => clearInterval(heartbeat));
@@ -59,8 +63,9 @@ function setupRelay(wss) {
     }
 
     const session = sessions.get(sessionId);
+    pruneSessionState(session);
 
-    if (role === "iphone" && session.mac?.readyState !== WebSocket.OPEN) {
+    if (role === "iphone" && !isSocketOpen(session.mac)) {
       ws.close(CLOSE_CODE_SESSION_UNAVAILABLE, "Mac session not available");
       return;
     }
@@ -71,21 +76,19 @@ function setupRelay(wss) {
     }
 
     if (role === "mac") {
-      if (session.mac && session.mac.readyState === WebSocket.OPEN) {
+      retireOtherMacSessions(sessionId);
+      if (isSocketOpen(session.mac)) {
         session.mac.close(4001, "Replaced by new Mac connection");
       }
       session.mac = ws;
       console.log(`[relay] Mac connected -> session ${sessionId}`);
     } else {
       // Keep one live iPhone RPC client per session to avoid competing sockets.
-      for (const existingClient of session.clients) {
+      for (const existingClient of Array.from(session.clients)) {
         if (existingClient === ws) {
           continue;
         }
-        if (
-          existingClient.readyState === WebSocket.OPEN
-          || existingClient.readyState === WebSocket.CONNECTING
-        ) {
+        if (isSocketLive(existingClient)) {
           existingClient.close(
             CLOSE_CODE_IPHONE_REPLACED,
             "Replaced by newer iPhone connection"
@@ -101,6 +104,7 @@ function setupRelay(wss) {
     }
 
     ws.on("message", (data) => {
+      pruneSessionState(session);
       const msg = typeof data === "string" ? data : data.toString("utf-8");
       console.log(
         `[relay] forwarded ${role} -> session ${sessionId} (${Buffer.byteLength(msg, "utf8")} bytes)`
@@ -108,11 +112,11 @@ function setupRelay(wss) {
 
       if (role === "mac") {
         for (const client of session.clients) {
-          if (client.readyState === WebSocket.OPEN) {
+          if (isSocketOpen(client)) {
             client.send(msg);
           }
         }
-      } else if (session.mac?.readyState === WebSocket.OPEN) {
+      } else if (isSocketOpen(session.mac)) {
         session.mac.send(msg);
       }
     });
@@ -123,7 +127,7 @@ function setupRelay(wss) {
           session.mac = null;
           console.log(`[relay] Mac disconnected -> session ${sessionId}`);
           for (const client of session.clients) {
-            if (client.readyState === WebSocket.OPEN || client.readyState === WebSocket.CONNECTING) {
+            if (isSocketLive(client)) {
               client.close(CLOSE_CODE_SESSION_UNAVAILABLE, "Mac disconnected");
             }
           }
@@ -134,6 +138,7 @@ function setupRelay(wss) {
           `[relay] iPhone disconnected -> session ${sessionId} (${session.clients.size} remaining)`
         );
       }
+      pruneSessionState(session);
       scheduleCleanup(sessionId);
     });
 
@@ -151,13 +156,20 @@ function scheduleCleanup(sessionId) {
   if (!session) {
     return;
   }
+  pruneSessionState(session);
   if (session.mac || session.clients.size > 0 || session.cleanupTimer) {
     return;
   }
 
   session.cleanupTimer = setTimeout(() => {
     const activeSession = sessions.get(sessionId);
-    if (activeSession && !activeSession.mac && activeSession.clients.size === 0) {
+    if (!activeSession) {
+      return;
+    }
+
+    activeSession.cleanupTimer = null;
+    pruneSessionState(activeSession);
+    if (!activeSession.mac && activeSession.clients.size === 0) {
       sessions.delete(sessionId);
       console.log(`[relay] Session ${sessionId} cleaned up`);
     }
@@ -166,24 +178,108 @@ function scheduleCleanup(sessionId) {
 
 // Exposes lightweight runtime stats for health/status endpoints.
 function getRelayStats() {
+  sweepSessions();
+
   let totalClients = 0;
   let sessionsWithMac = 0;
+  let activeSessions = 0;
 
   for (const session of sessions.values()) {
+    const hasMac = Boolean(session.mac);
+    const clientCount = session.clients.size;
+
+    if (!hasMac && clientCount === 0) {
+      continue;
+    }
+
+    activeSessions += 1;
     totalClients += session.clients.size;
-    if (session.mac) {
+    if (hasMac) {
       sessionsWithMac += 1;
     }
   }
 
   return {
-    activeSessions: sessions.size,
+    activeSessions,
     sessionsWithMac,
     totalClients,
   };
 }
 
+function sweepSessions() {
+  for (const [sessionId, session] of sessions.entries()) {
+    pruneSessionState(session);
+    scheduleCleanup(sessionId);
+  }
+}
+
+function pruneSessionState(session) {
+  if (session.mac && !isSocketLive(session.mac)) {
+    session.mac = null;
+  }
+
+  for (const client of Array.from(session.clients)) {
+    if (!isSocketLive(client)) {
+      session.clients.delete(client);
+    }
+  }
+}
+
+function retireOtherMacSessions(activeSessionId) {
+  for (const [sessionId, session] of sessions.entries()) {
+    if (sessionId === activeSessionId) {
+      continue;
+    }
+
+    pruneSessionState(session);
+    if (!session.mac) {
+      continue;
+    }
+
+    if (isSocketLive(session.mac)) {
+      session.mac.close(4001, "Replaced by newer Mac session");
+    }
+    session.mac = null;
+
+    for (const client of Array.from(session.clients)) {
+      if (isSocketLive(client)) {
+        client.close(CLOSE_CODE_SESSION_UNAVAILABLE, "Mac disconnected");
+      }
+      session.clients.delete(client);
+    }
+
+    scheduleCleanup(sessionId);
+  }
+}
+
+function isSocketOpen(socket) {
+  return Boolean(socket) && socket.readyState === WebSocket.OPEN;
+}
+
+function isSocketLive(socket) {
+  return Boolean(socket)
+    && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING);
+}
+
+function loadWsModule() {
+  try {
+    return require("ws");
+  } catch {
+    return require(path.join(__dirname, "..", "phodex-bridge", "node_modules", "ws"));
+  }
+}
+
+function resetRelayStateForTests() {
+  for (const session of sessions.values()) {
+    if (session.cleanupTimer) {
+      clearTimeout(session.cleanupTimer);
+    }
+  }
+  sessions.clear();
+}
+
 module.exports = {
   setupRelay,
   getRelayStats,
+  __resetRelayStateForTests: resetRelayStateForTests,
 };

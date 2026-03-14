@@ -114,11 +114,13 @@ function startBridge() {
       return;
     }
 
-    if (closeCode === 4000 || closeCode === 4001) {
+    if (shouldShutdownOnRelayCloseCode(closeCode)) {
       logConnectionStatus("disconnected");
       shutdown(codex, () => socket, () => {
         isShuttingDown = true;
         clearReconnectTimer();
+        clearStableConnectionTimer();
+        activeRelayOpenedAt = 0;
       });
       return;
     }
@@ -541,6 +543,10 @@ function isActiveRelaySocket(currentSocket, candidateSocket) {
   return currentSocket === candidateSocket;
 }
 
+function shouldShutdownOnRelayCloseCode(closeCode) {
+  return closeCode === 4000;
+}
+
 function nextRelayReconnectDelayMs(reconnectAttempt) {
   const normalizedAttempt = Math.max(1, Number(reconnectAttempt) || 1);
   return Math.min(1_000 * (2 ** (normalizedAttempt - 1)), MAX_RELAY_RECONNECT_DELAY_MS);
@@ -549,5 +555,6 @@ function nextRelayReconnectDelayMs(reconnectAttempt) {
 module.exports = {
   startBridge,
   isActiveRelaySocket,
+  shouldShutdownOnRelayCloseCode,
   nextRelayReconnectDelayMs,
 };
