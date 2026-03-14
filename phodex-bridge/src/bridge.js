@@ -20,6 +20,9 @@ const { handleWorkspaceRequest } = require("./workspace-handler");
 const { loadOrCreateBridgeDeviceState } = require("./secure-device-state");
 const { createBridgeSecureTransport } = require("./secure-transport");
 
+const RELAY_STABLE_CONNECTION_MS = 15_000;
+const MAX_RELAY_RECONNECT_DELAY_MS = 30_000;
+
 function startBridge() {
   const config = readBridgeConfig();
   if (!config.relayUrl) {
@@ -46,7 +49,9 @@ function startBridge() {
   let isShuttingDown = false;
   let reconnectAttempt = 0;
   let reconnectTimer = null;
+  let stableConnectionTimer = null;
   let lastConnectionStatus = null;
+  let activeRelayOpenedAt = 0;
   let codexHandshakeState = config.codexEndpoint ? "warm" : "cold";
   const forwardedInitializeRequestIds = new Set();
   const secureTransport = createBridgeSecureTransport({
@@ -84,6 +89,15 @@ function startBridge() {
     reconnectTimer = null;
   }
 
+  function clearStableConnectionTimer() {
+    if (!stableConnectionTimer) {
+      return;
+    }
+
+    clearTimeout(stableConnectionTimer);
+    stableConnectionTimer = null;
+  }
+
   // Keeps npm start output compact by emitting only high-signal connection states.
   function logConnectionStatus(status) {
     if (lastConnectionStatus === status) {
@@ -114,7 +128,7 @@ function startBridge() {
     }
 
     reconnectAttempt += 1;
-    const delayMs = Math.min(1_000 * reconnectAttempt, 5_000);
+    const delayMs = nextRelayReconnectDelayMs(reconnectAttempt);
     logConnectionStatus("connecting");
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
@@ -146,7 +160,13 @@ function startBridge() {
       }
 
       clearReconnectTimer();
-      reconnectAttempt = 0;
+      clearStableConnectionTimer();
+      activeRelayOpenedAt = Date.now();
+      stableConnectionTimer = setTimeout(() => {
+        if (isActiveRelaySocket(socket, nextSocket)) {
+          reconnectAttempt = 0;
+        }
+      }, RELAY_STABLE_CONNECTION_MS);
       logConnectionStatus("connected");
       secureTransport.bindLiveSendWireMessage((wireMessage) => {
         if (nextSocket.readyState === WebSocket.OPEN) {
@@ -175,11 +195,23 @@ function startBridge() {
       }
     });
 
-    nextSocket.on("close", (code) => {
+    nextSocket.on("close", (code, reasonBuffer) => {
       if (!isActiveRelaySocket(socket, nextSocket)) {
         return;
       }
 
+      clearStableConnectionTimer();
+      activeRelayOpenedAt = 0;
+      const reason = typeof reasonBuffer?.toString === "function"
+        ? reasonBuffer.toString("utf8")
+        : "";
+      if (code !== 1000 || reason) {
+        const detail = [`code ${code}`];
+        if (reason) {
+          detail.push(`reason: ${reason}`);
+        }
+        console.log(`[remodex] relay closed (${detail.join(", ")})`);
+      }
       logConnectionStatus("disconnected");
       socket = null;
       stopContextUsageWatcher();
@@ -214,6 +246,8 @@ function startBridge() {
     logConnectionStatus("disconnected");
     isShuttingDown = true;
     clearReconnectTimer();
+    clearStableConnectionTimer();
+    activeRelayOpenedAt = 0;
     stopContextUsageWatcher();
     desktopRefresher.handleTransportReset();
     if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) {
@@ -224,10 +258,14 @@ function startBridge() {
   process.on("SIGINT", () => shutdown(codex, () => socket, () => {
     isShuttingDown = true;
     clearReconnectTimer();
+    clearStableConnectionTimer();
+    activeRelayOpenedAt = 0;
   }));
   process.on("SIGTERM", () => shutdown(codex, () => socket, () => {
     isShuttingDown = true;
     clearReconnectTimer();
+    clearStableConnectionTimer();
+    activeRelayOpenedAt = 0;
   }));
 
   // Routes decrypted app payloads through the same bridge handlers as before.
@@ -503,4 +541,13 @@ function isActiveRelaySocket(currentSocket, candidateSocket) {
   return currentSocket === candidateSocket;
 }
 
-module.exports = { startBridge, isActiveRelaySocket };
+function nextRelayReconnectDelayMs(reconnectAttempt) {
+  const normalizedAttempt = Math.max(1, Number(reconnectAttempt) || 1);
+  return Math.min(1_000 * (2 ** (normalizedAttempt - 1)), MAX_RELAY_RECONNECT_DELAY_MS);
+}
+
+module.exports = {
+  startBridge,
+  isActiveRelaySocket,
+  nextRelayReconnectDelayMs,
+};
