@@ -265,6 +265,8 @@ final class CodexService {
     var runCompletionNotificationDedupedAt: [String: Date] = [:]
     var notificationCenterDelegateProxy: CodexNotificationCenterDelegateProxy?
     var shouldAutoReconnectOnForeground = false
+    // Test hook so connection handling can model `.inactive` without waiting for real app lifecycle changes.
+    @ObservationIgnored var applicationStateProvider: () -> UIApplication.State = { UIApplication.shared.applicationState }
     var secureSession: CodexSecureSession?
     var pendingHandshake: CodexPendingHandshake?
     var phoneIdentityState: CodexPhoneIdentityState
