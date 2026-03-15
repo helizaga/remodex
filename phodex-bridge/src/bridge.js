@@ -13,7 +13,12 @@ const {
 const { createCodexTransport } = require("./codex-transport");
 const { createThreadRolloutActivityWatcher } = require("./rollout-watch");
 const { printQR } = require("./qr");
-const { rememberActiveThread } = require("./session-state");
+const {
+  rememberActiveThread,
+  readPersistedRelaySessionId,
+  rememberRelaySessionId,
+  clearPersistedRelaySession,
+} = require("./session-state");
 const { handleGitRequest } = require("./git-handler");
 const { handleThreadContextRequest } = require("./thread-context-handler");
 const { handleWorkspaceRequest } = require("./workspace-handler");
@@ -32,7 +37,18 @@ function startBridge() {
     );
     process.exit(1);
   }
-  const sessionId = uuidv4();
+  if (config.resetRelaySession) {
+    clearPersistedRelaySession();
+    console.log("[remodex] cleared saved relay session; generating a new pairing QR");
+  }
+
+  let sessionId = readPersistedRelaySessionId();
+  if (!sessionId) {
+    sessionId = uuidv4();
+    rememberRelaySessionId(sessionId);
+  } else {
+    console.log("[remodex] reusing saved relay session so the paired phone can reconnect");
+  }
   const relayBaseUrl = config.relayUrl.replace(/\/+$/, "");
   const relaySessionUrl = `${relayBaseUrl}/${sessionId}`;
   const deviceState = loadOrCreateBridgeDeviceState();

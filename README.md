@@ -298,6 +298,7 @@ The core bridge (relay + Codex forwarding + git) works on any OS. Desktop refres
 
 **What happens if I close the terminal?**
 The bridge stops. Run `./run-local-remodex.sh up` again — your phone will reconnect when it detects the relay session.
+If you need to force a brand-new pairing QR instead, run `REMODEX_RESET_SESSION=1 ./run-local-remodex.sh up`.
 
 **Can I connect to a remote Codex instance?**
 Yes — set `REMODEX_CODEX_ENDPOINT=ws://host:port` to skip spawning a local `codex app-server`.
