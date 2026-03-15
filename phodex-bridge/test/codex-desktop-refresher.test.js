@@ -46,15 +46,23 @@ test("readBridgeConfig keeps safe defaults and explicit overrides", () => {
     },
     platform: "darwin",
   });
+  const resetSessionConfig = readBridgeConfig({
+    env: {
+      REMODEX_RESET_SESSION: "true",
+    },
+    platform: "darwin",
+  });
 
   assert.equal(macConfig.refreshEnabled, false);
   assert.equal(macConfig.relayUrl, "");
+  assert.equal(macConfig.resetRelaySession, false);
   assert.equal(explicitRelayConfig.relayUrl, "ws://127.0.0.1:9000/relay");
   assert.equal(macEndpointConfig.refreshEnabled, false);
   assert.equal(linuxConfig.refreshEnabled, false);
   assert.equal(linuxCommandConfig.refreshEnabled, false);
   assert.equal(explicitOnConfig.refreshEnabled, true);
   assert.equal(explicitOffConfig.refreshEnabled, false);
+  assert.equal(resetSessionConfig.resetRelaySession, true);
 });
 
 test("thread/start falls back once to the new-thread route when thread id is still unknown", async () => {

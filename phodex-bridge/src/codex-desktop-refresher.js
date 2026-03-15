@@ -532,10 +532,12 @@ function readBridgeConfig({ env = process.env, platform = process.platform } = {
     env
   );
   const explicitRefreshEnabled = readOptionalBooleanEnv(["REMODEX_REFRESH_ENABLED"], env);
+  const resetRelaySession = readOptionalBooleanEnv(["REMODEX_RESET_SESSION"], env) === true;
   // Desktop refresh is opt-in for now because Codex.app still lacks true live updates.
   const defaultRefreshEnabled = false;
   return {
     relayUrl: explicitRelayUrl,
+    resetRelaySession,
     refreshEnabled: explicitRefreshEnabled == null
       ? defaultRefreshEnabled
       : explicitRefreshEnabled,
