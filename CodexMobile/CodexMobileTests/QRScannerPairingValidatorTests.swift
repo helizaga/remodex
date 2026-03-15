@@ -66,6 +66,18 @@ final class QRScannerPairingValidatorTests: XCTestCase {
         XCTAssertEqual(message, "Not a valid secure pairing code. Make sure you're scanning a QR from the latest Remodex bridge.")
     }
 
+    func testRawNewerVersionFallbackStillRequiresAppUpdate() {
+        let result = validatePairingQRCode("""
+        {"v":\(codexPairingQRVersion + 1),"relay":"wss://relay.example"}
+        """)
+
+        guard case .appUpdateRequired(let message) = result else {
+            return XCTFail("Expected a fallback app update prompt for newer raw QR versions.")
+        }
+
+        XCTAssertTrue(message.contains("newer Remodex bridge"))
+    }
+
     func testValidPayloadReturnsSuccess() {
         let result = validatePairingQRCode(
             pairingQRCode(
