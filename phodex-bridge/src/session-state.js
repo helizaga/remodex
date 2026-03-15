@@ -80,8 +80,12 @@ function readStateFile(filePath) {
     return null;
   }
 
-  const raw = fs.readFileSync(filePath, "utf8");
-  return JSON.parse(raw);
+  try {
+    const raw = fs.readFileSync(filePath, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
 }
 
 function writeStateFile(filePath, payload, stateDir) {

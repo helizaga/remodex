@@ -10,8 +10,12 @@ const {
   clearPersistedRelaySession,
 } = require("../src/session-state");
 
+const tempDirs = [];
+
 function makeStateDir() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "remodex-session-state-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "remodex-session-state-"));
+  tempDirs.push(dir);
+  return dir;
 }
 
 test("relay session id persists across reads and can be cleared", () => {
@@ -29,4 +33,18 @@ test("empty relay session ids are rejected", () => {
 
   assert.equal(rememberRelaySessionId("", { stateDir }), false);
   assert.equal(readPersistedRelaySessionId({ stateDir }), null);
+});
+
+test("corrupted relay session state is treated as missing", () => {
+  const stateDir = makeStateDir();
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.writeFileSync(path.join(stateDir, "relay-session.json"), "{not-json");
+
+  assert.equal(readPersistedRelaySessionId({ stateDir }), null);
+});
+
+test.after(() => {
+  for (const dir of tempDirs) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
