@@ -38,6 +38,18 @@ final class QRScannerPairingValidatorTests: XCTestCase {
         XCTAssertTrue(prompt.message.contains("older Remodex bridge"))
     }
 
+    func testSingleLegacyKeyDoesNotTriggerBridgeUpdatePrompt() {
+        let result = validatePairingQRCode("""
+        {"relay":"wss://relay.example"}
+        """)
+
+        guard case .scanError(let message) = result else {
+            return XCTFail("Expected a scan error for non-pairing payloads with only one matching key.")
+        }
+
+        XCTAssertEqual(message, "Not a valid secure pairing code. Make sure you're scanning a QR from the latest Remodex bridge.")
+    }
+
     func testValidPayloadReturnsSuccess() {
         let result = validatePairingQRCode(
             pairingQRCode(

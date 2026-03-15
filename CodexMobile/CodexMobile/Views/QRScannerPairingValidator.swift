@@ -71,7 +71,7 @@ private func looksLikeRemodexPairingPayload(_ data: Data) -> Bool {
         "expiresAt",
         "v",
     ]
-    return !pairingKeys.isDisjoint(with: object.keys)
+    return pairingKeys.intersection(object.keys).count >= 2
 }
 
 private func makeScannerBridgeUpdatePrompt(message: String) -> CodexBridgeUpdatePrompt {
