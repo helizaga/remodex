@@ -1,15 +1,15 @@
 // FILE: relay.js
-// Purpose: Thin WebSocket relay used by the default hosted Remodex pairing flow.
+// Purpose: Thin self-hostable WebSocket relay for Remodex pairing and encrypted message forwarding.
 // Layer: Standalone server module
-// Exports: setupRelay, getRelayStats
+// Exports: setupRelay, getRelayStats, hasActiveMacSession, hasAuthenticatedMacSession
 
 const { createHash } = require("crypto");
 const path = require("path");
 
 const { WebSocket } = loadWsModule();
 
-const CLEANUP_DELAY_MS = 15_000;
-const HEARTBEAT_INTERVAL_MS = 15_000;
+const CLEANUP_DELAY_MS = 60_000;
+const HEARTBEAT_INTERVAL_MS = 30_000;
 const CLOSE_CODE_SESSION_UNAVAILABLE = 4002;
 const CLOSE_CODE_IPHONE_REPLACED = 4003;
 
@@ -30,6 +30,7 @@ function setupRelay(wss) {
 
     sweepSessions();
   }, HEARTBEAT_INTERVAL_MS);
+  heartbeat.unref?.();
 
   wss.on("close", () => clearInterval(heartbeat));
 
@@ -60,6 +61,7 @@ function setupRelay(wss) {
         mac: null,
         clients: new Set(),
         cleanupTimer: null,
+        notificationSecret: null,
       });
     }
 
@@ -78,6 +80,9 @@ function setupRelay(wss) {
 
     if (role === "mac") {
       retireOtherMacSessions(sessionId);
+      // The relay keeps a per-session push secret so first-time device registration
+      // cannot be claimed by someone who only knows the session id.
+      session.notificationSecret = readHeaderString(req.headers["x-notification-secret"]);
       if (isSocketOpen(session.mac)) {
         session.mac.close(4001, "Replaced by new Mac connection");
       }
@@ -128,6 +133,7 @@ function setupRelay(wss) {
       if (role === "mac") {
         if (session.mac === ws) {
           session.mac = null;
+          session.notificationSecret = null;
           console.log(`[relay] Mac disconnected -> ${relaySessionLogLabel(sessionId)}`);
           for (const client of session.clients) {
             if (isSocketLive(client)) {
@@ -178,6 +184,7 @@ function scheduleCleanup(sessionId) {
       console.log(`[relay] ${relaySessionLogLabel(sessionId)} cleaned up`);
     }
   }, CLEANUP_DELAY_MS);
+  session.cleanupTimer.unref?.();
 }
 
 function relaySessionLogLabel(sessionId) {
@@ -233,6 +240,7 @@ function sweepSessions() {
 function pruneSessionState(session) {
   if (session.mac && !isSocketLive(session.mac)) {
     session.mac = null;
+    session.notificationSecret = null;
   }
 
   for (const client of Array.from(session.clients)) {
@@ -257,6 +265,7 @@ function retireOtherMacSessions(activeSessionId) {
       session.mac.close(4001, "Replaced by newer Mac session");
     }
     session.mac = null;
+    session.notificationSecret = null;
 
     for (const client of Array.from(session.clients)) {
       if (isSocketLive(client)) {
@@ -267,6 +276,31 @@ function retireOtherMacSessions(activeSessionId) {
 
     scheduleCleanup(sessionId);
   }
+}
+
+// Lets the push-registration side verify that a session still belongs to a live Mac bridge.
+function hasActiveMacSession(sessionId) {
+  if (typeof sessionId !== "string" || !sessionId.trim()) {
+    return false;
+  }
+
+  const session = sessions.get(sessionId.trim());
+  return Boolean(session?.mac && session.mac.readyState === WebSocket.OPEN);
+}
+
+// Used by: relay/server.js push registration gate.
+function hasAuthenticatedMacSession(sessionId, notificationSecret) {
+  if (!hasActiveMacSession(sessionId)) {
+    return false;
+  }
+
+  const session = sessions.get(sessionId.trim());
+  return session?.notificationSecret === readHeaderString(notificationSecret);
+}
+
+function readHeaderString(value) {
+  const candidate = Array.isArray(value) ? value[0] : value;
+  return typeof candidate === "string" && candidate.trim() ? candidate.trim() : null;
 }
 
 function isSocketOpen(socket) {
@@ -298,5 +332,7 @@ function resetRelayStateForTests() {
 module.exports = {
   setupRelay,
   getRelayStats,
+  hasActiveMacSession,
+  hasAuthenticatedMacSession,
   __resetRelayStateForTests: resetRelayStateForTests,
 };

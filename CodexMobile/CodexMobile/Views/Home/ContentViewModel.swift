@@ -38,15 +38,20 @@ final class ContentViewModel {
     func connectToRelay(pairingPayload: CodexPairingQRPayload, codex: CodexService) async {
         await stopAutoReconnectForManualScan(codex: codex)
         let fullURL = "\(pairingPayload.relay)/\(pairingPayload.sessionId)"
+        print("[PAIRING] QR scanned — relay=\(pairingPayload.relay) session=\(pairingPayload.sessionId)")
+        print("[PAIRING] full URL=\(fullURL)")
         codex.rememberRelayPairing(pairingPayload)
 
         do {
+            print("[PAIRING] starting connectWithAutoRecovery")
             try await connectWithAutoRecovery(
                 codex: codex,
                 serverURL: fullURL,
                 performAutoRetry: true
             )
+            print("[PAIRING] connected OK")
         } catch {
+            print("[PAIRING] connect failed: \(error)")
             if codex.lastErrorMessage?.isEmpty ?? true {
                 codex.lastErrorMessage = codex.userFacingConnectFailureMessage(error)
             }
@@ -89,6 +94,12 @@ final class ContentViewModel {
         codex.shouldAutoReconnectOnForeground = false
         codex.connectionRecoveryState = .idle
         codex.lastErrorMessage = nil
+
+        // Cancel any in-flight reconnect so the scanner can appear immediately instead of waiting
+        // for a stalled handshake to time out on its own.
+        if codex.isConnecting || codex.isConnected {
+            await codex.disconnect()
+        }
 
         while isRunningAutoReconnect || codex.isConnecting {
             try? await Task.sleep(nanoseconds: 100_000_000)
@@ -170,6 +181,15 @@ final class ContentViewModel {
                 codex.shouldAutoReconnectOnForeground = false
                 return
             } catch {
+                if codex.secureConnectionState == .rePairRequired {
+                    codex.connectionRecoveryState = .idle
+                    codex.shouldAutoReconnectOnForeground = false
+                    if codex.lastErrorMessage?.isEmpty ?? true {
+                        codex.lastErrorMessage = codex.userFacingConnectFailureMessage(error)
+                    }
+                    return
+                }
+
                 let isRetryable = codex.isRecoverableTransientConnectionError(error)
                     || codex.isBenignBackgroundDisconnect(error)
 
@@ -204,7 +224,11 @@ final class ContentViewModel {
 
 extension ContentViewModel {
     func connect(codex: CodexService, serverURL: String) async throws {
-        try await codex.connect(serverURL: serverURL, token: "", role: "iphone")
+        try await codex.connect(
+            serverURL: serverURL,
+            token: "",
+            role: "iphone"
+        )
     }
 
     func connectWithAutoRecovery(
@@ -238,6 +262,15 @@ extension ContentViewModel {
                 return
             } catch {
                 lastError = error
+                if codex.secureConnectionState == .rePairRequired {
+                    codex.connectionRecoveryState = .idle
+                    codex.shouldAutoReconnectOnForeground = false
+                    if codex.lastErrorMessage?.isEmpty ?? true {
+                        codex.lastErrorMessage = codex.userFacingConnectFailureMessage(error)
+                    }
+                    throw error
+                }
+
                 let isRetryable = codex.isRecoverableTransientConnectionError(error)
                     || codex.isBenignBackgroundDisconnect(error)
 

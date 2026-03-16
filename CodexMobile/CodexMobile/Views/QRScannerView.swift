@@ -230,6 +230,7 @@ struct QRScannerView: View {
         case .bridgeUpdateRequired(let prompt):
             didCopyBridgeUpdateCommand = false
             bridgeUpdatePrompt = prompt
+            resetScanLock()
         }
     }
 }
