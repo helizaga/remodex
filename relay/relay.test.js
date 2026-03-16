@@ -147,3 +147,37 @@ test("a newer Mac session retires older Mac sessions across the relay", (t) => {
     totalClients: 0,
   });
 });
+
+test("relay logs redact live session identifiers", (t) => {
+  __resetRelayStateForTests();
+
+  const capturedLogs = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = (...args) => {
+    capturedLogs.push(args.join(" "));
+  };
+  console.error = (...args) => {
+    capturedLogs.push(args.join(" "));
+  };
+
+  const wss = new FakeWebSocketServer();
+  setupRelay(wss);
+  t.after(() => {
+    console.log = originalLog;
+    console.error = originalError;
+    wss.emit("close");
+    __resetRelayStateForTests();
+  });
+
+  const mac = new FakeWebSocket();
+  const iphone = new FakeWebSocket();
+  wss.connect(mac, relayRequest("session-sensitive", "mac"));
+  wss.connect(iphone, relayRequest("session-sensitive", "iphone"));
+  mac.emit("message", "hello");
+  iphone.close();
+  mac.close();
+
+  assert.ok(capturedLogs.some((line) => line.includes("session#")));
+  assert.ok(capturedLogs.every((line) => !line.includes("session-sensitive")));
+});

@@ -102,6 +102,76 @@ test("readLatestContextWindowUsage prefers the thread-scoped rollout over newer 
   assert.match(result?.rolloutPath ?? "", /thread-a\.jsonl$/);
 });
 
+test("readLatestContextWindowUsage prefers the newest rollout when a thread has multiple files", (t) => {
+  const { homeDir, threadDir } = makeTemporarySessionsHome();
+  const previousCodexHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = homeDir;
+  t.after(() => {
+    restoreCodexHome(previousCodexHome);
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  });
+
+  const olderPath = path.join(threadDir, "rollout-2026-03-05T13-23-27-thread-a.jsonl");
+  writeRolloutFile(olderPath, {
+    turnId: "turn-a-old",
+    tokensUsed: 222,
+    tokenLimit: 1_000,
+  });
+  setFileMTime(olderPath, Date.UTC(2026, 2, 5, 13, 23, 27));
+
+  const newerPath = path.join(threadDir, "rollout-2026-03-05T13-25-27-thread-a.jsonl");
+  writeRolloutFile(newerPath, {
+    turnId: "turn-a-new",
+    tokensUsed: 444,
+    tokenLimit: 1_000,
+  });
+  setFileMTime(newerPath, Date.UTC(2026, 2, 5, 13, 25, 27));
+
+  const result = readLatestContextWindowUsage({ threadId: "thread-a" });
+  assert.deepEqual(result?.usage, {
+    tokensUsed: 444,
+    tokenLimit: 1_000,
+  });
+  assert.match(result?.rolloutPath ?? "", /13-25-27-thread-a\.jsonl$/);
+});
+
+test("readLatestContextWindowUsage falls back when the matching rollout is outside the recent candidate slice", (t) => {
+  const { homeDir, threadDir } = makeTemporarySessionsHome();
+  const previousCodexHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = homeDir;
+  t.after(() => {
+    restoreCodexHome(previousCodexHome);
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  });
+
+  const oldRolloutPath = path.join(threadDir, "rollout-2026-03-05T13-23-27-thread-a.jsonl");
+  writeRolloutFile(oldRolloutPath, {
+    turnId: "turn-a-old",
+    tokensUsed: 321,
+    tokenLimit: 1_000,
+  });
+  setFileMTime(oldRolloutPath, Date.UTC(2026, 2, 10, 12, 0, 0));
+
+  const newerOtherPath = path.join(threadDir, "rollout-2026-03-12T13-25-27-thread-b.jsonl");
+  writeRolloutFile(newerOtherPath, {
+    turnId: "turn-b-new",
+    tokensUsed: 999,
+    tokenLimit: 1_000,
+  });
+  setFileMTime(newerOtherPath, Date.UTC(2026, 2, 12, 13, 25, 27));
+
+  const result = readLatestContextWindowUsage({
+    threadId: "thread-a",
+    candidateLimit: 1,
+  });
+
+  assert.deepEqual(result?.usage, {
+    tokensUsed: 321,
+    tokenLimit: 1_000,
+  });
+  assert.match(result?.rolloutPath ?? "", /thread-a\.jsonl$/);
+});
+
 test("readLatestContextWindowUsage returns null when no rollout matches the requested thread", (t) => {
   const { homeDir, threadDir } = makeTemporarySessionsHome();
   const previousCodexHome = process.env.CODEX_HOME;
@@ -155,6 +225,11 @@ function writeRolloutFile(filePath, { turnId, tokensUsed, tokenLimit }) {
     "",
   ];
   fs.writeFileSync(filePath, lines.join("\n"));
+}
+
+function setFileMTime(filePath, timeMs) {
+  const timestamp = new Date(timeMs);
+  fs.utimesSync(filePath, timestamp, timestamp);
 }
 
 function restoreCodexHome(previousCodexHome) {

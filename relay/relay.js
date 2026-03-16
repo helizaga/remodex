@@ -3,6 +3,7 @@
 // Layer: Standalone server module
 // Exports: setupRelay, getRelayStats
 
+const { createHash } = require("crypto");
 const path = require("path");
 
 const { WebSocket } = loadWsModule();
@@ -81,7 +82,7 @@ function setupRelay(wss) {
         session.mac.close(4001, "Replaced by new Mac connection");
       }
       session.mac = ws;
-      console.log(`[relay] Mac connected -> session ${sessionId}`);
+      console.log(`[relay] Mac connected -> ${relaySessionLogLabel(sessionId)}`);
     } else {
       // Keep one live iPhone RPC client per session to avoid competing sockets.
       for (const existingClient of Array.from(session.clients)) {
@@ -99,7 +100,8 @@ function setupRelay(wss) {
 
       session.clients.add(ws);
       console.log(
-        `[relay] iPhone connected -> session ${sessionId} (${session.clients.size} client(s))`
+        `[relay] iPhone connected -> ${relaySessionLogLabel(sessionId)} `
+        + `(${session.clients.size} client(s))`
       );
     }
 
@@ -107,7 +109,8 @@ function setupRelay(wss) {
       pruneSessionState(session);
       const msg = typeof data === "string" ? data : data.toString("utf-8");
       console.log(
-        `[relay] forwarded ${role} -> session ${sessionId} (${Buffer.byteLength(msg, "utf8")} bytes)`
+        `[relay] forwarded ${role} -> ${relaySessionLogLabel(sessionId)} `
+        + `(${Buffer.byteLength(msg, "utf8")} bytes)`
       );
 
       if (role === "mac") {
@@ -125,7 +128,7 @@ function setupRelay(wss) {
       if (role === "mac") {
         if (session.mac === ws) {
           session.mac = null;
-          console.log(`[relay] Mac disconnected -> session ${sessionId}`);
+          console.log(`[relay] Mac disconnected -> ${relaySessionLogLabel(sessionId)}`);
           for (const client of session.clients) {
             if (isSocketLive(client)) {
               client.close(CLOSE_CODE_SESSION_UNAVAILABLE, "Mac disconnected");
@@ -135,7 +138,8 @@ function setupRelay(wss) {
       } else {
         session.clients.delete(ws);
         console.log(
-          `[relay] iPhone disconnected -> session ${sessionId} (${session.clients.size} remaining)`
+          `[relay] iPhone disconnected -> ${relaySessionLogLabel(sessionId)} `
+          + `(${session.clients.size} remaining)`
         );
       }
       pruneSessionState(session);
@@ -144,7 +148,7 @@ function setupRelay(wss) {
 
     ws.on("error", (err) => {
       console.error(
-        `[relay] WebSocket error (${role}, session ${sessionId}):`,
+        `[relay] WebSocket error (${role}, ${relaySessionLogLabel(sessionId)}):`,
         err.message
       );
     });
@@ -171,9 +175,22 @@ function scheduleCleanup(sessionId) {
     pruneSessionState(activeSession);
     if (!activeSession.mac && activeSession.clients.size === 0) {
       sessions.delete(sessionId);
-      console.log(`[relay] Session ${sessionId} cleaned up`);
+      console.log(`[relay] ${relaySessionLogLabel(sessionId)} cleaned up`);
     }
   }, CLEANUP_DELAY_MS);
+}
+
+function relaySessionLogLabel(sessionId) {
+  const normalizedSessionId = typeof sessionId === "string" ? sessionId.trim() : "";
+  if (!normalizedSessionId) {
+    return "session=[redacted]";
+  }
+
+  const digest = createHash("sha256")
+    .update(normalizedSessionId)
+    .digest("hex")
+    .slice(0, 8);
+  return `session#${digest}`;
 }
 
 // Exposes lightweight runtime stats for health/status endpoints.

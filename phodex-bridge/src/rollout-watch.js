@@ -261,11 +261,40 @@ function resolveSessionsRoot() {
 }
 
 function findRolloutFileForThread(root, threadId, { fsModule = fs } = {}) {
+  return findNewestRolloutFileForThread(root, threadId, { fsModule });
+}
+
+// Keeps the fast "recent files first" path, but falls back to a full-tree scan
+// so older valid thread rollouts still recover after many newer sessions exist.
+function findPreferredRolloutFileForThread(root, candidates, threadId, { fsModule = fs } = {}) {
+  const recentMatch = findMostRecentRolloutFileForThread(candidates, threadId);
+  if (recentMatch) {
+    return recentMatch;
+  }
+
+  return findNewestRolloutFileForThread(root, threadId, { fsModule });
+}
+
+// Prefers the newest filename-scoped rollout for a thread instead of the first
+// filesystem hit, which can be an older stale session for the same thread.
+function findMostRecentRolloutFileForThread(candidates, threadId) {
+  if (!Array.isArray(candidates) || !threadId) {
+    return null;
+  }
+
+  const match = candidates.find(({ filePath }) => path.basename(filePath).includes(threadId));
+  return match?.filePath || null;
+}
+
+// Scans the whole sessions tree only when the recent candidate window missed the
+// thread, still preferring the newest matching rollout instead of the first hit.
+function findNewestRolloutFileForThread(root, threadId, { fsModule = fs } = {}) {
   if (!fsModule.existsSync(root)) {
     return null;
   }
 
   const stack = [root];
+  let newestMatch = null;
 
   while (stack.length > 0) {
     const current = stack.pop();
@@ -283,12 +312,18 @@ function findRolloutFileForThread(root, threadId, { fsModule = fs } = {}) {
       }
 
       if (entry.name.includes(threadId) && entry.name.startsWith("rollout-") && entry.name.endsWith(".jsonl")) {
-        return fullPath;
+        const stat = fsModule.statSync(fullPath);
+        if (!newestMatch || stat.mtimeMs > newestMatch.mtimeMs) {
+          newestMatch = {
+            filePath: fullPath,
+            mtimeMs: stat.mtimeMs,
+          };
+        }
       }
     }
   }
 
-  return null;
+  return newestMatch?.filePath || null;
 }
 
 // Chooses the rollout file for the active bridge turn, preferring turn_id and then the thread-scoped file.
@@ -325,7 +360,9 @@ function findRecentRolloutFileForWatch(
   }
 
   if (threadId) {
-    const threadScopedRollout = findRolloutFileForThread(root, threadId, { fsModule });
+    const threadScopedRollout = findPreferredRolloutFileForThread(root, candidates, threadId, {
+      fsModule,
+    });
     if (threadScopedRollout) {
       return threadScopedRollout;
     }
@@ -369,7 +406,9 @@ function findRecentRolloutFileForContextRead(
   }
 
   if (threadId) {
-    const threadScopedRollout = findRolloutFileForThread(root, threadId, { fsModule });
+    const threadScopedRollout = findPreferredRolloutFileForThread(root, candidates, threadId, {
+      fsModule,
+    });
     if (threadScopedRollout) {
       return threadScopedRollout;
     }
