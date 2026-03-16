@@ -75,10 +75,10 @@ final class CodexServiceConnectionErrorTests: XCTestCase {
         XCTAssertEqual(
             service.userFacingConnectError(
                 error: error,
-                attemptedURL: "wss://relay.example/session",
+                attemptedURL: "wss://relay.example/relay/session",
                 host: "relay.example"
             ),
-            "Connection refused by relay server at wss://relay.example/session."
+            "Connection refused by relay server at wss://relay.example/relay/session."
         )
     }
 

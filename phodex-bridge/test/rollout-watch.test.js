@@ -74,6 +74,89 @@ test("watcher falls back to the thread-scoped rollout when turn id is unavailabl
   });
 });
 
+test("watcher prefers the newest rollout when the same thread has multiple files", async (t) => {
+  const { homeDir, threadDir } = makeTemporarySessionsHome();
+  const previousCodexHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = homeDir;
+  t.after(() => {
+    restoreCodexHome(previousCodexHome);
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  });
+
+  writeRolloutFile(path.join(threadDir, "rollout-2026-03-05T13-23-27-thread-a.jsonl"), {
+    turnId: "turn-a-old",
+    tokensUsed: 111,
+    tokenLimit: 1_000,
+  });
+  writeRolloutFile(path.join(threadDir, "rollout-2026-03-05T13-25-27-thread-a.jsonl"), {
+    turnId: "turn-a-new",
+    tokensUsed: 333,
+    tokenLimit: 1_000,
+  });
+
+  const usages = [];
+  const watcher = createThreadRolloutActivityWatcher({
+    threadId: "thread-a",
+    intervalMs: 5,
+    lookupTimeoutMs: 100,
+    idleTimeoutMs: 100,
+    onUsage: ({ usage }) => usages.push(usage),
+  });
+
+  await wait(30);
+  watcher.stop();
+
+  assert.deepEqual(usages[0], {
+    tokensUsed: 333,
+    tokenLimit: 1_000,
+  });
+});
+
+test("watcher falls back to an older thread rollout outside the recent lookback window", async (t) => {
+  const { homeDir, threadDir } = makeTemporarySessionsHome();
+  const previousCodexHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = homeDir;
+  t.after(() => {
+    restoreCodexHome(previousCodexHome);
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  });
+
+  const nowMs = Date.UTC(2026, 2, 12, 13, 30, 0);
+  const oldRolloutPath = path.join(threadDir, "rollout-2026-03-05T13-23-27-thread-a.jsonl");
+  writeRolloutFile(oldRolloutPath, {
+    turnId: "turn-a-old",
+    tokensUsed: 555,
+    tokenLimit: 1_000,
+  });
+  setFileMTime(oldRolloutPath, nowMs - (24 * 60 * 60 * 1000));
+
+  const newerOtherPath = path.join(threadDir, "rollout-2026-03-12T13-29-00-thread-b.jsonl");
+  writeRolloutFile(newerOtherPath, {
+    turnId: "turn-b-new",
+    tokensUsed: 999,
+    tokenLimit: 1_000,
+  });
+  setFileMTime(newerOtherPath, nowMs - 60_000);
+
+  const usages = [];
+  const watcher = createThreadRolloutActivityWatcher({
+    threadId: "thread-a",
+    intervalMs: 5,
+    lookupTimeoutMs: 100,
+    idleTimeoutMs: 100,
+    now: () => nowMs,
+    onUsage: ({ usage }) => usages.push(usage),
+  });
+
+  await wait(30);
+  watcher.stop();
+
+  assert.deepEqual(usages[0], {
+    tokensUsed: 555,
+    tokenLimit: 1_000,
+  });
+});
+
 test("readLatestContextWindowUsage prefers the thread-scoped rollout over newer unrelated files", (t) => {
   const { homeDir, threadDir } = makeTemporarySessionsHome();
   const previousCodexHome = process.env.CODEX_HOME;

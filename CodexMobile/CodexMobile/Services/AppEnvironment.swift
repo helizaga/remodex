@@ -12,7 +12,8 @@ enum AppEnvironment {
         "PHODEX_DEFAULT_WS_URL",
     ]
 
-    // Fail closed unless the app bundle explicitly opts into a relay endpoint.
+    // Open-source builds should provide an explicit relay instead of silently
+    // pointing at a hosted service the user does not control.
     static let defaultRelayURLString = ""
 
     static var relayBaseURL: String {

@@ -426,6 +426,69 @@ function findRecentRolloutFileForContextRead(
   return null;
 }
 
+// Keeps the fast "recent files first" path, but falls back to a full-tree scan
+// so older valid thread rollouts still recover after many newer sessions exist.
+function findPreferredRolloutFileForThread(root, candidates, threadId, { fsModule = fs } = {}) {
+  const recentMatch = findMostRecentRolloutFileForThread(candidates, threadId);
+  if (recentMatch) {
+    return recentMatch;
+  }
+
+  return findNewestRolloutFileForThread(root, threadId, { fsModule });
+}
+
+// Prefers the newest filename-scoped rollout for a thread instead of the first
+// filesystem hit, which can be an older stale session for the same thread.
+function findMostRecentRolloutFileForThread(candidates, threadId) {
+  if (!Array.isArray(candidates) || !threadId) {
+    return null;
+  }
+
+  const match = candidates.find(({ filePath }) => path.basename(filePath).includes(threadId));
+  return match?.filePath || null;
+}
+
+// Scans the whole sessions tree only when the recent candidate window missed the
+// thread, still preferring the newest matching rollout instead of the first hit.
+function findNewestRolloutFileForThread(root, threadId, { fsModule = fs } = {}) {
+  if (!threadId || !fsModule.existsSync(root)) {
+    return null;
+  }
+
+  const stack = [root];
+  let newestMatch = null;
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    const entries = fsModule.readdirSync(current, { withFileTypes: true });
+
+    for (const entry of entries) {
+      const fullPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(fullPath);
+        continue;
+      }
+
+      if (!entry.isFile()
+        || !entry.name.startsWith("rollout-")
+        || !entry.name.endsWith(".jsonl")
+        || !entry.name.includes(threadId)) {
+        continue;
+      }
+
+      const stat = fsModule.statSync(fullPath);
+      if (!newestMatch || stat.mtimeMs > newestMatch.mtimeMs) {
+        newestMatch = {
+          filePath: fullPath,
+          mtimeMs: stat.mtimeMs,
+        };
+      }
+    }
+  }
+
+  return newestMatch?.filePath || null;
+}
+
 function collectRecentRolloutFiles(
   root,
   {
@@ -802,4 +865,5 @@ module.exports = {
   readLatestContextWindowUsage,
   resolveSessionsRoot,
   findRolloutFileForThread,
+  findRecentRolloutFileForContextRead,
 };
