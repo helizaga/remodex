@@ -77,6 +77,7 @@ test("watcher falls back to the thread-scoped rollout when turn id is unavailabl
 test("watcher prefers the newest rollout when the same thread has multiple files", async (t) => {
   const { homeDir, threadDir } = makeTemporarySessionsHome();
   const previousCodexHome = process.env.CODEX_HOME;
+  const nowMs = Date.UTC(2026, 2, 12, 13, 30, 0);
   process.env.CODEX_HOME = homeDir;
   t.after(() => {
     restoreCodexHome(previousCodexHome);
@@ -88,11 +89,19 @@ test("watcher prefers the newest rollout when the same thread has multiple files
     tokensUsed: 111,
     tokenLimit: 1_000,
   });
+  setFileMTime(
+    path.join(threadDir, "rollout-2026-03-05T13-23-27-thread-a.jsonl"),
+    nowMs - 120_000
+  );
   writeRolloutFile(path.join(threadDir, "rollout-2026-03-05T13-25-27-thread-a.jsonl"), {
     turnId: "turn-a-new",
     tokensUsed: 333,
     tokenLimit: 1_000,
   });
+  setFileMTime(
+    path.join(threadDir, "rollout-2026-03-05T13-25-27-thread-a.jsonl"),
+    nowMs - 60_000
+  );
 
   const usages = [];
   const watcher = createThreadRolloutActivityWatcher({
@@ -100,6 +109,7 @@ test("watcher prefers the newest rollout when the same thread has multiple files
     intervalMs: 5,
     lookupTimeoutMs: 100,
     idleTimeoutMs: 100,
+    now: () => nowMs,
     onUsage: ({ usage }) => usages.push(usage),
   });
 
