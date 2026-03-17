@@ -303,8 +303,9 @@ process.stdin.on("end", () => {
 
   local parser_status=$?
   if [[ $parser_status -eq 2 ]]; then
-    echo "[remodex-local] ngrok API did not report an active tunnel session for that endpoint" >&2
-    return 1
+    echo "[remodex-local] ngrok API does not currently report an active tunnel session for that endpoint; waiting for release" >&2
+    sleep 2
+    return 0
   fi
   if [[ $parser_status -ne 0 || -z "$session_ids" ]]; then
     echo "[remodex-local] could not parse ngrok endpoint metadata for automatic recovery" >&2
@@ -483,14 +484,11 @@ else
   if ! wait_for_ngrok; then
     if ngrok_log_contains 'ERR_NGROK_334'; then
       echo "[remodex-local] ngrok endpoint collision detected; retrying after local cleanup" >&2
-      start_ngrok_tunnel
-      if ! wait_for_ngrok; then
-        collision_endpoint="$(extract_ngrok_collision_endpoint 2>/dev/null || true)"
-        if ! recover_ngrok_collision "$collision_endpoint"; then
-          echo "[remodex-local] failed to start ngrok tunnel" >&2
-          report_ngrok_failure
-          exit 1
-        fi
+      collision_endpoint="$(extract_ngrok_collision_endpoint 2>/dev/null || true)"
+      if ! recover_ngrok_collision "$collision_endpoint"; then
+        echo "[remodex-local] failed to start ngrok tunnel" >&2
+        report_ngrok_failure
+        exit 1
       fi
     else
       echo "[remodex-local] failed to start ngrok tunnel" >&2
