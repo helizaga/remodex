@@ -308,6 +308,7 @@ function restartLaunchAgent({
   bootoutLaunchAgent({
     env,
     execFileSyncImpl,
+    plistPath,
     ignoreMissing: true,
   });
   execFileSyncImpl("launchctl", [
@@ -320,18 +321,33 @@ function restartLaunchAgent({
 function bootoutLaunchAgent({
   env = process.env,
   execFileSyncImpl = execFileSync,
+  plistPath = resolveLaunchAgentPlistPath({ env }),
   ignoreMissing = false,
 } = {}) {
-  try {
-    execFileSyncImpl("launchctl", [
-      "bootout",
-      launchAgentLabelDomain(env),
-    ], { stdio: ["ignore", "ignore", "pipe"] });
-  } catch (error) {
-    if (ignoreMissing && isMissingLaunchAgentError(error)) {
+  const attempts = [
+    ["bootout", launchAgentDomain(env), plistPath],
+    ["bootout", launchAgentLabelDomain(env)],
+  ];
+  let lastUnexpectedError = null;
+
+  for (const [index, args] of attempts.entries()) {
+    try {
+      execFileSyncImpl("launchctl", args, { stdio: ["ignore", "ignore", "pipe"] });
       return;
+    } catch (error) {
+      if (isMissingLaunchAgentError(error) || (index === 0 && isStaleLaunchAgentPathError(error))) {
+        continue;
+      }
+      lastUnexpectedError = error;
     }
-    throw error;
+
+    if (!ignoreMissing) {
+      throw lastUnexpectedError;
+    }
+  }
+
+  if (lastUnexpectedError) {
+    throw lastUnexpectedError;
   }
 }
 
@@ -414,6 +430,15 @@ function isMissingLaunchAgentError(error) {
   return combined.includes("could not find service")
     || combined.includes("service could not be found")
     || combined.includes("no such process");
+}
+
+function isStaleLaunchAgentPathError(error) {
+  const combined = [
+    error?.message,
+    error?.stderr?.toString?.("utf8"),
+    error?.stdout?.toString?.("utf8"),
+  ].filter(Boolean).join("\n").toLowerCase();
+  return combined.includes("input/output error");
 }
 
 function escapeXml(value) {
