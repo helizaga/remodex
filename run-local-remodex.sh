@@ -13,6 +13,7 @@ RELAY_PID_FILE="${STATE_DIR}/relay.pid"
 TUNNEL_PID_FILE="${STATE_DIR}/tunnel.pid"
 NGROK_LOG_FILE="${STATE_DIR}/ngrok.log"
 BRIDGE_LOG_FILE="${STATE_DIR}/bridge.log"
+RELAY_LOG_FILE="${STATE_DIR}/relay.log"
 COMMAND="${1:-up}"
 LOCAL_RELAY_URL="ws://127.0.0.1:${PORT}/relay"
 RELAY_URL=""
@@ -111,6 +112,12 @@ cleanup_repo_worker_orphans() {
 }
 
 if [[ "$COMMAND" == "stop" ]]; then
+  if [[ "$OSTYPE" == darwin* ]]; then
+    (
+      cd "$BRIDGE_DIR"
+      node ./bin/remodex.js stop
+    ) || true
+  fi
   cleanup_repo_launcher_orphans "stop"
   cleanup_repo_worker_orphans "stop"
   stop_pid_file "bridge" "$BRIDGE_PID_FILE"
@@ -152,6 +159,31 @@ require_command() {
   echo "[remodex-local] missing required command: $command_name" >&2
   echo "[remodex-local] $install_hint" >&2
   exit 1
+}
+
+spawn_detached() {
+  local pid_file="$1"
+  local log_file="$2"
+  shift 2
+
+  node - "$pid_file" "$log_file" "$@" <<'NODE'
+const fs = require("fs");
+const { spawn } = require("child_process");
+
+const [, , pidFile, logFile, ...cmd] = process.argv;
+if (cmd.length === 0) {
+  process.exit(1);
+}
+
+const logFd = fs.openSync(logFile, "a");
+const child = spawn(cmd[0], cmd.slice(1), {
+  detached: true,
+  stdio: ["ignore", logFd, logFd],
+});
+fs.writeFileSync(pidFile, `${child.pid}`);
+console.log(child.pid);
+child.unref();
+NODE
 }
 
 preflight_up() {
@@ -371,10 +403,9 @@ recover_ngrok_collision() {
 
 start_ngrok_tunnel() {
   cleanup_ngrok_state
-  ngrok http "http://127.0.0.1:${PORT}" --log=stdout --log-format=json >"$NGROK_LOG_FILE" 2>&1 &
-  tunnel_pid=$!
+  tunnel_pid="$(spawn_detached "$TUNNEL_PID_FILE" "$NGROK_LOG_FILE" \
+    ngrok http "http://127.0.0.1:${PORT}" --log=stdout --log-format=json)"
   started_tunnel=1
-  echo "$tunnel_pid" > "$TUNNEL_PID_FILE"
 }
 
 report_ngrok_failure() {
@@ -421,6 +452,11 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
+preserve_runtime_after_successful_up() {
+  trap - EXIT INT TERM
+  rm -f "$BRIDGE_PID_FILE"
+}
+
 echo "[remodex-local] bind host: $BIND_HOST"
 echo "[remodex-local] desktop refresh: $REFRESH_ENABLED"
 if [[ -n "$EXPLICIT_RELAY_URL" ]]; then
@@ -448,11 +484,11 @@ if [[ -n "$EXPLICIT_RELAY_URL" ]]; then
     if curl -fsS "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
       echo "[remodex-local] reusing existing local relay on :$PORT"
     else
-      NODE_PATH="$BRIDGE_DIR/node_modules" \
-        node "$ROOT_DIR/relay/local-server.js" --host "$BIND_HOST" --port "$PORT" &
-      relay_pid=$!
+      rm -f "$RELAY_LOG_FILE"
+      relay_pid="$(spawn_detached "$RELAY_PID_FILE" "$RELAY_LOG_FILE" \
+        /usr/bin/env "NODE_PATH=$BRIDGE_DIR/node_modules" \
+        node "$ROOT_DIR/relay/local-server.js" --host "$BIND_HOST" --port "$PORT")"
       started_relay=1
-      echo "$relay_pid" > "$RELAY_PID_FILE"
 
       if ! wait_for_relay; then
         echo "[remodex-local] failed to start local relay on :$PORT" >&2
@@ -466,11 +502,11 @@ else
   if curl -fsS "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
     echo "[remodex-local] reusing existing local relay on :$PORT"
   else
-    NODE_PATH="$BRIDGE_DIR/node_modules" \
-      node "$ROOT_DIR/relay/local-server.js" --host "$BIND_HOST" --port "$PORT" &
-    relay_pid=$!
+    rm -f "$RELAY_LOG_FILE"
+    relay_pid="$(spawn_detached "$RELAY_PID_FILE" "$RELAY_LOG_FILE" \
+      /usr/bin/env "NODE_PATH=$BRIDGE_DIR/node_modules" \
+      node "$ROOT_DIR/relay/local-server.js" --host "$BIND_HOST" --port "$PORT")"
     started_relay=1
-    echo "$relay_pid" > "$RELAY_PID_FILE"
 
     if ! wait_for_relay; then
       echo "[remodex-local] failed to start local relay on :$PORT" >&2
@@ -508,3 +544,6 @@ rm -f "$BRIDGE_LOG_FILE"
 REMODEX_RELAY="$RELAY_URL" \
 REMODEX_REFRESH_ENABLED="$REFRESH_ENABLED" \
 node ./bin/remodex.js up 2>&1 | tee -a "$BRIDGE_LOG_FILE"
+
+preserve_runtime_after_successful_up
+echo "[remodex-local] bridge service is up; use remodex stop to stop the local relay, tunnel, and macOS bridge service"
