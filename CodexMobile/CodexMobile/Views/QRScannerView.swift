@@ -8,6 +8,7 @@ import AVFoundation
 import SwiftUI
 
 struct QRScannerView: View {
+    let onBack: (() -> Void)?
     let onScan: (CodexPairingQRPayload) -> Void
 
     @State private var scannerError: String?
@@ -21,8 +22,10 @@ struct QRScannerView: View {
         initialBridgeUpdatePrompt: CodexBridgeUpdatePrompt? = nil,
         initialHasCameraPermission: Bool = false,
         initialIsCheckingPermission: Bool = true,
+        onBack: (() -> Void)? = nil,
         onScan: @escaping (CodexPairingQRPayload) -> Void
     ) {
+        self.onBack = onBack
         self.onScan = onScan
         _bridgeUpdatePrompt = State(initialValue: initialBridgeUpdatePrompt)
         _hasCameraPermission = State(initialValue: initialHasCameraPermission)
@@ -47,6 +50,16 @@ struct QRScannerView: View {
                 scannerOverlay
             } else {
                 cameraPermissionView
+            }
+        }
+        .safeAreaInset(edge: .top) {
+            if let onBack {
+                HStack {
+                    backButton(action: onBack)
+                    Spacer()
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
             }
         }
         .task {
@@ -163,6 +176,23 @@ struct QRScannerView: View {
         }
     }
 
+    // Keeps the first-run scanner escapable without turning reconnect recovery into onboarding.
+    private func backButton(action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: "chevron.left")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 44, height: 44)
+                .background(Color.white.opacity(0.12), in: Circle())
+                .overlay(
+                    Circle()
+                        .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Back")
+    }
+
     private var scannerOverlay: some View {
         VStack(spacing: 24) {
             Spacer()
@@ -204,16 +234,26 @@ struct QRScannerView: View {
         }
     }
 
+    // Keeps permission-prompt teardown on the main actor so backing out mid-prompt
+    // does not race a stale state write against SwiftUI dismissal.
+    @MainActor
     private func checkCameraPermission() async {
+        let hasPermission: Bool
         let status = AVCaptureDevice.authorizationStatus(for: .video)
         switch status {
         case .authorized:
-            hasCameraPermission = true
+            hasPermission = true
         case .notDetermined:
-            hasCameraPermission = await AVCaptureDevice.requestAccess(for: .video)
+            hasPermission = await AVCaptureDevice.requestAccess(for: .video)
         default:
-            hasCameraPermission = false
+            hasPermission = false
         }
+
+        guard !Task.isCancelled else {
+            return
+        }
+
+        hasCameraPermission = hasPermission
         isCheckingPermission = false
     }
 
@@ -246,7 +286,8 @@ private extension CodexBridgeUpdatePrompt {
 #Preview("Bridge Update Required") {
     QRScannerView(
         initialBridgeUpdatePrompt: .previewScannerMismatch,
-        initialIsCheckingPermission: false
+        initialIsCheckingPermission: false,
+        onBack: {}
     ) { _ in }
 }
 
@@ -266,15 +307,93 @@ private struct QRCameraPreview: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: QRCameraUIView, context: Context) {}
+
+    // Tears down the camera before UIKit deallocates the preview layer.
+    static func dismantleUIView(_ uiView: QRCameraUIView, coordinator: ()) {
+        uiView.stopCamera()
+    }
 }
 
+// Serializes camera session handoff so a fast reopen cannot start before the previous stop completes.
+private final class QRCameraLifecycleCoordinator {
+    static let shared = QRCameraLifecycleCoordinator()
+    private typealias DeferredStart = () -> Void
+
+    private let queue = DispatchQueue(label: "com.phodex.qr-camera.lifecycle")
+    private let lock = NSLock()
+    private var isStopInFlight = false
+    private var deferredStarts: [DeferredStart] = []
+
+    // Starts immediately unless a previous stop still owns the camera handoff.
+    func start(session: AVCaptureSession, canStart: @escaping () -> Bool) {
+        let startWork: DeferredStart = { [queue] in
+            queue.async {
+                guard canStart(), !session.isRunning else {
+                    return
+                }
+                session.startRunning()
+            }
+        }
+
+        guard !deferStartIfNeeded(startWork) else {
+            return
+        }
+
+        startWork()
+    }
+
+    // Holds new starts until stopRunning completes, then replays any deferred opens.
+    func stop(session: AVCaptureSession) {
+        lock.lock()
+        isStopInFlight = true
+        lock.unlock()
+
+        queue.async { [weak self] in
+            guard session.isRunning else {
+                self?.finishStopAndReplayDeferredStarts()
+                return
+            }
+
+            session.stopRunning()
+            self?.finishStopAndReplayDeferredStarts()
+        }
+    }
+
+    // Reopens queued scanners only after the previous session fully releases the camera.
+    private func finishStopAndReplayDeferredStarts() {
+        lock.lock()
+        let startsToReplay = deferredStarts
+        deferredStarts.removeAll()
+        isStopInFlight = false
+        lock.unlock()
+
+        startsToReplay.forEach { start in
+            start()
+        }
+    }
+
+    // Converts overlapping reopen attempts into deferred starts while teardown is active.
+    private func deferStartIfNeeded(_ startWork: @escaping DeferredStart) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard isStopInFlight else {
+            return false
+        }
+
+        deferredStarts.append(startWork)
+        return true
+    }
+}
+
+// Owns the AVFoundation session lifecycle for the SwiftUI scanner host view.
 private class QRCameraUIView: UIView, AVCaptureMetadataOutputObjectsDelegate {
     var onScan: ((String) -> Void)?
 
     private let captureSession = AVCaptureSession()
-    private let sessionQueue = DispatchQueue(label: "com.phodex.qr-camera")
     private var previewLayer: AVCaptureVideoPreviewLayer?
     private var hasScanned = false
+    private var isStoppingCamera = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -291,6 +410,7 @@ private class QRCameraUIView: UIView, AVCaptureMetadataOutputObjectsDelegate {
         previewLayer?.frame = bounds
     }
 
+    // Configures the metadata session once and starts it off the main thread.
     private func setupCamera() {
         guard let device = AVCaptureDevice.default(for: .video),
               let input = try? AVCaptureDeviceInput(device: device) else {
@@ -313,8 +433,11 @@ private class QRCameraUIView: UIView, AVCaptureMetadataOutputObjectsDelegate {
         self.layer.addSublayer(layer)
         previewLayer = layer
 
-        sessionQueue.async { [weak self] in
-            self?.captureSession.startRunning()
+        QRCameraLifecycleCoordinator.shared.start(session: captureSession) { [weak self] in
+            guard let self else {
+                return false
+            }
+            return !self.isStoppingCamera
         }
     }
 
@@ -339,10 +462,24 @@ private class QRCameraUIView: UIView, AVCaptureMetadataOutputObjectsDelegate {
         hasScanned = false
     }
 
-    deinit {
-        let session = captureSession
-        sessionQueue.async {
-            session.stopRunning()
+    // Detaches the preview layer first so AVFoundation teardown stays serialized.
+    func stopCamera() {
+        guard !isStoppingCamera else {
+            return
         }
+
+        isStoppingCamera = true
+        onScan = nil
+
+        let layerToRemove = previewLayer
+        previewLayer = nil
+        layerToRemove?.session = nil
+        layerToRemove?.removeFromSuperlayer()
+
+        QRCameraLifecycleCoordinator.shared.stop(session: captureSession)
+    }
+
+    deinit {
+        stopCamera()
     }
 }

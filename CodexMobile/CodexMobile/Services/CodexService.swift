@@ -31,6 +31,17 @@ struct CodexRunningThreadWatch: Equatable, Sendable {
     let expiresAt: Date
 }
 
+struct CodexSubagentIdentityEntry: Equatable, Sendable {
+    var threadId: String?
+    var agentId: String?
+    var nickname: String?
+    var role: String?
+
+    var hasMetadata: Bool {
+        threadId != nil || agentId != nil || nickname != nil || role != nil
+    }
+}
+
 struct CodexSecureControlWaiter {
     let id: UUID
     let continuation: CheckedContinuation<String, Error>
@@ -258,7 +269,11 @@ struct AssistantRevertStateCacheEntry {
 final class CodexService {
     // --- Public state ---------------------------------------------------------
 
-    var threads: [CodexThread] = []
+    var threads: [CodexThread] = [] {
+        didSet {
+            rebuildThreadLookupCaches()
+        }
+    }
     var isConnected = false
     var isConnecting = false
     var isInitialized = false
@@ -311,6 +326,8 @@ final class CodexService {
     var supportsServiceTier = true
     // Seeds brand-new chats with one-shot composer actions like code review.
     var pendingComposerActionByThreadID: [String: CodexPendingThreadComposerAction] = [:]
+    // In-memory identity directory for subagents, keyed by thread id and agent id.
+    var subagentIdentityVersion: Int = 0
 
     // Relay session persistence
     var relaySessionId: String?
@@ -346,6 +363,8 @@ final class CodexService {
     var pendingRequests: [String: CheckedContinuation<RPCMessage, Error>] = [:]
     // Test hook: intercepts outbound RPC requests without requiring a live socket.
     @ObservationIgnored var requestTransportOverride: ((String, JSONValue?) async throws -> RPCMessage)?
+    // Test hook: stubs trusted-session lookup without performing a real relay HTTP request.
+    @ObservationIgnored var trustedSessionResolverOverride: (() async throws -> CodexTrustedSessionResolveResponse)?
     var streamingAssistantMessageByTurnID: [String: String] = [:]
     var streamingSystemMessageByItemID: [String: String] = [:]
     /// Rich metadata for command execution tool calls, keyed by itemId.
@@ -365,6 +384,7 @@ final class CodexService {
     var threadIdByTurnID: [String: String] = [:]
     var hydratedThreadIDs: Set<String> = []
     var loadingThreadIDs: Set<String> = []
+    @ObservationIgnored var subagentMetadataLoadingThreadIDs: Set<String> = []
     var resumedThreadIDs: Set<String> = []
     var isAppInForeground = true
     var threadListSyncTask: Task<Void, Never>?
@@ -391,18 +411,27 @@ final class CodexService {
     var pendingHandshake: CodexPendingHandshake?
     var phoneIdentityState: CodexPhoneIdentityState
     var trustedMacRegistry: CodexTrustedMacRegistry
+    var lastTrustedMacDeviceId: String?
     var pendingSecureControlContinuations: [String: [CodexSecureControlWaiter]] = [:]
     var bufferedSecureControlMessages: [String: [String]] = [:]
     // Assistant-scoped patch ledger used by the revert-changes flow.
     var aiChangeSetsByID: [String: AIChangeSet] = [:]
     var aiChangeSetIDByTurnID: [String: String] = [:]
     var aiChangeSetIDByAssistantMessageID: [String: String] = [:]
+    // Keeps hot-path thread lookups O(1) instead of rescanning the full sidebar list.
+    @ObservationIgnored var threadByID: [String: CodexThread] = [:]
+    @ObservationIgnored var threadIndexByID: [String: Int] = [:]
+    @ObservationIgnored var firstLiveThreadIDCache: String?
+    @ObservationIgnored var subagentIdentityByThreadID: [String: CodexSubagentIdentityEntry] = [:]
+    @ObservationIgnored var subagentIdentityByAgentID: [String: CodexSubagentIdentityEntry] = [:]
     // Canonical repo roots keyed by observed working directories from bridge git/status responses.
     var repoRootByWorkingDirectory: [String: String] = [:]
     var knownRepoRoots: Set<String> = []
     // Service-owned per-thread UI state keeps the active chat isolated from unrelated thread mutations.
     @ObservationIgnored var threadTimelineStateByThread: [String: ThreadTimelineState] = [:]
     @ObservationIgnored var stoppedTurnIDsByThread: [String: Set<String>] = [:]
+    // Lazily rebuilt id->index maps keep hot-path message lookups out of repeated linear scans.
+    @ObservationIgnored var messageIndexCacheByThread: [String: [String: Int]] = [:]
     @ObservationIgnored var latestAssistantOutputByThread: [String: String] = [:]
     @ObservationIgnored var latestRepoAffectingMessageSignalByThread: [String: String] = [:]
     @ObservationIgnored var assistantRevertStateCacheByThread: [String: AssistantRevertStateCacheEntry] = [:]
@@ -440,6 +469,7 @@ final class CodexService {
         self.remoteNotificationRegistrar = remoteNotificationRegistrar
         self.phoneIdentityState = codexPhoneIdentityStateFromSecureStore()
         self.trustedMacRegistry = codexTrustedMacRegistryFromSecureStore()
+        self.lastTrustedMacDeviceId = SecureStore.readString(for: CodexSecureKeys.lastTrustedMacDeviceId)
         let loadedMessages = messagePersistence.load().mapValues { messages in
             messages.map { message in
                 var value = message
@@ -450,6 +480,7 @@ final class CodexService {
         }
         CodexMessageOrderCounter.seed(from: loadedMessages)
         self.messagesByThread = loadedMessages
+        rebuildSubagentIdentityDirectory()
 
         let loadedChangeSets = aiChangeSetPersistence.load()
         self.aiChangeSetsByID = loadedChangeSets.reduce(into: [:]) { partialResult, changeSet in
@@ -520,7 +551,11 @@ final class CodexService {
            let trustedMac = trustedMacRegistry.records[relayMacDeviceId] {
             self.secureConnectionState = .trustedMac
             self.secureMacFingerprint = codexSecureFingerprint(for: trustedMac.macIdentityPublicKey)
+        } else if let trustedMac = preferredTrustedMacRecord {
+            self.secureConnectionState = .liveSessionUnresolved
+            self.secureMacFingerprint = codexSecureFingerprint(for: trustedMac.macIdentityPublicKey)
         }
+        rebuildThreadLookupCaches()
     }
 
     // Remembers whether we can offer reconnect without forcing a fresh QR scan.
@@ -552,6 +587,41 @@ final class CodexService {
         relayMacIdentityPublicKey?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .nilIfEmpty
+    }
+
+    var normalizedLastTrustedMacDeviceId: String? {
+        lastTrustedMacDeviceId?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfEmpty
+    }
+
+    var preferredTrustedMacDeviceId: String? {
+        if let normalizedLastTrustedMacDeviceId,
+           trustedMacRegistry.records[normalizedLastTrustedMacDeviceId] != nil {
+            return normalizedLastTrustedMacDeviceId
+        }
+
+        return trustedMacRegistry.records.values
+            .sorted { lhs, rhs in
+                (lhs.lastUsedAt ?? lhs.lastPairedAt) > (rhs.lastUsedAt ?? rhs.lastPairedAt)
+            }
+            .first?
+            .macDeviceId
+    }
+
+    var preferredTrustedMacRecord: CodexTrustedMacRecord? {
+        guard let preferredTrustedMacDeviceId else {
+            return nil
+        }
+        return trustedMacRegistry.records[preferredTrustedMacDeviceId]
+    }
+
+    var hasTrustedMacReconnectCandidate: Bool {
+        preferredTrustedMacRecord?.relayURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
+
+    var hasReconnectCandidate: Bool {
+        hasSavedRelaySession || hasTrustedMacReconnectCandidate
     }
 
     // Separates transport readiness from post-connect hydration so the UI can explain delays honestly.
