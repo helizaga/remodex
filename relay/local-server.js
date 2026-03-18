@@ -11,7 +11,11 @@ process.env.NODE_PATH = process.env.NODE_PATH
 Module._initPaths();
 
 const { WebSocketServer } = require("ws");
-const { setupRelay, getRelayStats } = require("./relay");
+const {
+  setupRelay,
+  getRelayStats,
+  resolveTrustedMacSession,
+} = require("./relay");
 
 const args = process.argv.slice(2);
 const port = readFlag(args, "--port", "9000");
@@ -28,6 +32,11 @@ const server = http.createServer((req, res) => {
       "content-length": Buffer.byteLength(body),
     });
     res.end(body);
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/v1/trusted/session/resolve") {
+    void handleJSONRoute(req, res, async (body) => resolveTrustedMacSession(body));
     return;
   }
 
@@ -54,4 +63,63 @@ function readFlag(argv, name, fallback) {
   }
 
   return value;
+}
+
+async function handleJSONRoute(req, res, handler) {
+  try {
+    const body = await readJSONBody(req);
+    const result = await handler(body);
+    return writeJSON(res, 200, result);
+  } catch (error) {
+    return writeJSON(res, error.status || 500, {
+      ok: false,
+      error: error.message || "Internal server error",
+      code: error.code || "internal_error",
+    });
+  }
+}
+
+function readJSONBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let totalSize = 0;
+
+    req.on("data", (chunk) => {
+      totalSize += chunk.length;
+      if (totalSize > 64 * 1024) {
+        reject(Object.assign(new Error("Request body too large"), {
+          status: 413,
+          code: "body_too_large",
+        }));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+
+    req.on("end", () => {
+      const rawBody = Buffer.concat(chunks).toString("utf8");
+      if (!rawBody.trim()) {
+        resolve({});
+        return;
+      }
+
+      try {
+        resolve(JSON.parse(rawBody));
+      } catch {
+        reject(Object.assign(new Error("Invalid JSON body"), {
+          status: 400,
+          code: "invalid_json",
+        }));
+      }
+    });
+
+    req.on("error", reject);
+  });
+}
+
+function writeJSON(res, status, body) {
+  res.statusCode = status;
+  res.setHeader("content-type", "application/json");
+  res.end(JSON.stringify(body));
 }
