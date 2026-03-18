@@ -17,6 +17,7 @@ const DEFAULT_MID_RUN_REFRESH_THROTTLE_MS = 3_000;
 const DEFAULT_ROLLOUT_LOOKUP_TIMEOUT_MS = 5_000;
 const DEFAULT_ROLLOUT_IDLE_TIMEOUT_MS = 10_000;
 const DEFAULT_CUSTOM_REFRESH_FAILURE_THRESHOLD = 3;
+const DEFAULT_PAIRING_TTL_MS = 30 * 60 * 1000;
 const REFRESH_SCRIPT_PATH = path.join(__dirname, "scripts", "codex-refresh.applescript");
 const NEW_THREAD_DEEP_LINK = "codex://threads/new";
 
@@ -564,6 +565,10 @@ function readBridgeConfig({
     pushPreviewMaxChars: parseIntegerEnv(
       readFirstDefinedEnv(["REMODEX_PUSH_PREVIEW_MAX_CHARS"], "160", env),
       160
+    ),
+    pairingTtlMs: parseIntegerEnv(
+      readFirstDefinedEnv(["REMODEX_PAIRING_TTL_MS"], String(DEFAULT_PAIRING_TTL_MS), env),
+      DEFAULT_PAIRING_TTL_MS
     ),
     resetRelaySession,
     refreshEnabled: explicitRefreshEnabled == null

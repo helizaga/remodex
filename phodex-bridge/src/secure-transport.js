@@ -29,7 +29,8 @@ const HANDSHAKE_MODE_QR_BOOTSTRAP = "qr_bootstrap";
 const HANDSHAKE_MODE_TRUSTED_RECONNECT = "trusted_reconnect";
 const SECURE_SENDER_MAC = "mac";
 const SECURE_SENDER_IPHONE = "iphone";
-const MAX_PAIRING_AGE_MS = 5 * 60 * 1000;
+const DEFAULT_PAIRING_TTL_MS = 30 * 60 * 1000;
+const MIN_PAIRING_TTL_MS = 60 * 1000;
 const MAX_BRIDGE_OUTBOUND_MESSAGES = 500;
 const MAX_BRIDGE_OUTBOUND_BYTES = 10 * 1024 * 1024;
 
@@ -37,23 +38,25 @@ function createBridgeSecureTransport({
   sessionId,
   relayUrl,
   deviceState,
+  pairingTtlMs = DEFAULT_PAIRING_TTL_MS,
   onTrustedPhoneUpdate = null,
 }) {
   let currentDeviceState = deviceState;
   let pendingHandshake = null;
   let activeSession = null;
   let liveSendWireMessage = null;
+  const resolvedPairingTtlMs = normalizePairingTtlMs(pairingTtlMs);
   // Tracks the highest bridge seq the phone has definitely acked, so replay
   // decisions never depend on best-effort local socket writes.
   let lastRelayedBridgeOutboundSeq = 0;
-  let currentPairingExpiresAt = Date.now() + MAX_PAIRING_AGE_MS;
+  let currentPairingExpiresAt = Date.now() + resolvedPairingTtlMs;
   let nextKeyEpoch = 1;
   let nextBridgeOutboundSeq = 1;
   let outboundBufferBytes = 0;
   const outboundBuffer = [];
 
   function createPairingPayload() {
-    currentPairingExpiresAt = Date.now() + MAX_PAIRING_AGE_MS;
+    currentPairingExpiresAt = Date.now() + resolvedPairingTtlMs;
     return {
       v: PAIRING_QR_VERSION,
       relay: relayUrl,
@@ -552,6 +555,12 @@ function shortFingerprint(publicKeyBase64) {
 
 function transcriptDigest(transcriptBytes) {
   return createHash("sha256").update(transcriptBytes).digest("hex").slice(0, 16);
+}
+
+function normalizePairingTtlMs(value) {
+  return Number.isFinite(value) && value >= MIN_PAIRING_TTL_MS
+    ? value
+    : DEFAULT_PAIRING_TTL_MS;
 }
 
 function encryptEnvelopePayload(payloadObject, key, sender, counter, sessionId, keyEpoch) {

@@ -80,10 +80,18 @@ test("readBridgeConfig keeps safe defaults and explicit overrides", () => {
     platform: "darwin",
     ...commonPackagedArgs,
   });
+  const customPairingTtlConfig = readBridgeConfig({
+    env: {
+      REMODEX_PAIRING_TTL_MS: "2700000",
+    },
+    platform: "darwin",
+    ...commonPackagedArgs,
+  });
 
   assert.equal(macConfig.refreshEnabled, false);
   assert.equal(macConfig.relayUrl, "");
   assert.equal(macConfig.pushServiceUrl, "");
+  assert.equal(macConfig.pairingTtlMs, 30 * 60 * 1000);
   assert.equal(macConfig.resetRelaySession, false);
   assert.equal(explicitRelayConfig.relayUrl, "ws://127.0.0.1:9000/relay");
   assert.equal(macEndpointConfig.refreshEnabled, false);
@@ -91,6 +99,7 @@ test("readBridgeConfig keeps safe defaults and explicit overrides", () => {
   assert.equal(linuxCommandConfig.refreshEnabled, false);
   assert.equal(explicitOnConfig.refreshEnabled, true);
   assert.equal(explicitOffConfig.refreshEnabled, false);
+  assert.equal(customPairingTtlConfig.pairingTtlMs, 2_700_000);
   assert.equal(resetSessionConfig.resetRelaySession, true);
 });
 
