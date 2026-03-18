@@ -421,7 +421,7 @@ extension CodexService {
         let normalizedThreadName = normalizedIdentifier(threadName)
 
         if let normalizedThreadName, !normalizedThreadName.isEmpty {
-            if let existingIndex = threads.firstIndex(where: { $0.id == threadId }) {
+            if let existingIndex = threadIndex(for: threadId) {
                 threads[existingIndex].title = normalizedThreadName
                 threads[existingIndex].name = normalizedThreadName
             } else {
@@ -440,7 +440,7 @@ extension CodexService {
 
         // If server explicitly sends an empty/null name, clear local custom title.
         guard hasExplicitRenameField,
-              let existingIndex = threads.firstIndex(where: { $0.id == threadId }) else {
+              let existingIndex = threadIndex(for: threadId) else {
             return
         }
 
@@ -1752,6 +1752,13 @@ extension CodexService {
             || itemType == "filechange"
             || itemType == "toolcall"
             || itemType == "commandexecution"
+            || itemType == "collabagenttoolcall"
+            || itemType == "collabtoolcall"
+            || itemType.hasPrefix("collabagentspawn")
+            || itemType.hasPrefix("collabwaiting")
+            || itemType.hasPrefix("collabclose")
+            || itemType.hasPrefix("collabresume")
+            || itemType.hasPrefix("collabagentinteraction")
             || itemType == "diff"
             || itemType == "plan"
             || itemType == "enteredreviewmode"
@@ -1788,6 +1795,24 @@ extension CodexService {
         case "commandexecution":
             kind = .commandExecution
             body = decodeCommandExecutionStatusText(itemObject, isCompleted: isCompleted)
+        case let collabType where collabType == "collabagenttoolcall"
+            || collabType == "collabtoolcall"
+            || collabType.hasPrefix("collabagentspawn")
+            || collabType.hasPrefix("collabwaiting")
+            || collabType.hasPrefix("collabclose")
+            || collabType.hasPrefix("collabresume")
+            || collabType.hasPrefix("collabagentinteraction"):
+            guard let subagentAction = decodeSubagentActionItem(from: itemObject) else {
+                return false
+            }
+            upsertSubagentActionMessage(
+                threadId: threadId,
+                turnId: turnId,
+                itemId: itemId,
+                action: subagentAction,
+                isStreaming: !isCompleted
+            )
+            return true
         case "diff":
             guard let resolvedBody = decodeDiffItemBody(itemObject, isCompleted: isCompleted) else {
                 return false

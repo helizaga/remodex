@@ -6,7 +6,12 @@
 
 const http = require("http");
 const { WebSocketServer } = require("ws");
-const { setupRelay, getRelayStats, hasAuthenticatedMacSession } = require("./relay");
+const {
+  setupRelay,
+  getRelayStats,
+  hasAuthenticatedMacSession,
+  resolveTrustedMacSession,
+} = require("./relay");
 const { createPushSessionService } = require("./push-service");
 
 function createRelayServer({
@@ -16,6 +21,7 @@ function createRelayServer({
   pushRateLimiter = createFixedWindowRateLimiter({ windowMs: 60_000, maxRequests: 30 }),
   upgradeRateLimiter = createFixedWindowRateLimiter({ windowMs: 60_000, maxRequests: 60 }),
   pushSessionService,
+  relayOptions = {},
   trustProxy = false,
 } = {}) {
   const pushEnabled = Boolean(enablePushService || pushSessionService);
@@ -43,7 +49,7 @@ function createRelayServer({
     });
   });
   const wss = new WebSocketServer({ noServer: true });
-  setupRelay(wss);
+  setupRelay(wss, relayOptions);
 
   server.on("upgrade", (req, socket, head) => {
     const pathname = safePathname(req.url);
@@ -133,6 +139,10 @@ async function handleHTTPRequest(req, res, {
       return writeRateLimitResponse(res);
     }
     return handleJSONRoute(req, res, async (body) => pushSessionService.notifyCompletion(body));
+  }
+
+  if (req.method === "POST" && pathname === "/v1/trusted/session/resolve") {
+    return handleJSONRoute(req, res, async (body) => resolveTrustedMacSession(body));
   }
 
   return writeJSON(res, 404, {

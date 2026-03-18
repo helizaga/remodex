@@ -1,23 +1,34 @@
 // FILE: relay.js
-// Purpose: Thin self-hostable WebSocket relay for Remodex pairing and encrypted message forwarding.
+// Purpose: Thin self-hostable WebSocket relay for Remodex pairing, trusted-session lookup, and encrypted forwarding.
 // Layer: Standalone server module
-// Exports: setupRelay, getRelayStats, hasActiveMacSession, hasAuthenticatedMacSession
+// Exports: setupRelay, getRelayStats, hasActiveMacSession, hasAuthenticatedMacSession, resolveTrustedMacSession
 
-const { createHash } = require("crypto");
-const path = require("path");
-
-const { WebSocket } = loadWsModule();
+const { createHash, createPublicKey, verify } = require("crypto");
+const { WebSocket } = require("ws");
 
 const CLEANUP_DELAY_MS = 60_000;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const CLOSE_CODE_SESSION_UNAVAILABLE = 4002;
 const CLOSE_CODE_IPHONE_REPLACED = 4003;
+const CLOSE_CODE_MAC_ABSENCE_BUFFER_FULL = 4004;
+const MAC_ABSENCE_GRACE_MS = 15_000;
+const TRUSTED_SESSION_RESOLVE_TAG = "remodex-trusted-session-resolve-v1";
+const TRUSTED_SESSION_RESOLVE_SKEW_MS = 90_000;
 
 // In-memory session registry for one Mac host and one live iPhone client per session.
 const sessions = new Map();
+const liveSessionsByMacDeviceId = new Map();
+const usedResolveNonces = new Map();
 
 // Attaches relay behavior to a ws WebSocketServer instance.
-function setupRelay(wss) {
+function setupRelay(
+  wss,
+  {
+    setTimeoutFn = setTimeout,
+    clearTimeoutFn = clearTimeout,
+    macAbsenceGraceMs = MAC_ABSENCE_GRACE_MS,
+  } = {}
+) {
   const heartbeat = setInterval(() => {
     for (const ws of wss.clients) {
       if (ws._relayAlive === false) {
@@ -27,8 +38,6 @@ function setupRelay(wss) {
       ws._relayAlive = false;
       ws.ping();
     }
-
-    sweepSessions();
   }, HEARTBEAT_INTERVAL_MS);
   heartbeat.unref?.();
 
@@ -59,42 +68,50 @@ function setupRelay(wss) {
     if (!sessions.has(sessionId)) {
       sessions.set(sessionId, {
         mac: null,
+        macRegistration: null,
         clients: new Set(),
         cleanupTimer: null,
+        macAbsenceTimer: null,
         notificationSecret: null,
       });
     }
 
     const session = sessions.get(sessionId);
-    pruneSessionState(session);
+    pruneSessionState(session, sessionId);
 
-    if (role === "iphone" && !isSocketOpen(session.mac)) {
+    if (role === "iphone" && !canAcceptIphoneConnection(session)) {
       ws.close(CLOSE_CODE_SESSION_UNAVAILABLE, "Mac session not available");
       return;
     }
 
     if (session.cleanupTimer) {
-      clearTimeout(session.cleanupTimer);
+      clearTimeoutFn(session.cleanupTimer);
       session.cleanupTimer = null;
     }
 
     if (role === "mac") {
-      retireOtherMacSessions(sessionId);
+      retireOtherMacSessions(sessionId, { setTimeoutFn, clearTimeoutFn });
+      clearMacAbsenceTimer(session, { clearTimeoutFn });
       // The relay keeps a per-session push secret so first-time device registration
       // cannot be claimed by someone who only knows the session id.
       session.notificationSecret = readHeaderString(req.headers["x-notification-secret"]);
-      if (isSocketOpen(session.mac)) {
+      session.macRegistration = readMacRegistrationHeaders(req.headers, sessionId);
+      if (session.mac && session.mac.readyState === WebSocket.OPEN) {
         session.mac.close(4001, "Replaced by new Mac connection");
       }
       session.mac = ws;
+      registerLiveMacSession(session.macRegistration);
       console.log(`[relay] Mac connected -> ${relaySessionLogLabel(sessionId)}`);
     } else {
       // Keep one live iPhone RPC client per session to avoid competing sockets.
-      for (const existingClient of Array.from(session.clients)) {
+      for (const existingClient of session.clients) {
         if (existingClient === ws) {
           continue;
         }
-        if (isSocketLive(existingClient)) {
+        if (
+          existingClient.readyState === WebSocket.OPEN
+          || existingClient.readyState === WebSocket.CONNECTING
+        ) {
           existingClient.close(
             CLOSE_CODE_IPHONE_REPLACED,
             "Replaced by newer iPhone connection"
@@ -111,21 +128,24 @@ function setupRelay(wss) {
     }
 
     ws.on("message", (data) => {
-      pruneSessionState(session);
       const msg = typeof data === "string" ? data : data.toString("utf-8");
-      console.log(
-        `[relay] forwarded ${role} -> ${relaySessionLogLabel(sessionId)} `
-        + `(${Buffer.byteLength(msg, "utf8")} bytes)`
-      );
+      if (role === "mac" && applyMacRegistrationMessage(session, sessionId, msg)) {
+        return;
+      }
 
       if (role === "mac") {
         for (const client of session.clients) {
-          if (isSocketOpen(client)) {
+          if (client.readyState === WebSocket.OPEN) {
             client.send(msg);
           }
         }
-      } else if (isSocketOpen(session.mac)) {
+      } else if (session.mac?.readyState === WebSocket.OPEN) {
         session.mac.send(msg);
+      } else {
+        // The relay cannot prove a buffered request really reached the bridge after
+        // a reconnect, so fail fast with an explicit retry-required close instead
+        // of silently dropping queued client work during a later flush.
+        ws.close(CLOSE_CODE_MAC_ABSENCE_BUFFER_FULL, "Mac temporarily unavailable");
       }
     });
 
@@ -133,12 +153,16 @@ function setupRelay(wss) {
       if (role === "mac") {
         if (session.mac === ws) {
           session.mac = null;
-          session.notificationSecret = null;
+          unregisterLiveMacSession(session.macRegistration, sessionId);
           console.log(`[relay] Mac disconnected -> ${relaySessionLogLabel(sessionId)}`);
-          for (const client of session.clients) {
-            if (isSocketLive(client)) {
-              client.close(CLOSE_CODE_SESSION_UNAVAILABLE, "Mac disconnected");
-            }
+          if (session.clients.size > 0) {
+            scheduleMacAbsenceTimeout(sessionId, {
+              macAbsenceGraceMs,
+              setTimeoutFn,
+              clearTimeoutFn,
+            });
+          } else {
+            scheduleCleanup(sessionId, { setTimeoutFn });
           }
         }
       } else {
@@ -148,8 +172,7 @@ function setupRelay(wss) {
           + `(${session.clients.size} remaining)`
         );
       }
-      pruneSessionState(session);
-      scheduleCleanup(sessionId);
+      scheduleCleanup(sessionId, { setTimeoutFn });
     });
 
     ws.on("error", (err) => {
@@ -161,30 +184,101 @@ function setupRelay(wss) {
   });
 }
 
-function scheduleCleanup(sessionId) {
+function scheduleCleanup(sessionId, { setTimeoutFn = setTimeout } = {}) {
   const session = sessions.get(sessionId);
   if (!session) {
     return;
   }
-  pruneSessionState(session);
-  if (session.mac || session.clients.size > 0 || session.cleanupTimer) {
+  pruneSessionState(session, sessionId);
+  if (session.mac || session.clients.size > 0 || session.cleanupTimer || session.macAbsenceTimer) {
     return;
   }
 
-  session.cleanupTimer = setTimeout(() => {
+  session.cleanupTimer = setTimeoutFn(() => {
     const activeSession = sessions.get(sessionId);
-    if (!activeSession) {
-      return;
-    }
-
-    activeSession.cleanupTimer = null;
-    pruneSessionState(activeSession);
-    if (!activeSession.mac && activeSession.clients.size === 0) {
+    if (
+      activeSession
+      && !activeSession.mac
+      && activeSession.clients.size === 0
+      && !activeSession.macAbsenceTimer
+    ) {
+      unregisterLiveMacSession(activeSession.macRegistration, sessionId);
       sessions.delete(sessionId);
       console.log(`[relay] ${relaySessionLogLabel(sessionId)} cleaned up`);
     }
   }, CLEANUP_DELAY_MS);
   session.cleanupTimer.unref?.();
+}
+
+function scheduleMacAbsenceTimeout(
+  sessionId,
+  {
+    macAbsenceGraceMs,
+    setTimeoutFn = setTimeout,
+    clearTimeoutFn = clearTimeout,
+  } = {}
+) {
+  const session = sessions.get(sessionId);
+  if (!session || session.mac || session.macAbsenceTimer) {
+    return;
+  }
+
+  session.macAbsenceTimer = setTimeoutFn(() => {
+    const activeSession = sessions.get(sessionId);
+    if (!activeSession) {
+      return;
+    }
+
+    activeSession.macAbsenceTimer = null;
+    activeSession.notificationSecret = null;
+    unregisterLiveMacSession(activeSession.macRegistration, sessionId);
+    closeSessionClients(activeSession, CLOSE_CODE_SESSION_UNAVAILABLE, "Mac disconnected");
+    scheduleCleanup(sessionId, { setTimeoutFn });
+  }, macAbsenceGraceMs);
+  session.macAbsenceTimer.unref?.();
+
+  if (session.cleanupTimer) {
+    clearTimeoutFn(session.cleanupTimer);
+    session.cleanupTimer = null;
+  }
+}
+
+function clearMacAbsenceTimer(session, { clearTimeoutFn = clearTimeout } = {}) {
+  if (!session?.macAbsenceTimer) {
+    return;
+  }
+
+  clearTimeoutFn(session.macAbsenceTimer);
+  session.macAbsenceTimer = null;
+}
+
+function canAcceptIphoneConnection(session) {
+  if (!session) {
+    return false;
+  }
+
+  if (session.mac?.readyState === WebSocket.OPEN) {
+    return true;
+  }
+
+  // Lets the phone rejoin the same relay session while the Mac is still inside
+  // the temporary-absence grace window instead of forcing a full disconnect flow.
+  return Boolean(session.macAbsenceTimer);
+}
+
+function closeSessionClients(session, code, reason) {
+  for (const client of session.clients) {
+    if (client.readyState === WebSocket.OPEN || client.readyState === WebSocket.CONNECTING) {
+      client.close(code, reason);
+    }
+  }
+}
+
+function sweepSessions({ setTimeoutFn = setTimeout } = {}) {
+  for (const [sessionId, session] of sessions.entries()) {
+    pruneSessionState(session, sessionId);
+    scheduleCleanup(sessionId, { setTimeoutFn });
+  }
 }
 
 function relaySessionLogLabel(sessionId) {
@@ -200,6 +294,81 @@ function relaySessionLogLabel(sessionId) {
   return `session#${digest}`;
 }
 
+// Resolves the current live relay session for a previously trusted Mac without exposing the session id publicly.
+function resolveTrustedMacSession({
+  macDeviceId,
+  phoneDeviceId,
+  phoneIdentityPublicKey,
+  timestamp,
+  nonce,
+  signature,
+  now = Date.now(),
+} = {}) {
+  const normalizedMacDeviceId = normalizeNonEmptyString(macDeviceId);
+  const normalizedPhoneDeviceId = normalizeNonEmptyString(phoneDeviceId);
+  const normalizedPhoneIdentityPublicKey = normalizeNonEmptyString(phoneIdentityPublicKey);
+  const normalizedNonce = normalizeNonEmptyString(nonce);
+  const normalizedSignature = normalizeNonEmptyString(signature);
+  const normalizedTimestamp = Number(timestamp);
+
+  if (
+    !normalizedMacDeviceId
+    || !normalizedPhoneDeviceId
+    || !normalizedPhoneIdentityPublicKey
+    || !normalizedNonce
+    || !normalizedSignature
+    || !Number.isFinite(normalizedTimestamp)
+  ) {
+    throw createRelayError(400, "invalid_request", "The trusted-session resolve request is missing required fields.");
+  }
+
+  if (Math.abs(now - normalizedTimestamp) > TRUSTED_SESSION_RESOLVE_SKEW_MS) {
+    throw createRelayError(401, "resolve_request_expired", "This trusted-session resolve request has expired.");
+  }
+
+  pruneUsedResolveNonces(now);
+  const nonceKey = `${normalizedMacDeviceId}|${normalizedPhoneDeviceId}|${normalizedNonce}`;
+  if (usedResolveNonces.has(nonceKey)) {
+    throw createRelayError(409, "resolve_request_replayed", "This trusted-session resolve request was already used.");
+  }
+
+  const liveSession = liveSessionsByMacDeviceId.get(normalizedMacDeviceId);
+  if (!liveSession || !hasActiveMacSession(liveSession.sessionId)) {
+    throw createRelayError(404, "session_unavailable", "The trusted Mac is offline right now.");
+  }
+
+  if (
+    liveSession.trustedPhoneDeviceId !== normalizedPhoneDeviceId
+    || liveSession.trustedPhonePublicKey !== normalizedPhoneIdentityPublicKey
+  ) {
+    throw createRelayError(403, "phone_not_trusted", "This iPhone is not trusted for the requested Mac.");
+  }
+
+  const transcriptBytes = buildTrustedSessionResolveBytes({
+    macDeviceId: normalizedMacDeviceId,
+    phoneDeviceId: normalizedPhoneDeviceId,
+    phoneIdentityPublicKey: normalizedPhoneIdentityPublicKey,
+    nonce: normalizedNonce,
+    timestamp: normalizedTimestamp,
+  });
+  if (!verifyTrustedSessionResolveSignature(
+    normalizedPhoneIdentityPublicKey,
+    transcriptBytes,
+    normalizedSignature
+  )) {
+    throw createRelayError(403, "invalid_signature", "The trusted-session resolve signature is invalid.");
+  }
+
+  usedResolveNonces.set(nonceKey, now + TRUSTED_SESSION_RESOLVE_SKEW_MS);
+  return {
+    ok: true,
+    macDeviceId: normalizedMacDeviceId,
+    macIdentityPublicKey: liveSession.macIdentityPublicKey,
+    displayName: liveSession.displayName || null,
+    sessionId: liveSession.sessionId,
+  };
+}
+
 // Exposes lightweight runtime stats for health/status endpoints.
 function getRelayStats() {
   sweepSessions();
@@ -211,13 +380,12 @@ function getRelayStats() {
   for (const session of sessions.values()) {
     const hasMac = Boolean(session.mac);
     const clientCount = session.clients.size;
-
     if (!hasMac && clientCount === 0) {
       continue;
     }
 
     activeSessions += 1;
-    totalClients += session.clients.size;
+    totalClients += clientCount;
     if (hasMac) {
       sessionsWithMac += 1;
     }
@@ -228,54 +396,6 @@ function getRelayStats() {
     sessionsWithMac,
     totalClients,
   };
-}
-
-function sweepSessions() {
-  for (const [sessionId, session] of sessions.entries()) {
-    pruneSessionState(session);
-    scheduleCleanup(sessionId);
-  }
-}
-
-function pruneSessionState(session) {
-  if (session.mac && !isSocketLive(session.mac)) {
-    session.mac = null;
-    session.notificationSecret = null;
-  }
-
-  for (const client of Array.from(session.clients)) {
-    if (!isSocketLive(client)) {
-      session.clients.delete(client);
-    }
-  }
-}
-
-function retireOtherMacSessions(activeSessionId) {
-  for (const [sessionId, session] of sessions.entries()) {
-    if (sessionId === activeSessionId) {
-      continue;
-    }
-
-    pruneSessionState(session);
-    if (!session.mac) {
-      continue;
-    }
-
-    if (isSocketLive(session.mac)) {
-      session.mac.close(4001, "Replaced by newer Mac session");
-    }
-    session.mac = null;
-    session.notificationSecret = null;
-
-    for (const client of Array.from(session.clients)) {
-      if (isSocketLive(client)) {
-        client.close(CLOSE_CODE_SESSION_UNAVAILABLE, "Mac disconnected");
-      }
-      session.clients.delete(client);
-    }
-
-    scheduleCleanup(sessionId);
-  }
 }
 
 // Lets the push-registration side verify that a session still belongs to a live Mac bridge.
@@ -298,13 +418,197 @@ function hasAuthenticatedMacSession(sessionId, notificationSecret) {
   return session?.notificationSecret === readHeaderString(notificationSecret);
 }
 
+function pruneSessionState(session, sessionId = "") {
+  if (!session) {
+    return;
+  }
+
+  if (session.mac && !isSocketLive(session.mac)) {
+    unregisterLiveMacSession(session.macRegistration, sessionId);
+    session.mac = null;
+    session.notificationSecret = null;
+  }
+
+  for (const client of Array.from(session.clients)) {
+    if (!isSocketLive(client)) {
+      session.clients.delete(client);
+    }
+  }
+}
+
+function retireOtherMacSessions(
+  activeSessionId,
+  {
+    setTimeoutFn = setTimeout,
+    clearTimeoutFn = clearTimeout,
+  } = {}
+) {
+  for (const [sessionId, session] of sessions.entries()) {
+    if (sessionId === activeSessionId) {
+      continue;
+    }
+
+    pruneSessionState(session, sessionId);
+    if (!session.mac) {
+      continue;
+    }
+
+    clearMacAbsenceTimer(session, { clearTimeoutFn });
+    if (isSocketLive(session.mac)) {
+      session.mac.close(4001, "Replaced by newer Mac session");
+    }
+    session.mac = null;
+    session.notificationSecret = null;
+    unregisterLiveMacSession(session.macRegistration, sessionId);
+    closeSessionClients(session, CLOSE_CODE_SESSION_UNAVAILABLE, "Mac disconnected");
+    for (const client of Array.from(session.clients)) {
+      if (!isSocketLive(client)) {
+        session.clients.delete(client);
+      }
+    }
+    scheduleCleanup(sessionId, { setTimeoutFn });
+  }
+}
+
+function registerLiveMacSession(macRegistration) {
+  if (!macRegistration?.macDeviceId) {
+    return;
+  }
+  liveSessionsByMacDeviceId.set(macRegistration.macDeviceId, macRegistration);
+}
+
+function applyMacRegistrationMessage(session, sessionId, rawMessage) {
+  const parsed = safeParseJSON(rawMessage);
+  if (parsed?.kind !== "relayMacRegistration" || typeof parsed.registration !== "object") {
+    return false;
+  }
+
+  session.macRegistration = normalizeMacRegistration(parsed.registration, sessionId);
+  registerLiveMacSession(session.macRegistration);
+  return true;
+}
+
+function unregisterLiveMacSession(macRegistration, sessionId) {
+  const macDeviceId = macRegistration?.macDeviceId;
+  if (!macDeviceId) {
+    return;
+  }
+
+  const existing = liveSessionsByMacDeviceId.get(macDeviceId);
+  if (existing?.sessionId === sessionId) {
+    liveSessionsByMacDeviceId.delete(macDeviceId);
+  }
+}
+
+function readMacRegistrationHeaders(headers, sessionId) {
+  return normalizeMacRegistration({
+    macDeviceId: readHeaderString(headers["x-mac-device-id"]),
+    macIdentityPublicKey: readHeaderString(headers["x-mac-identity-public-key"]),
+    displayName: readHeaderString(headers["x-machine-name"]),
+    trustedPhoneDeviceId: readHeaderString(headers["x-trusted-phone-device-id"]),
+    trustedPhonePublicKey: readHeaderString(headers["x-trusted-phone-public-key"]),
+  }, sessionId);
+}
+
+function normalizeMacRegistration(registration, sessionId) {
+  return {
+    sessionId,
+    macDeviceId: normalizeNonEmptyString(registration?.macDeviceId),
+    macIdentityPublicKey: normalizeNonEmptyString(registration?.macIdentityPublicKey),
+    displayName: normalizeNonEmptyString(registration?.displayName),
+    trustedPhoneDeviceId: normalizeNonEmptyString(registration?.trustedPhoneDeviceId),
+    trustedPhonePublicKey: normalizeNonEmptyString(registration?.trustedPhonePublicKey),
+  };
+}
+
+function buildTrustedSessionResolveBytes({
+  macDeviceId,
+  phoneDeviceId,
+  phoneIdentityPublicKey,
+  nonce,
+  timestamp,
+}) {
+  return Buffer.concat([
+    encodeLengthPrefixedUTF8(TRUSTED_SESSION_RESOLVE_TAG),
+    encodeLengthPrefixedUTF8(macDeviceId),
+    encodeLengthPrefixedUTF8(phoneDeviceId),
+    encodeLengthPrefixedData(Buffer.from(phoneIdentityPublicKey, "base64")),
+    encodeLengthPrefixedUTF8(nonce),
+    encodeLengthPrefixedUTF8(String(timestamp)),
+  ]);
+}
+
+function verifyTrustedSessionResolveSignature(publicKeyBase64, transcriptBytes, signatureBase64) {
+  try {
+    return verify(
+      null,
+      transcriptBytes,
+      createPublicKey({
+        key: {
+          crv: "Ed25519",
+          kty: "OKP",
+          x: base64ToBase64Url(publicKeyBase64),
+        },
+        format: "jwk",
+      }),
+      Buffer.from(signatureBase64, "base64")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function pruneUsedResolveNonces(now) {
+  for (const [nonceKey, expiresAt] of usedResolveNonces.entries()) {
+    if (now >= expiresAt) {
+      usedResolveNonces.delete(nonceKey);
+    }
+  }
+}
+
+function encodeLengthPrefixedUTF8(value) {
+  return encodeLengthPrefixedData(Buffer.from(value, "utf8"));
+}
+
+function encodeLengthPrefixedData(value) {
+  const length = Buffer.allocUnsafe(4);
+  length.writeUInt32BE(value.length, 0);
+  return Buffer.concat([length, value]);
+}
+
+function base64ToBase64Url(value) {
+  return String(value || "")
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/g, "");
+}
+
+function normalizeNonEmptyString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function createRelayError(status, code, message) {
+  return Object.assign(new Error(message), {
+    status,
+    code,
+  });
+}
+
 function readHeaderString(value) {
   const candidate = Array.isArray(value) ? value[0] : value;
   return typeof candidate === "string" && candidate.trim() ? candidate.trim() : null;
 }
 
-function isSocketOpen(socket) {
-  return Boolean(socket) && socket.readyState === WebSocket.OPEN;
+function safeParseJSON(value) {
+  if (typeof value !== "string" || !value.trim()) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
 }
 
 function isSocketLive(socket) {
@@ -312,21 +616,18 @@ function isSocketLive(socket) {
     && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING);
 }
 
-function loadWsModule() {
-  try {
-    return require("ws");
-  } catch {
-    return require(path.join(__dirname, "..", "phodex-bridge", "node_modules", "ws"));
-  }
-}
-
 function resetRelayStateForTests() {
   for (const session of sessions.values()) {
     if (session.cleanupTimer) {
       clearTimeout(session.cleanupTimer);
     }
+    if (session.macAbsenceTimer) {
+      clearTimeout(session.macAbsenceTimer);
+    }
   }
   sessions.clear();
+  liveSessionsByMacDeviceId.clear();
+  usedResolveNonces.clear();
 }
 
 module.exports = {
@@ -335,4 +636,5 @@ module.exports = {
   hasActiveMacSession,
   hasAuthenticatedMacSession,
   __resetRelayStateForTests: resetRelayStateForTests,
+  resolveTrustedMacSession,
 };
