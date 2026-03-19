@@ -328,27 +328,26 @@ function bootoutLaunchAgent({
     ["bootout", launchAgentDomain(env), plistPath],
     ["bootout", launchAgentLabelDomain(env)],
   ];
-  let lastUnexpectedError = null;
+  let lastError = null;
 
   for (const [index, args] of attempts.entries()) {
     try {
       execFileSyncImpl("launchctl", args, { stdio: ["ignore", "ignore", "pipe"] });
       return;
     } catch (error) {
+      lastError = error;
       if (isMissingLaunchAgentError(error) || (index === 0 && isStaleLaunchAgentPathError(error))) {
         continue;
       }
-      lastUnexpectedError = error;
-    }
-
-    if (!ignoreMissing) {
-      throw lastUnexpectedError;
+      break;
     }
   }
 
-  if (lastUnexpectedError) {
-    throw lastUnexpectedError;
+  if (ignoreMissing && lastError && isMissingLaunchAgentError(lastError)) {
+    return;
   }
+
+  throw lastError;
 }
 
 function readLaunchAgentState({
