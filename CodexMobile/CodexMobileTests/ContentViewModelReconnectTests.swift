@@ -69,7 +69,7 @@ final class ContentViewModelReconnectTests: XCTestCase {
         let reconnectURL = await viewModel.preferredReconnectURL(codex: service)
 
         XCTAssertNil(reconnectURL)
-        XCTAssertEqual(service.lastErrorMessage, "Your trusted Mac is offline right now.")
+        XCTAssertEqual(service.lastErrorMessage, "Reconnect is unavailable because the Mac is offline.")
     }
 
     private func makeService() -> CodexService {

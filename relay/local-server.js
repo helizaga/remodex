@@ -16,40 +16,74 @@ const {
   getRelayStats,
   resolveTrustedMacSession,
 } = require("./relay");
+const {
+  readBridgeStatus,
+} = require("../phodex-bridge/src/daemon-state");
 
-const args = process.argv.slice(2);
-const port = readFlag(args, "--port", "9000");
-const host = readFlag(args, "--host", "0.0.0.0");
+function createHealthPayload(relayStats = getRelayStats()) {
+  return {
+    ok: true,
+    ...relayStats,
+  };
+}
 
-const server = http.createServer((req, res) => {
-  if (req.url === "/health") {
-    const body = JSON.stringify({
-      ok: true,
-      ...getRelayStats(),
-    });
-    res.writeHead(200, {
-      "content-type": "application/json",
-      "content-length": Buffer.byteLength(body),
-    });
-    res.end(body);
-    return;
-  }
+function createStatusPayload({
+  relayStats = getRelayStats(),
+  bridgeStatus = readBridgeStatus(),
+} = {}) {
+  return {
+    ...createHealthPayload(relayStats),
+    trustedReconnectSupported: true,
+    hasLiveMac: relayStats.sessionsWithMac > 0,
+    bridge: bridgeStatus
+      ? {
+        state: readString(bridgeStatus.state) || "unknown",
+        connectionStatus: readString(bridgeStatus.connectionStatus) || "unknown",
+        updatedAt: readString(bridgeStatus.updatedAt) || null,
+        lastPermanentReconnectReason: sanitizeReconnectReason(bridgeStatus.lastPermanentReconnectReason),
+        latestReconnectDiagnostic: sanitizeReconnectDiagnostic(bridgeStatus.latestReconnectDiagnostic),
+      }
+      : null,
+  };
+}
 
-  if (req.method === "POST" && req.url === "/v1/trusted/session/resolve") {
-    void handleJSONRoute(req, res, async (body) => resolveTrustedMacSession(body));
-    return;
-  }
+function createLocalRelayServer({
+  host = "0.0.0.0",
+  port = "9000",
+} = {}) {
+  const server = http.createServer((req, res) => {
+    if (req.url === "/health") {
+      return writeJSON(res, 200, createHealthPayload());
+    }
 
-  res.writeHead(404, { "content-type": "text/plain" });
-  res.end("Not found");
-});
+    if (req.url === "/status") {
+      return writeJSON(res, 200, createStatusPayload());
+    }
 
-const wss = new WebSocketServer({ server });
-setupRelay(wss);
+    if (req.method === "POST" && req.url === "/v1/trusted/session/resolve") {
+      void handleJSONRoute(req, res, async (body) => resolveTrustedMacSession(body));
+      return;
+    }
 
-server.listen(Number(port), host, () => {
-  console.log(`[remodex-relay] listening on http://${host}:${port}`);
-});
+    res.writeHead(404, { "content-type": "text/plain" });
+    res.end("Not found");
+  });
+
+  const wss = new WebSocketServer({ server });
+  setupRelay(wss);
+
+  return { server, wss, host, port };
+}
+
+function main(argv = process.argv.slice(2)) {
+  const port = readFlag(argv, "--port", "9000");
+  const host = readFlag(argv, "--host", "0.0.0.0");
+  const { server } = createLocalRelayServer({ host, port });
+
+  server.listen(Number(port), host, () => {
+    console.log(`[remodex-relay] listening on http://${host}:${port}`);
+  });
+}
 
 function readFlag(argv, name, fallback) {
   const index = argv.indexOf(name);
@@ -63,6 +97,29 @@ function readFlag(argv, name, fallback) {
   }
 
   return value;
+}
+
+function sanitizeReconnectReason(reason) {
+  if (!reason || typeof reason !== "object") {
+    return null;
+  }
+
+  return {
+    code: readString(reason.code) || "unknown",
+    message: readString(reason.message) || "Unknown reconnect reason.",
+  };
+}
+
+function sanitizeReconnectDiagnostic(diagnostic) {
+  if (!diagnostic || typeof diagnostic !== "object") {
+    return null;
+  }
+
+  return {
+    code: readString(diagnostic.code) || "unknown",
+    message: readString(diagnostic.message) || "Unknown reconnect diagnostic.",
+    isPermanent: diagnostic.isPermanent === true,
+  };
 }
 
 async function handleJSONRoute(req, res, handler) {
@@ -123,3 +180,17 @@ function writeJSON(res, status, body) {
   res.setHeader("content-type", "application/json");
   res.end(JSON.stringify(body));
 }
+
+function readString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  createHealthPayload,
+  createLocalRelayServer,
+  createStatusPayload,
+};

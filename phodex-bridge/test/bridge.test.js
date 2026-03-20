@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const {
   isActiveRelaySocket,
   nextRelayReconnectDelayMs,
+  relayCloseDiagnostic,
   shouldShutdownOnRelayCloseCode,
 } = require("../src/bridge");
 
@@ -29,4 +30,24 @@ test("shouldShutdownOnRelayCloseCode only fails closed for invalid relay session
   assert.equal(shouldShutdownOnRelayCloseCode(4001), false);
   assert.equal(shouldShutdownOnRelayCloseCode(4002), false);
   assert.equal(shouldShutdownOnRelayCloseCode(1006), false);
+});
+
+test("relayCloseDiagnostic classifies saved-session and permanent reconnect failures", () => {
+  assert.deepEqual(relayCloseDiagnostic(4002), {
+    code: "saved_session_unavailable",
+    message: "The saved session expired or is temporarily unavailable. Retrying...",
+    isPermanent: false,
+  });
+
+  assert.deepEqual(relayCloseDiagnostic(4000), {
+    code: "re_pair_required",
+    message: "This relay pairing is no longer valid. Scan a new QR code to reconnect.",
+    isPermanent: true,
+  });
+
+  assert.deepEqual(relayCloseDiagnostic(4010, "relay proxy reset"), {
+    code: "relay_temporarily_unavailable",
+    message: "The relay connection closed unexpectedly: relay proxy reset",
+    isPermanent: false,
+  });
 });

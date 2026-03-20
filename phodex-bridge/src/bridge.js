@@ -91,6 +91,8 @@ function startBridge({
   let reconnectTimer = null;
   let stableConnectionTimer = null;
   let lastConnectionStatus = null;
+  let latestReconnectDiagnostic = null;
+  let lastPermanentReconnectReason = null;
   let codexHandshakeState = config.codexEndpoint ? "warm" : "cold";
   const forwardedInitializeRequestIds = new Set();
   const secureTransport = createBridgeSecureTransport({
@@ -246,6 +248,7 @@ function startBridge({
 
       clearReconnectTimer();
       clearStableConnectionTimer();
+      latestReconnectDiagnostic = null;
       stableConnectionTimer = setTimeout(() => {
         if (isActiveRelaySocket(socket, nextSocket)) {
           reconnectAttempt = 0;
@@ -285,6 +288,7 @@ function startBridge({
       const reason = typeof reasonBuffer?.toString === "function"
         ? reasonBuffer.toString("utf8")
         : "";
+      recordRelayCloseDiagnostic(code, reason);
       if (code !== 1000 || reason) {
         const detail = [`code ${code}`];
         if (reason) {
@@ -537,7 +541,22 @@ function startBridge({
   }
 
   function publishBridgeStatus(status) {
-    onBridgeStatus?.(status);
+    onBridgeStatus?.({
+      ...status,
+      latestReconnectDiagnostic,
+      lastPermanentReconnectReason,
+    });
+  }
+
+  function recordRelayCloseDiagnostic(closeCode, reasonText) {
+    const diagnostic = relayCloseDiagnostic(closeCode, reasonText);
+    latestReconnectDiagnostic = diagnostic;
+    if (diagnostic?.isPermanent) {
+      lastPermanentReconnectReason = {
+        code: diagnostic.code,
+        message: diagnostic.message,
+      };
+    }
   }
 
   // Refreshes the relay's trusted-mac index after the QR bootstrap locks in a phone identity.
@@ -677,6 +696,55 @@ function isActiveRelaySocket(currentSocket, candidateSocket) {
   return currentSocket === candidateSocket;
 }
 
+function relayCloseDiagnostic(closeCode, reasonText = "") {
+  const normalizedReason = normalizeNonEmptyString(reasonText);
+
+  switch (closeCode) {
+    case 4000:
+      return {
+        code: "re_pair_required",
+        message: "This relay pairing is no longer valid. Scan a new QR code to reconnect.",
+        isPermanent: true,
+      };
+    case 4001:
+      return {
+        code: "session_replaced",
+        message: "This relay session was replaced by a newer Mac connection.",
+        isPermanent: true,
+      };
+    case 4002:
+      return {
+        code: "saved_session_unavailable",
+        message: "The saved session expired or is temporarily unavailable. Retrying...",
+        isPermanent: false,
+      };
+    case 4003:
+      return {
+        code: "re_pair_required",
+        message: "This device was replaced by a newer connection. Scan a new QR code to reconnect.",
+        isPermanent: true,
+      };
+    case 4004:
+      return {
+        code: "relay_temporarily_unavailable",
+        message: "The Mac was temporarily unavailable and the bridge will retry.",
+        isPermanent: false,
+      };
+    default:
+      if (closeCode == null || closeCode === 1000) {
+        return null;
+      }
+
+      return {
+        code: "relay_temporarily_unavailable",
+        message: normalizedReason
+          ? `The relay connection closed unexpectedly: ${normalizedReason}`
+          : "The relay or network is temporarily unavailable.",
+        isPermanent: false,
+      };
+  }
+}
+
 function shouldShutdownOnRelayCloseCode(closeCode) {
   return closeCode === 4000;
 }
@@ -693,6 +761,7 @@ function normalizeNonEmptyString(value) {
 module.exports = {
   startBridge,
   isActiveRelaySocket,
+  relayCloseDiagnostic,
   shouldShutdownOnRelayCloseCode,
   nextRelayReconnectDelayMs,
 };

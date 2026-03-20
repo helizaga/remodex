@@ -122,7 +122,7 @@ final class CodexServiceConnectionErrorTests: XCTestCase {
 
         XCTAssertEqual(
             service.userFacingConnectFailureMessage(NWError.posix(.ECONNABORTED)),
-            "Connection was interrupted. Tap Reconnect to try again."
+            "The relay or network is temporarily unavailable. Check your connection and try again."
         )
     }
 
@@ -133,7 +133,39 @@ final class CodexServiceConnectionErrorTests: XCTestCase {
         XCTAssertTrue(service.isRetryableSavedSessionConnectError(error))
         XCTAssertEqual(
             service.userFacingConnectFailureMessage(error),
-            "The saved Mac session is temporarily unavailable. Remodex will keep retrying. If you restarted the bridge on your Mac, scan the new QR code."
+            "The saved session expired; retrying."
+        )
+    }
+
+    func testTrustedReconnectUnsupportedRelayGetsDirectRecoveryCopy() {
+        let service = CodexService()
+
+        XCTAssertEqual(
+            service.reconnectFailurePresentation(for: .unsupportedRelay)?.message,
+            "This relay does not support trusted reconnect; scan a fresh QR."
+        )
+    }
+
+    func testTrustedReconnectOfflineMacGetsDirectRecoveryCopy() {
+        let service = CodexService()
+
+        XCTAssertEqual(
+            service.reconnectFailurePresentation(for: .macOffline("ignored"))?.message,
+            "Reconnect is unavailable because the Mac is offline."
+        )
+    }
+
+    func testIncompatibleSecureTransportVersionMapsToVersionMismatchReason() {
+        let service = CodexService()
+        let message = "Update the Remodex iPhone app before reconnecting."
+
+        XCTAssertEqual(
+            service.reconnectFailurePresentation(for: CodexSecureTransportError.incompatibleVersion(message))?.code,
+            .versionMismatch
+        )
+        XCTAssertEqual(
+            service.reconnectFailurePresentation(for: CodexSecureTransportError.incompatibleVersion(message))?.message,
+            message
         )
     }
 

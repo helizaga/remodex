@@ -179,6 +179,7 @@ function printMacOSBridgeServiceStatus(options = {}) {
   const bridgeState = status.bridgeStatus?.state || "unknown";
   const connectionStatus = status.bridgeStatus?.connectionStatus || "unknown";
   const pairingCreatedAt = status.pairingSession?.createdAt || "none";
+  const lastPermanentReconnectReason = status.bridgeStatus?.lastPermanentReconnectReason?.message || "none";
   console.log(`[remodex] Service label: ${status.label}`);
   console.log(`[remodex] Installed: ${status.installed ? "yes" : "no"}`);
   console.log(`[remodex] Launchd loaded: ${status.launchdLoaded ? "yes" : "no"}`);
@@ -186,6 +187,7 @@ function printMacOSBridgeServiceStatus(options = {}) {
   console.log(`[remodex] Bridge state: ${bridgeState}`);
   console.log(`[remodex] Connection: ${connectionStatus}`);
   console.log(`[remodex] Pairing payload: ${pairingCreatedAt}`);
+  console.log(`[remodex] Last permanent reconnect reason: ${lastPermanentReconnectReason}`);
   console.log(`[remodex] Stdout log: ${status.stdoutLogPath}`);
   console.log(`[remodex] Stderr log: ${status.stderrLogPath}`);
 }
