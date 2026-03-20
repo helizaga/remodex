@@ -100,7 +100,7 @@ This repo contains the local bridge, the iOS app target, and their tests:
 
 ## Install the Bridge
 
-<sub>Install from npm with `@latest` so you get the newest bridge fixes, including the `1.2.5` pairing-state recovery updates.</sub>
+<sub>Install from npm with `@latest` so you get the newest bridge fixes.</sub>
 
 ```sh
 npm install -g remodex@latest
@@ -257,7 +257,7 @@ Prints the installed Remodex CLI version.
 
 ```sh
 remodex --version
-# => 1.3.0
+# => 1.3.2
 ```
 
 ### `remodex reset-pairing`
