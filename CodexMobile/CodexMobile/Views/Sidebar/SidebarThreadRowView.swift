@@ -96,10 +96,7 @@ struct SidebarThreadRowView: View {
 
             expansionToggleButton
 
-            if thread.isManagedWorktreeProject {
-                CodexWorktreeIcon(pointSize: 12, weight: .medium)
-                    .foregroundStyle(.secondary)
-            }
+            threadStatusIconSlot(pointSize: 12)
 
             if let timingLabel {
                 Text(timingLabel)
@@ -135,10 +132,7 @@ struct SidebarThreadRowView: View {
         HStack(spacing: 4) {
             expansionToggleButton
 
-            if thread.isManagedWorktreeProject {
-                CodexWorktreeIcon(pointSize: 11, weight: .medium)
-                    .foregroundStyle(.secondary)
-            }
+            threadStatusIconSlot(pointSize: 11)
 
             if let timingLabel {
                 Text(timingLabel)
@@ -179,6 +173,38 @@ struct SidebarThreadRowView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(isSubagentExpanded ? "Collapse subagents" : "Expand subagents")
+        }
+    }
+
+    // Keeps fork ancestry and worktree scope visually distinct in the single metadata icon slot.
+    private func threadStatusIconSlot(pointSize: CGFloat) -> some View {
+        Group {
+            threadStatusIcon(pointSize: pointSize)
+        }
+        .id(threadStatusIconIdentity)
+        .frame(width: pointSize + 2, alignment: .center)
+    }
+
+    // Gives SwiftUI an explicit diff key when the row flips between fork/worktree/no badge.
+    private var threadStatusIconIdentity: String {
+        if thread.isForkedThread {
+            return "fork"
+        }
+        if thread.isManagedWorktreeProject {
+            return "worktree"
+        }
+        return "none"
+    }
+
+    // Keeps fork ancestry and worktree scope visually distinct in the single metadata icon slot.
+    @ViewBuilder
+    private func threadStatusIcon(pointSize: CGFloat) -> some View {
+        if thread.isForkedThread {
+            CodexForkIcon(pointSize: pointSize)
+                .foregroundStyle(.secondary)
+        } else if thread.isManagedWorktreeProject {
+            CodexWorktreeIcon(pointSize: pointSize, weight: .medium)
+                .foregroundStyle(.secondary)
         }
     }
 
