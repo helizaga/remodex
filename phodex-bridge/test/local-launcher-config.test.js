@@ -15,7 +15,8 @@ function runLauncherFunction(command) {
 }
 
 test("launcher defaults tunnel mode to ngrok", () => {
-  assert.equal(runLauncherFunction('normalize_tunnel_mode ""'), "ngrok");
+  assert.equal(runLauncherFunction('printf "%s" "$TUNNEL_MODE_RAW"'), "ngrok");
+  assert.equal(runLauncherFunction('normalize_tunnel_mode "$TUNNEL_MODE_RAW"'), "ngrok");
   assert.equal(runLauncherFunction('normalize_tunnel_mode "NGROK"'), "ngrok");
 });
 
