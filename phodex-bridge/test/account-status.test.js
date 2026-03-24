@@ -6,6 +6,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { version: bridgePackageVersion } = require("../package.json");
 
 const {
   composeAccountStatus,
@@ -27,6 +28,10 @@ test("composeAccountStatus marks authenticated accounts and carries account meta
       authMethod: "chatgpt",
       authToken: "token-value",
     },
+    bridgeVersionInfo: {
+      bridgeVersion: bridgePackageVersion,
+      bridgeLatestVersion: "9.9.9",
+    },
   });
 
   assert.deepEqual(status, {
@@ -39,6 +44,8 @@ test("composeAccountStatus marks authenticated accounts and carries account meta
     tokenReady: true,
     expiresAt: null,
     requiresOpenaiAuth: false,
+    bridgeVersion: bridgePackageVersion,
+    bridgeLatestVersion: "9.9.9",
   });
 });
 
@@ -55,6 +62,10 @@ test("composeAccountStatus keeps authenticated UI state when account/read still 
       authMethod: "chatgpt",
       authToken: null,
     },
+    bridgeVersionInfo: {
+      bridgeVersion: bridgePackageVersion,
+      bridgeLatestVersion: "9.9.9",
+    },
   });
 
   assert.deepEqual(status, {
@@ -67,6 +78,8 @@ test("composeAccountStatus keeps authenticated UI state when account/read still 
     tokenReady: false,
     expiresAt: null,
     requiresOpenaiAuth: false,
+    bridgeVersion: bridgePackageVersion,
+    bridgeLatestVersion: "9.9.9",
   });
 });
 
@@ -84,6 +97,10 @@ test("composeAccountStatus reports reauth when auth status explicitly requires C
       authToken: null,
       requiresOpenaiAuth: true,
     },
+    bridgeVersionInfo: {
+      bridgeVersion: bridgePackageVersion,
+      bridgeLatestVersion: "9.9.9",
+    },
   });
 
   assert.deepEqual(status, {
@@ -96,6 +113,8 @@ test("composeAccountStatus reports reauth when auth status explicitly requires C
     tokenReady: false,
     expiresAt: null,
     requiresOpenaiAuth: true,
+    bridgeVersion: bridgePackageVersion,
+    bridgeLatestVersion: "9.9.9",
   });
 });
 
@@ -109,6 +128,10 @@ test("redactAuthStatus strips token-bearing fields from the status snapshot", ()
       requiresOpenaiAuth: true,
     },
     loginInFlight: true,
+    bridgeVersionInfo: {
+      bridgeVersion: bridgePackageVersion,
+      bridgeLatestVersion: "9.9.9",
+    },
   });
 
   assert.deepEqual(status, {
@@ -120,6 +143,8 @@ test("redactAuthStatus strips token-bearing fields from the status snapshot", ()
     needsReauth: false,
     tokenReady: false,
     expiresAt: null,
+    bridgeVersion: bridgePackageVersion,
+    bridgeLatestVersion: "9.9.9",
   });
   assert.equal(Object.prototype.hasOwnProperty.call(status, "authToken"), false);
 });
@@ -134,6 +159,10 @@ test("composeAccountStatus keeps a fresh signed-out state distinct from reauth",
       authMethod: null,
       authToken: null,
     },
+    bridgeVersionInfo: {
+      bridgeVersion: bridgePackageVersion,
+      bridgeLatestVersion: "9.9.9",
+    },
   });
 
   assert.deepEqual(status, {
@@ -146,6 +175,8 @@ test("composeAccountStatus keeps a fresh signed-out state distinct from reauth",
     tokenReady: false,
     expiresAt: null,
     requiresOpenaiAuth: true,
+    bridgeVersion: bridgePackageVersion,
+    bridgeLatestVersion: "9.9.9",
   });
 });
 
@@ -181,6 +212,10 @@ test("composeSanitizedAuthStatusFromSettledResults keeps the available auth snap
       },
     },
     loginInFlight: true,
+    bridgeVersionInfo: {
+      bridgeVersion: bridgePackageVersion,
+      bridgeLatestVersion: "9.9.9",
+    },
   });
 
   assert.deepEqual(status, {
@@ -192,6 +227,8 @@ test("composeSanitizedAuthStatusFromSettledResults keeps the available auth snap
     needsReauth: false,
     tokenReady: true,
     expiresAt: null,
+    bridgeVersion: bridgePackageVersion,
+    bridgeLatestVersion: "9.9.9",
   });
 });
 
@@ -211,6 +248,10 @@ test("composeSanitizedAuthStatusFromSettledResults keeps authenticated UI state 
       status: "rejected",
       reason: new Error("getAuthStatus failed"),
     },
+    bridgeVersionInfo: {
+      bridgeVersion: bridgePackageVersion,
+      bridgeLatestVersion: "9.9.9",
+    },
   });
 
   assert.deepEqual(status, {
@@ -222,6 +263,8 @@ test("composeSanitizedAuthStatusFromSettledResults keeps authenticated UI state 
     needsReauth: false,
     tokenReady: false,
     expiresAt: null,
+    bridgeVersion: bridgePackageVersion,
+    bridgeLatestVersion: "9.9.9",
   });
 });
 

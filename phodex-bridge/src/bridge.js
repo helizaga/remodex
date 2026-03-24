@@ -26,11 +26,11 @@ const { createVoiceHandler, resolveVoiceAuth } = require("./voice-handler");
 const {
   composeSanitizedAuthStatusFromSettledResults,
 } = require("./account-status");
+const { createBridgePackageVersionStatusReader } = require("./package-version-status");
 const { createPushNotificationServiceClient } = require("./push-notification-service-client");
 const { createPushNotificationTracker } = require("./push-notification-tracker");
 const {
   loadOrCreateBridgeDeviceState,
-  resetBridgeDeviceState,
   resolveBridgeRelaySession,
 } = require("./secure-device-state");
 const { createBridgeSecureTransport } = require("./secure-transport");
@@ -39,6 +39,10 @@ const { createRolloutLiveMirrorController } = require("./rollout-live-mirror");
 const RELAY_STABLE_CONNECTION_MS = 15_000;
 const MAX_RELAY_RECONNECT_DELAY_MS = 30_000;
 const execFileAsync = promisify(execFile);
+const RELAY_WATCHDOG_PING_INTERVAL_MS = 10_000;
+const RELAY_WATCHDOG_STALE_AFTER_MS = 25_000;
+const BRIDGE_STATUS_HEARTBEAT_INTERVAL_MS = 5_000;
+const STALE_RELAY_STATUS_MESSAGE = "Relay heartbeat stalled; reconnect pending.";
 
 function startBridge({
   config: explicitConfig = null,
@@ -90,6 +94,7 @@ function startBridge({
     pushServiceClient,
     previewMaxChars: config.pushPreviewMaxChars,
   });
+  const readBridgePackageVersionStatus = createBridgePackageVersionStatusReader();
 
   // Keep the local Codex runtime alive across transient relay disconnects.
   let socket = null;
@@ -97,6 +102,10 @@ function startBridge({
   let reconnectAttempt = 0;
   let reconnectTimer = null;
   let stableConnectionTimer = null;
+  let relayWatchdogTimer = null;
+  let statusHeartbeatTimer = null;
+  let lastRelayActivityAt = 0;
+  let lastPublishedBridgeStatus = null;
   let lastConnectionStatus = null;
   let latestReconnectDiagnostic = null;
   let lastPermanentReconnectReason = null;
@@ -155,6 +164,7 @@ function startBridge({
     sendCodexRequest,
     logPrefix: "[remodex]",
   });
+  startBridgeStatusHeartbeat();
   publishBridgeStatus({
     state: "starting",
     connectionStatus: "starting",
@@ -198,6 +208,75 @@ function startBridge({
     stableConnectionTimer = null;
   }
 
+  // Periodically rewrites the latest bridge snapshot so CLI status does not stay frozen.
+  function startBridgeStatusHeartbeat() {
+    if (statusHeartbeatTimer) {
+      return;
+    }
+
+    statusHeartbeatTimer = setInterval(() => {
+      if (!lastPublishedBridgeStatus || isShuttingDown) {
+        return;
+      }
+
+      onBridgeStatus?.(buildHeartbeatBridgeStatus(lastPublishedBridgeStatus, lastRelayActivityAt));
+    }, BRIDGE_STATUS_HEARTBEAT_INTERVAL_MS);
+    statusHeartbeatTimer.unref?.();
+  }
+
+  function clearBridgeStatusHeartbeat() {
+    if (!statusHeartbeatTimer) {
+      return;
+    }
+
+    clearInterval(statusHeartbeatTimer);
+    statusHeartbeatTimer = null;
+  }
+
+  // Tracks relay liveness locally so sleep/wake zombie sockets can be force-reconnected.
+  function markRelayActivity() {
+    lastRelayActivityAt = Date.now();
+  }
+
+  function clearRelayWatchdog() {
+    if (!relayWatchdogTimer) {
+      return;
+    }
+
+    clearInterval(relayWatchdogTimer);
+    relayWatchdogTimer = null;
+  }
+
+  function startRelayWatchdog(trackedSocket) {
+    clearRelayWatchdog();
+    markRelayActivity();
+
+    relayWatchdogTimer = setInterval(() => {
+      if (isShuttingDown || socket !== trackedSocket) {
+        clearRelayWatchdog();
+        return;
+      }
+
+      if (trackedSocket.readyState !== WebSocket.OPEN) {
+        return;
+      }
+
+      if (hasRelayConnectionGoneStale(lastRelayActivityAt)) {
+        console.warn("[remodex] relay heartbeat stalled; forcing reconnect");
+        logConnectionStatus("disconnected");
+        trackedSocket.terminate();
+        return;
+      }
+
+      try {
+        trackedSocket.ping();
+      } catch {
+        trackedSocket.terminate();
+      }
+    }, RELAY_WATCHDOG_PING_INTERVAL_MS);
+    relayWatchdogTimer.unref?.();
+  }
+
   // Keeps npm start output compact by emitting only high-signal connection states.
   function logConnectionStatus(status) {
     if (lastConnectionStatus === status) {
@@ -226,6 +305,8 @@ function startBridge({
         isShuttingDown = true;
         clearReconnectTimer();
         clearStableConnectionTimer();
+        clearRelayWatchdog();
+        clearBridgeStatusHeartbeat();
       });
       return;
     }
@@ -271,8 +352,10 @@ function startBridge({
         return;
       }
 
+      markRelayActivity();
       clearReconnectTimer();
       clearStableConnectionTimer();
+      startRelayWatchdog(nextSocket);
       latestReconnectDiagnostic = null;
       stableConnectionTimer = setTimeout(() => {
         if (isActiveRelaySocket(socket, nextSocket)) {
@@ -289,6 +372,7 @@ function startBridge({
         return;
       }
 
+      markRelayActivity();
       const message = typeof data === "string" ? data : data.toString("utf8");
       if (secureTransport.handleIncomingWireMessage(message, {
         sendControlMessage(controlMessage) {
@@ -304,12 +388,27 @@ function startBridge({
       }
     });
 
+    nextSocket.on("ping", () => {
+      if (!isActiveRelaySocket(socket, nextSocket)) {
+        return;
+      }
+      markRelayActivity();
+    });
+
+    nextSocket.on("pong", () => {
+      if (!isActiveRelaySocket(socket, nextSocket)) {
+        return;
+      }
+      markRelayActivity();
+    });
+
     nextSocket.on("close", (code, reasonBuffer) => {
       if (!isActiveRelaySocket(socket, nextSocket)) {
         return;
       }
 
       clearStableConnectionTimer();
+      clearRelayWatchdog();
       const reason = typeof reasonBuffer?.toString === "function"
         ? reasonBuffer.toString("utf8")
         : "";
@@ -334,6 +433,7 @@ function startBridge({
         return;
       }
 
+      clearRelayWatchdog();
       logConnectionStatus("disconnected");
     });
   }
@@ -359,6 +459,9 @@ function startBridge({
   });
 
   codex.onClose(() => {
+    clearStableConnectionTimer();
+    clearRelayWatchdog();
+    clearBridgeStatusHeartbeat();
     logConnectionStatus("disconnected");
     publishBridgeStatus({
       state: "stopped",
@@ -368,7 +471,6 @@ function startBridge({
     });
     isShuttingDown = true;
     clearReconnectTimer();
-    clearStableConnectionTimer();
     stopContextUsageWatcher();
     rolloutLiveMirror?.stopAll();
     desktopRefresher.handleTransportReset();
@@ -383,11 +485,15 @@ function startBridge({
     isShuttingDown = true;
     clearReconnectTimer();
     clearStableConnectionTimer();
+    clearRelayWatchdog();
+    clearBridgeStatusHeartbeat();
   }));
   process.on("SIGTERM", () => shutdown(codex, () => socket, () => {
     isShuttingDown = true;
     clearReconnectTimer();
     clearStableConnectionTimer();
+    clearRelayWatchdog();
+    clearBridgeStatusHeartbeat();
   }));
 
   // Routes decrypted app payloads through the same bridge handlers as before.
@@ -486,7 +592,7 @@ function startBridge({
   // Combines account/read + getAuthStatus into one safe snapshot for the phone UI.
   // The two RPCs are settled independently so one transient failure does not hide the other.
   async function readSanitizedAuthStatus() {
-    const [accountReadResult, authStatusResult] = await Promise.allSettled([
+    const [accountReadResult, authStatusResult, bridgeVersionInfoResult] = await Promise.allSettled([
       sendCodexRequest("account/read", {
         refreshToken: false,
       }),
@@ -494,6 +600,7 @@ function startBridge({
         includeToken: true,
         refreshToken: true,
       }),
+      readBridgePackageVersionStatus(),
     ]);
 
     return composeSanitizedAuthStatusFromSettledResults({
@@ -505,6 +612,9 @@ function startBridge({
         : accountReadResult,
       authStatusResult,
       loginInFlight: Boolean(pendingAuthLogin.loginId),
+      bridgeVersionInfo: bridgeVersionInfoResult.status === "fulfilled"
+        ? bridgeVersionInfoResult.value
+        : null,
     });
   }
 
@@ -861,11 +971,13 @@ function startBridge({
   }
 
   function publishBridgeStatus(status) {
-    onBridgeStatus?.({
+    const enrichedStatus = {
       ...status,
       latestReconnectDiagnostic,
       lastPermanentReconnectReason,
-    });
+    };
+    lastPublishedBridgeStatus = enrichedStatus;
+    onBridgeStatus?.(enrichedStatus);
   }
 
   function recordRelayCloseDiagnostic(closeCode, reasonText) {
@@ -1016,6 +1128,10 @@ function isActiveRelaySocket(currentSocket, candidateSocket) {
   return currentSocket === candidateSocket;
 }
 
+function normalizeNonEmptyString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
 function relayCloseDiagnostic(closeCode, reasonText = "") {
   const normalizedReason = normalizeNonEmptyString(reasonText);
 
@@ -1074,14 +1190,54 @@ function nextRelayReconnectDelayMs(reconnectAttempt) {
   return Math.min(1_000 * (2 ** (normalizedAttempt - 1)), MAX_RELAY_RECONNECT_DELAY_MS);
 }
 
-function normalizeNonEmptyString(value) {
-  return typeof value === "string" && value.trim() ? value.trim() : "";
+// Treats silent relay sockets as stale so the daemon can self-heal after sleep/wake.
+function hasRelayConnectionGoneStale(
+  lastActivityAt,
+  {
+    now = Date.now(),
+    staleAfterMs = RELAY_WATCHDOG_STALE_AFTER_MS,
+  } = {}
+) {
+  return Number.isFinite(lastActivityAt)
+    && Number.isFinite(now)
+    && now - lastActivityAt >= staleAfterMs;
+}
+
+// Keeps persisted daemon status honest by downgrading stale "connected" snapshots.
+function buildHeartbeatBridgeStatus(
+  status,
+  lastActivityAt,
+  {
+    now = Date.now(),
+    staleAfterMs = RELAY_WATCHDOG_STALE_AFTER_MS,
+    staleMessage = STALE_RELAY_STATUS_MESSAGE,
+  } = {}
+) {
+  if (!status || typeof status !== "object") {
+    return status;
+  }
+
+  if (status.connectionStatus !== "connected") {
+    return status;
+  }
+
+  if (!hasRelayConnectionGoneStale(lastActivityAt, { now, staleAfterMs })) {
+    return status;
+  }
+
+  return {
+    ...status,
+    connectionStatus: "disconnected",
+    lastError: staleMessage,
+  };
 }
 
 module.exports = {
-  startBridge,
+  buildHeartbeatBridgeStatus,
+  hasRelayConnectionGoneStale,
   isActiveRelaySocket,
+  nextRelayReconnectDelayMs,
   relayCloseDiagnostic,
   shouldShutdownOnRelayCloseCode,
-  nextRelayReconnectDelayMs,
+  startBridge,
 };

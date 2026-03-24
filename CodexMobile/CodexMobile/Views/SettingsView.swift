@@ -23,6 +23,7 @@ struct SettingsView: View {
                 SettingsAppearanceCard(appFontStyle: appFontStyleBinding)
                 SettingsNotificationsCard()
                 SettingsGPTAccountCard()
+                SettingsBridgeVersionCard()
                 runtimeDefaultsSection
                 SettingsAboutCard()
                 SettingsUsageCard()
@@ -697,6 +698,135 @@ private struct SettingsGPTAccountCard: View {
     }
 }
 
+private struct SettingsBridgeVersionCard: View {
+    @Environment(CodexService.self) private var codex
+
+    var body: some View {
+        SettingsCard(title: "Bridge Version") {
+            HStack(spacing: 10) {
+                Text("Status")
+                Spacer()
+                SettingsStatusPill(label: versionStatusLabel)
+            }
+
+            settingsVersionRow(
+                title: "Installed on Mac",
+                value: installedVersionLabel,
+                valueStyle: installedValueStyle
+            )
+
+            settingsVersionRow(
+                title: "Latest available",
+                value: latestVersionLabel,
+                valueStyle: .primary
+            )
+
+            if let guidance = guidanceText {
+                Text(guidance)
+                    .font(AppFont.caption())
+                    .foregroundStyle(guidanceColor)
+            }
+        }
+    }
+
+    private var installedVersionLabel: String {
+        normalizedVersion(codex.bridgeInstalledVersion) ?? "Unknown"
+    }
+
+    private var latestVersionLabel: String {
+        normalizedVersion(codex.latestBridgePackageVersion) ?? "Unknown"
+    }
+
+    private var guidanceText: String? {
+        guard let installedVersion else {
+            return "Connect to a Mac bridge to read the installed package version."
+        }
+
+        guard let latestVersion else {
+            return "Installed version detected. The latest published package is unavailable right now."
+        }
+
+        if installedVersion == latestVersion {
+            return "The installed bridge matches the latest published package."
+        }
+
+        if installedVersion.compare(latestVersion, options: .numeric) == .orderedAscending {
+            return "A newer Remodex package is available on npm."
+        }
+
+        return "This Mac is running a different build than the current npm latest."
+    }
+
+    private var versionStatusLabel: String {
+        guard let installedVersion else {
+            return "Unknown"
+        }
+
+        guard let latestVersion else {
+            return "Installed"
+        }
+
+        if installedVersion == latestVersion {
+            return "Up to date"
+        }
+
+        if installedVersion.compare(latestVersion, options: .numeric) == .orderedAscending {
+            return "Update available"
+        }
+
+        return "Different build"
+    }
+
+    private var guidanceColor: Color {
+        guard let installedVersion,
+              let latestVersion,
+              installedVersion.compare(latestVersion, options: .numeric) == .orderedAscending else {
+            return .secondary
+        }
+
+        return .orange
+    }
+
+    private var installedValueStyle: Color {
+        guard let installedVersion,
+              let latestVersion,
+              installedVersion.compare(latestVersion, options: .numeric) == .orderedAscending else {
+            return .primary
+        }
+
+        return .orange
+    }
+
+    private var installedVersion: String? {
+        normalizedVersion(codex.bridgeInstalledVersion)
+    }
+
+    private var latestVersion: String? {
+        normalizedVersion(codex.latestBridgePackageVersion)
+    }
+
+    private func normalizedVersion(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+
+        return trimmed
+    }
+
+    private func settingsVersionRow(title: String, value: String, valueStyle: Color) -> some View {
+        HStack(spacing: 12) {
+            Text(title)
+            Spacer()
+            Text(value)
+                .font(AppFont.mono(.subheadline))
+                .foregroundStyle(valueStyle)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+        }
+    }
+}
+
 private struct SettingsArchivedChatsCard: View {
     @Environment(CodexService.self) private var codex
 
@@ -729,12 +859,73 @@ private struct SettingsArchivedChatsCard: View {
 }
 
 private struct SettingsAboutCard: View {
+    @State private var isShowingAbout = false
+
     var body: some View {
         SettingsCard(title: "About") {
             Text("Chats are End-to-end encrypted between your iPhone and Mac. The relay only sees ciphertext and connection metadata after the secure handshake completes.")
                 .font(AppFont.caption())
                 .foregroundStyle(.secondary)
+
+            Button {
+                HapticFeedback.shared.triggerImpactFeedback(style: .light)
+                isShowingAbout = true
+            } label: {
+                settingsAccessoryRow(
+                    title: "How Remodex Works",
+                    leading: {
+                        Image(systemName: "info.circle")
+                            .font(AppFont.subheadline(weight: .medium))
+                    }
+                )
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                HapticFeedback.shared.triggerImpactFeedback(style: .light)
+                if let url = URL(string: "https://x.com/emanueledpt") {
+                    UIApplication.shared.open(url)
+                }
+            } label: {
+                settingsAccessoryRow(
+                    title: "Chat & Support",
+                    leading: {
+                        Image("x-icon")
+                            .renderingMode(.template)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 14, height: 14)
+                    }
+                )
+            }
+            .buttonStyle(.plain)
         }
+        .fullScreenCover(isPresented: $isShowingAbout) {
+            AboutRemodexView()
+        }
+    }
+
+    // Keeps settings rows visually consistent while allowing SF Symbols or asset icons.
+    private func settingsAccessoryRow<Leading: View>(
+        title: String,
+        @ViewBuilder leading: () -> Leading
+    ) -> some View {
+        HStack(spacing: 8) {
+            leading()
+            Text(title)
+                .font(AppFont.subheadline(weight: .medium))
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(AppFont.caption(weight: .semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .foregroundStyle(.primary)
+        .padding(.vertical, 10)
+        .padding(.horizontal, 14)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.primary.opacity(0.06))
+        )
     }
 }
 

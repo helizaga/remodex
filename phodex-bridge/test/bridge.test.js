@@ -2,6 +2,8 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
+  buildHeartbeatBridgeStatus,
+  hasRelayConnectionGoneStale,
   isActiveRelaySocket,
   nextRelayReconnectDelayMs,
   relayCloseDiagnostic,
@@ -50,4 +52,74 @@ test("relayCloseDiagnostic classifies saved-session and permanent reconnect fail
     message: "The relay connection closed unexpectedly: relay proxy reset",
     isPermanent: false,
   });
+});
+
+test("hasRelayConnectionGoneStale returns true once the relay silence crosses the timeout", () => {
+  assert.equal(
+    hasRelayConnectionGoneStale(1_000, {
+      now: 71_000,
+      staleAfterMs: 70_000,
+    }),
+    true
+  );
+});
+
+test("hasRelayConnectionGoneStale returns false for fresh or missing activity timestamps", () => {
+  assert.equal(
+    hasRelayConnectionGoneStale(1_000, {
+      now: 70_999,
+      staleAfterMs: 70_000,
+    }),
+    false
+  );
+  assert.equal(hasRelayConnectionGoneStale(Number.NaN), false);
+});
+
+test("buildHeartbeatBridgeStatus downgrades stale connected snapshots", () => {
+  assert.deepEqual(
+    buildHeartbeatBridgeStatus(
+      {
+        state: "running",
+        connectionStatus: "connected",
+        pid: 123,
+        lastError: "",
+      },
+      1_000,
+      {
+        now: 26_500,
+        staleAfterMs: 25_000,
+        staleMessage: "Relay heartbeat stalled; reconnect pending.",
+      }
+    ),
+    {
+      state: "running",
+      connectionStatus: "disconnected",
+      pid: 123,
+      lastError: "Relay heartbeat stalled; reconnect pending.",
+    }
+  );
+});
+
+test("buildHeartbeatBridgeStatus leaves fresh or already-disconnected snapshots unchanged", () => {
+  const freshStatus = {
+    state: "running",
+    connectionStatus: "connected",
+    pid: 123,
+    lastError: "",
+  };
+  assert.deepEqual(
+    buildHeartbeatBridgeStatus(freshStatus, 1_000, {
+      now: 20_000,
+      staleAfterMs: 25_000,
+    }),
+    freshStatus
+  );
+
+  const disconnectedStatus = {
+    state: "running",
+    connectionStatus: "disconnected",
+    pid: 123,
+    lastError: "",
+  };
+  assert.deepEqual(buildHeartbeatBridgeStatus(disconnectedStatus, 1_000), disconnectedStatus);
 });

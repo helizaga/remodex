@@ -67,6 +67,7 @@ struct TurnView: View {
                 errorMessage: codex.lastErrorMessage,
                 shouldAnchorToAssistantResponse: shouldAnchorToAssistantResponseBinding,
                 isScrolledToBottom: isScrolledToBottomBinding,
+                isComposerFocused: isInputFocused,
                 emptyState: AnyView(emptyState),
                 composer: AnyView(composerWithSubagentAccessory(
                     currentThread: resolvedThread,
@@ -259,6 +260,12 @@ struct TurnView: View {
         .onDisappear {
             cancelVoiceRecordingIfNeeded()
             invalidatePendingVoicePreflight()
+            viewModel.cancelTransientTasks()
+            viewModel.clearComposerAutocomplete()
+        }
+        .onChange(of: isInputFocused) { _, isFocused in
+            guard !isFocused else { return }
+            viewModel.clearComposerAutocomplete()
         }
         .onChange(of: renderSnapshot.repoRefreshSignal) { _, newValue in
             guard showsGitControls, newValue != nil else { return }
@@ -655,9 +662,12 @@ struct TurnView: View {
     }
 
     private func prepareThreadIfReady(gitWorkingDirectory: String?) async {
-        await codex.prepareThreadForDisplay(threadId: thread.id)
+        let didPrepare = await codex.prepareThreadForDisplay(threadId: thread.id)
+        guard didPrepare, !Task.isCancelled, codex.activeThreadId == thread.id else { return }
         await codex.refreshContextWindowUsage(threadId: thread.id)
+        guard !Task.isCancelled, codex.activeThreadId == thread.id else { return }
         viewModel.flushQueueIfPossible(codex: codex, threadID: thread.id)
+        guard !Task.isCancelled, codex.activeThreadId == thread.id else { return }
         guard gitWorkingDirectory != nil else { return }
         viewModel.refreshGitBranchTargets(
             codex: codex,
@@ -1132,7 +1142,8 @@ struct TurnView: View {
                 durationSeconds: clip.durationSeconds
             )
             viewModel.appendVoiceTranscript(transcript)
-            isInputFocused = true
+            // Keep voice flows keyboard-free; users can tap into the draft afterward if they want to edit.
+            isInputFocused = false
         } catch {
             isVoiceRecording = false
             voiceTranscriptionManager.resetMeteringState()
@@ -1153,6 +1164,9 @@ struct TurnView: View {
         }
 
         codex.lastErrorMessage = nil
+        // Dismiss any active text focus before recording so the keyboard does not
+        // compete with the waveform UI or waste vertical space during capture.
+        isInputFocused = false
         let preflightGeneration = voicePreflightGeneration + 1
         voicePreflightGeneration = preflightGeneration
         isVoicePreflighting = true
@@ -1172,7 +1186,7 @@ struct TurnView: View {
                 return
             }
             isVoiceRecording = true
-            isInputFocused = true
+            isInputFocused = false
         } catch {
             codex.lastErrorMessage = error.localizedDescription
         }

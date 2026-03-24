@@ -167,6 +167,7 @@ extension CodexService {
         hasPresentedServiceTierBridgeUpdatePrompt = false
         supportsThreadFork = true
         hasPresentedThreadForkBridgeUpdatePrompt = false
+        hasPresentedMinimumBridgePackageUpdatePrompt = false
         clearAllRunningState()
         readyThreadIDs.removeAll()
         failedThreadIDs.removeAll()
@@ -180,10 +181,13 @@ extension CodexService {
         supportsStructuredSkillInput = true
         supportsTurnCollaborationMode = false
         hasResolvedRateLimitsSnapshot = false
+        bridgeInstalledVersion = nil
+        latestBridgePackageVersion = nil
         clearConnectionSyncState()
         clearHydrationCaches()
         resumedThreadIDs.removeAll()
         resetSecureTransportState()
+        cancelTrustedSessionResolve()
 
         failAllPendingRequests(with: CodexServiceError.disconnected)
     }
@@ -404,6 +408,7 @@ extension CodexService {
         hasPresentedServiceTierBridgeUpdatePrompt = false
         supportsThreadFork = true
         hasPresentedThreadForkBridgeUpdatePrompt = false
+        hasPresentedMinimumBridgePackageUpdatePrompt = false
         clearAllRunningState()
         readyThreadIDs.removeAll()
         failedThreadIDs.removeAll()
@@ -415,6 +420,8 @@ extension CodexService {
         connectionRecoveryState = .idle
         supportsStructuredSkillInput = true
         supportsTurnCollaborationMode = false
+        bridgeInstalledVersion = nil
+        latestBridgePackageVersion = nil
         resumedThreadIDs.removeAll()
         clearHydrationCaches()
         resetSecureTransportState()
