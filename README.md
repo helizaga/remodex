@@ -142,8 +142,8 @@ If you are running this fork from source, prefer the repo-local launcher instead
 ## Run Locally
 
 ```sh
-git clone https://github.com/helizaga/remodex.git
-cd remodex
+git clone <your-fork-url>
+cd <your-fork-directory>
 ./run-local-remodex.sh up
 ```
 
@@ -164,6 +164,38 @@ To stop the local launcher stack:
 
 ```sh
 ./run-local-remodex.sh stop
+```
+
+## Agent Setup Prompt
+
+If you want another coding agent to set up this fork for you, give it this prompt:
+
+```text
+You are setting up this local-first Remodex fork from source on my machine.
+
+Goals:
+- Get the source checkout running in the safest local-first mode.
+- Verify prerequisites before making claims.
+- Do not assume any hosted relay, production endpoint, or baked-in remote default.
+- Prefer ./run-local-remodex.sh up for source checkouts unless I explicitly provide REMODEX_RELAY.
+- Do not run Xcode builds/tests unless I explicitly ask.
+- Do not create scratch markdown files or one-off report files in the repo.
+
+Checklist:
+1. Inspect README.md, AGENTS.md, and phodex-bridge/package.json before acting.
+2. Verify Node.js >= 18 and that the codex CLI is on PATH.
+3. Install any missing npm dependencies needed for source execution.
+4. If I did not provide a relay override, start the repo-local stack with ./run-local-remodex.sh up.
+5. On macOS, prefer the built-in local bridge/daemon workflow. On other OSes, use the supported foreground bridge path.
+6. Confirm whether the bridge is running, which relay URL/path it is using, and whether it is waiting for QR pairing.
+7. Tell me exactly what I still need to do on-device, including that the pairing QR should be scanned from inside the Remodex app, not with a generic camera app.
+8. If setup fails, stop at the narrowest real blocker and explain the next fix with exact commands.
+
+Output format:
+- What you verified
+- What you changed
+- What command is now running
+- What I need to do next
 ```
 
 ## Custom Relay Endpoint
