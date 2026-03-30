@@ -759,7 +759,9 @@ extension CodexService {
             return false
         }
 
-        return isBenignBackgroundDisconnect(error) || isRecoverableTransientConnectionError(error)
+        return shouldTreatSendFailureAsDisconnect(error)
+            || isBenignBackgroundDisconnect(error)
+            || isRecoverableTransientConnectionError(error)
     }
 
     // Suppresses only background disconnect noise; foreground timeouts should still tell the user why sync stopped.
@@ -803,6 +805,9 @@ extension CodexService {
     func userFacingConnectFailureMessage(_ error: Error) -> String {
         if let reconnectFailure = reconnectFailurePresentation(for: error) {
             return reconnectFailure.message
+        }
+        if shouldTreatSendFailureAsDisconnect(error) || isBenignBackgroundDisconnect(error) {
+            return "Connection was interrupted. Tap Reconnect to try again."
         }
         return error.localizedDescription
     }

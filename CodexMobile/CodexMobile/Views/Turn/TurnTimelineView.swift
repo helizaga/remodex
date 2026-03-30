@@ -31,10 +31,12 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
     let assistantRevertStatesByMessageID: [String: AssistantRevertPresentation]
     let isRetryAvailable: Bool
     let errorMessage: String?
+    let hidesErrorMessage: Bool
 
     @Binding var shouldAnchorToAssistantResponse: Bool
     @Binding var isScrolledToBottom: Bool
     let isComposerFocused: Bool
+    let isComposerAutocompletePresented: Bool
 
     let onRetryUserMessage: (String) -> Void
     let onTapAssistantRevert: (CodexMessage) -> Void
@@ -82,6 +84,7 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
                 .onTapGesture {
                     onTapOutsideComposer()
                 }
+                .simultaneousGesture(emptyStateKeyboardDismissGesture)
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     footer()
                 }
@@ -149,8 +152,11 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
                             scheduleFollowBottomScroll(using: proxy)
                         }
                     }
-                    if new.contentHeight > old.contentHeight,
-                       shouldPinTimelineToBottomDuringGeometryChange {
+                    if TurnScrollStateTracker.shouldCorrectBottomAfterContentHeightChange(
+                        previousHeight: old.contentHeight,
+                        newHeight: new.contentHeight,
+                        isPinnedToBottom: shouldPinTimelineToBottomDuringGeometryChange
+                    ) {
                         scheduleFollowBottomScroll(using: proxy)
                     }
                     if new.isAtBottom != old.isAtBottom {
@@ -335,7 +341,7 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
     // Keeps the composer/footer visually stable so scrolling does not animate the bottom inset.
     private func footer(scrollToBottomAction: (() -> Void)? = nil) -> some View {
         let footerContent = VStack(spacing: 0) {
-            if let errorMessage, !errorMessage.isEmpty {
+            if !hidesErrorMessage, let errorMessage, !errorMessage.isEmpty {
                 Text(errorMessage)
                     .font(AppFont.caption())
                     .foregroundStyle(.red)
@@ -347,7 +353,8 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
         }
 
         return footerContent
-            .simultaneousGesture(composerKeyboardDismissGesture)
+            // Let the composer own vertical drags so internal text scrolling
+            // does not compete with keyboard-dismiss gestures on the footer.
             .overlay(alignment: .top) {
                 if shouldShowScrollToLatestButton, let scrollToBottomAction {
                     Button {
@@ -372,10 +379,10 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
             .animation(.easeInOut(duration: 0.2), value: shouldShowScrollToLatestButton)
     }
 
-    // Keeps the WhatsApp-style upward swipe dismissal available across the whole footer,
-    // including accessory rows and bars that sit outside the text view itself.
-    private var composerKeyboardDismissGesture: some Gesture {
-        DragGesture(minimumDistance: 0)
+    // Restores swipe-to-dismiss in brand-new chats without putting a drag
+    // recognizer back on top of the composer footer itself.
+    private var emptyStateKeyboardDismissGesture: some Gesture {
+        DragGesture(minimumDistance: 12)
             .onChanged { value in
                 guard isComposerFocused else { return }
                 guard abs(value.translation.height) > abs(value.translation.width) else { return }

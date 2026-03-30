@@ -688,11 +688,18 @@ struct MessageRow: View, Equatable {
         }
     }
 
-    // Renders inline @file and $skill mentions as highlighted tokens inside user bubbles.
+    // Renders inline @file and $skill mentions inside one AttributedString so large
+    // messages do not build an arbitrarily deep SwiftUI Text concatenation chain.
     private func userBubbleText(_ rawText: String) -> Text {
         let normalizedRawText = SkillReferenceFormatter.replacingSkillReferences(
             in: rawText,
             style: .mentionToken
+        )
+        let confirmedFileMentions = Set(
+            message.fileMentions
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .map(TurnMessageRegexCache.removingTrailingLineColumnSuffix)
+                .filter { !$0.isEmpty }
         )
 
         guard normalizedRawText.contains("@") || normalizedRawText.contains("$") else {
@@ -710,55 +717,14 @@ struct MessageRow: View, Equatable {
             return Text(normalizedRawText)
         }
 
-        var segments: [Text] = []
-        var cursor = 0
-
-        for match in matches {
-            let matchRange = match.range
-            let triggerRange = match.range(at: 1)
-            let tokenRange = match.range(at: 2)
-            guard triggerRange.location != NSNotFound,
-                  tokenRange.location != NSNotFound else {
-                continue
-            }
-
-            if matchRange.location > cursor {
-                let plain = nsText.substring(with: NSRange(location: cursor, length: matchRange.location - cursor))
-                if !plain.isEmpty {
-                    segments.append(Text(plain))
-                }
-            }
-
-            let trigger = nsText.substring(with: triggerRange)
-            let rawToken = nsText.substring(with: tokenRange)
-            let (normalizedToken, trailingPunctuation) = normalizedMentionToken(rawToken)
-            if !normalizedToken.isEmpty {
-                if trigger == "@" {
-                    let fileName = (normalizedToken as NSString).lastPathComponent
-                    let displayName = fileName.isEmpty ? normalizedToken : fileName
-                    segments.append(Text(displayName).foregroundColor(.blue))
-                } else {
-                    let displayName = SkillDisplayNameFormatter.displayName(for: normalizedToken)
-                    segments.append(Text(displayName).foregroundColor(.indigo))
-                }
-            }
-
-            if !trailingPunctuation.isEmpty {
-                segments.append(Text(trailingPunctuation))
-            }
-
-            cursor = matchRange.location + matchRange.length
-        }
-
-        if cursor < nsText.length {
-            segments.append(Text(nsText.substring(from: cursor)))
-        }
-
-        guard let first = segments.first else {
-            return Text(normalizedRawText)
-        }
-
-        return segments.dropFirst().reduce(first) { $0 + $1 }
+        return Text(
+            userBubbleAttributedText(
+                from: normalizedRawText,
+                matches: matches,
+                nsText: nsText,
+                confirmedFileMentions: confirmedFileMentions
+            )
+        )
     }
 
     private func normalizedMentionToken(_ token: String) -> (token: String, trailingPunctuation: String) {
@@ -775,6 +741,80 @@ struct MessageRow: View, Equatable {
         let path = String(String.UnicodeScalarView(pathScalars))
         let trailing = String(String.UnicodeScalarView(trailingScalars))
         return (path, trailing)
+    }
+
+    // Keeps long mention-heavy prompts renderable without hitting SwiftUI's recursive
+    // ConcatenatedTextStorage resolution path.
+    private func userBubbleAttributedText(
+        from text: String,
+        matches: [NSTextCheckingResult],
+        nsText: NSString,
+        confirmedFileMentions: Set<String>
+    ) -> AttributedString {
+        var attributed = AttributedString()
+        var cursor = 0
+
+        for match in matches {
+            let matchRange = match.range
+            let triggerRange = match.range(at: 1)
+            let tokenRange = match.range(at: 2)
+            guard triggerRange.location != NSNotFound,
+                  tokenRange.location != NSNotFound else {
+                continue
+            }
+
+            if matchRange.location > cursor {
+                let plain = nsText.substring(with: NSRange(location: cursor, length: matchRange.location - cursor))
+                if !plain.isEmpty {
+                    attributed.append(AttributedString(plain))
+                }
+            }
+
+            let trigger = nsText.substring(with: triggerRange)
+            let rawToken = nsText.substring(with: tokenRange)
+            let (normalizedToken, trailingPunctuation) = normalizedMentionToken(rawToken)
+            let fullMatch = nsText.substring(with: matchRange)
+            let normalizedConfirmedToken = TurnMessageRegexCache.removingTrailingLineColumnSuffix(from: normalizedToken)
+            if trigger == "@", !confirmedFileMentions.contains(normalizedConfirmedToken) {
+                attributed.append(AttributedString(fullMatch))
+                cursor = matchRange.location + matchRange.length
+                continue
+            }
+
+            if !normalizedToken.isEmpty {
+                let displayName: String
+                let color: Color
+
+                if trigger == "@" {
+                    let fileName = (normalizedToken as NSString).lastPathComponent
+                    displayName = fileName.isEmpty ? normalizedToken : fileName
+                    color = .blue
+                } else {
+                    displayName = SkillDisplayNameFormatter.displayName(for: normalizedToken)
+                    color = .indigo
+                }
+
+                var highlightedSegment = AttributedString(displayName)
+                highlightedSegment.foregroundColor = color
+                attributed.append(highlightedSegment)
+            }
+
+            if !trailingPunctuation.isEmpty {
+                attributed.append(AttributedString(trailingPunctuation))
+            }
+
+            cursor = matchRange.location + matchRange.length
+        }
+
+        if cursor < nsText.length {
+            attributed.append(AttributedString(nsText.substring(from: cursor)))
+        }
+
+        if attributed.characters.isEmpty {
+            return AttributedString(text)
+        }
+
+        return attributed
     }
 
     private func assistantView(text: String, renderModel: MessageRowRenderModel) -> some View {
