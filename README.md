@@ -144,8 +144,8 @@ If you are running this fork from source, prefer the repo-local launcher instead
 ## Run Locally
 
 ```sh
-git clone <your-fork-url>
-cd <your-fork-directory>
+git clone https://github.com/helizaga/remodex.git
+cd remodex
 ./run-local-remodex.sh up
 ```
 
