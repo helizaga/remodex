@@ -44,42 +44,130 @@ If you want the public-repo distribution model explained clearly, read [SELF_HOS
 
 The app is live on the [App Store](https://apps.apple.com/us/app/remodex-remote-ai-coding/id6760243963).
 
-Build the iOS app from source in Xcode, install your own signed build on-device, then use the in-app onboarding flow to pair by scanning the QR from `remodex up`.
+For this fork, the easiest path for coworkers is usually:
 
-If you scan the pairing QR with a generic camera or QR reader before installing the app, your device may treat the QR payload as plain text and open a web search instead of pairing.
+1. Clone the repo on their own Mac
+2. Build the iPhone app in Xcode with their own free Apple Personal Team
+3. Start the local bridge on the Mac
+4. Scan the QR from inside the app
 
-## Free Personal iPhone Install
+Important: do not scan the pairing QR with the generic Camera app first. Install and open Remodex, then scan the QR from inside the app's onboarding flow.
 
-If you mostly want to run this on your own iPhone without paying for the Apple Developer Program, use your free Apple Account / Personal Team in Xcode.
+## Fastest Coworker Install
 
-This repo now supports a local-only signing override so you do not need to keep editing the project file by hand:
+This is the lowest-friction source install for a coworker using their own Mac and iPhone. It does not require the paid Apple Developer Program.
+
+### 1. Prerequisites
+
+- macOS
+- Xcode 16+
+- Node.js 18+
+- [Codex CLI](https://github.com/openai/codex) installed and working in Terminal
+- an iPhone connected to the same Mac
+
+### 2. Clone the repo
+
+```sh
+git clone https://github.com/helizaga/remodex.git
+cd remodex
+```
+
+### Tell an LLM to do it
+
+If your coworker would rather hand this off to Codex, Claude, or another coding agent, they can usually paste this and let it drive:
+
+```text
+Set up this Remodex fork on my Mac and iPhone using the repo's lowest-friction local-first path.
+
+Work from this repo root and verify things before making claims.
+
+Goals:
+- get the iPhone app installed from source with a free Apple Personal Team
+- start the local bridge on my Mac
+- leave me with the app ready to pair by QR
+
+Rules:
+- prefer ./scripts/setup-ios-personal-team.sh for Xcode signing setup
+- prefer ./run-local-remodex.sh up for source checkouts
+- do not assume any hosted relay default
+- do not scan the pairing QR with the Camera app; it must be scanned from inside the Remodex app
+- do not run unnecessary tests
+- only stop to ask me questions when you are actually blocked
+- if you need my Apple Team ID, ask only for that and tell me where to find it in Xcode
+
+What I want you to do:
+1. Verify Node.js, Xcode, and codex CLI are available.
+2. Run the Personal Team setup script for this repo.
+3. Tell me the exact remaining Xcode/iPhone clicks if GUI interaction is needed.
+4. Build/install the app if possible.
+5. Start the local stack with ./run-local-remodex.sh up.
+6. Tell me exactly what I need to do next on the phone.
+
+End with:
+- what you verified
+- what you changed
+- what command is running now
+- what I need to do next
+```
+
+### 3. Prepare Xcode signing once
+
+Use your own Apple Personal Team. This repo supports a local-only signing override so you do not need to hand-edit the Xcode project.
 
 ```sh
 ./scripts/setup-ios-personal-team.sh ABCDE12345 --open
 ```
 
-That command creates `CodexMobile/BuildSupport/PrivateOverrides.xcconfig` with:
+If you do not know your Team ID yet, run the script without arguments and it will prompt you.
+
+That command creates a local `CodexMobile/BuildSupport/PrivateOverrides.xcconfig` with:
 
 - your Apple Team ID
 - a local app bundle identifier
 - matching test bundle identifiers
-- a local auth callback URL scheme so your source build does not collide as easily with another installed Remodex build
+- a local auth callback URL scheme so your source build does not collide with another installed Remodex build
 
-If you omit the Team ID, the script will prompt for it. A good bundle ID default is `com.<yourname>.remodex.local`.
+### 4. Install the app on iPhone
 
-After the script runs:
+1. Connect the iPhone to the Mac with a cable for first install.
+2. In Xcode, choose the `CodexMobile` scheme and your actual iPhone as the run destination.
+3. Keep `Automatically manage signing` enabled.
+4. Select your Apple Personal Team if Xcode asks.
+5. Accept any prompts for device trust or Developer Mode.
+6. Press Run.
 
-1. Connect your iPhone to your Mac.
-2. In Xcode, pick the `CodexMobile` scheme and your iPhone as the run destination.
-3. Let Xcode enable signing for your Personal Team if prompted.
-4. Accept any iPhone prompts for Developer Mode / trust.
-5. Press Run.
+If iOS blocks the app after install, trust the developer profile on the phone:
 
-For source checkouts of this fork, pair the installed app with the local bridge using:
+1. Open `Settings`
+2. Go to `General > VPN & Device Management`
+3. Trust the developer app profile for the Apple account you used in Xcode
+
+### 5. Start the local bridge on the Mac
+
+From the repo root:
 
 ```sh
 ./run-local-remodex.sh up
 ```
+
+This fork prefers the repo-local launcher for source checkouts because it keeps the setup explicit and local-first.
+
+### 6. Pair the phone
+
+1. Open the Remodex app on the iPhone
+2. Go through onboarding
+3. Use the in-app QR scanner
+4. Scan the QR printed by `./run-local-remodex.sh up`
+
+Do not use the Camera app or another QR reader for this step.
+
+### 7. Later launches
+
+After the first successful install and pairing:
+
+- reopen the app on the iPhone
+- run `./run-local-remodex.sh up` on the Mac when needed
+- scan a new QR only if trust was reset or pairing state changed
 
 ## Architecture
 
@@ -212,6 +300,7 @@ Goals:
 - Get the source checkout running in the safest local-first mode.
 - Verify prerequisites before making claims.
 - Do not assume any hosted relay, production endpoint, or baked-in remote default.
+- Prefer ./scripts/setup-ios-personal-team.sh for Xcode signing setup when installing to iPhone from source.
 - Prefer ./run-local-remodex.sh up for source checkouts unless I explicitly provide REMODEX_RELAY.
 - Do not run Xcode builds/tests unless I explicitly ask.
 - Do not create scratch markdown files or one-off report files in the repo.
@@ -219,12 +308,13 @@ Goals:
 Checklist:
 1. Inspect README.md, AGENTS.md, and phodex-bridge/package.json before acting.
 2. Verify Node.js >= 18 and that the codex CLI is on PATH.
-3. Install any missing npm dependencies needed for source execution.
-4. If I did not provide a relay override, start the repo-local stack with ./run-local-remodex.sh up.
-5. On macOS, prefer the built-in local bridge/daemon workflow. On other OSes, use the supported foreground bridge path.
-6. Confirm whether the bridge is running, which relay URL/path it is using, and whether it is waiting for QR pairing.
-7. Tell me exactly what I still need to do on-device, including that the pairing QR should be scanned from inside the Remodex app, not with a generic camera app.
-8. If setup fails, stop at the narrowest real blocker and explain the next fix with exact commands.
+3. If I want an iPhone source install, use ./scripts/setup-ios-personal-team.sh first. Ask only for my Apple Team ID if you are blocked on that.
+4. Install any missing npm dependencies needed for source execution.
+5. If I did not provide a relay override, start the repo-local stack with ./run-local-remodex.sh up.
+6. On macOS, prefer the built-in local bridge/daemon workflow. On other OSes, use the supported foreground bridge path.
+7. Confirm whether the bridge is running, which relay URL/path it is using, and whether it is waiting for QR pairing.
+8. Tell me exactly what I still need to do in Xcode and on-device, including that the pairing QR should be scanned from inside the Remodex app, not with a generic camera app.
+9. If setup fails, stop at the narrowest real blocker and explain the next fix with exact commands.
 
 Output format:
 - What you verified
