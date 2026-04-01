@@ -18,6 +18,8 @@ enum AppEnvironment {
     // Open-source builds should provide an explicit relay instead of silently
     // pointing at a hosted service the user does not control.
     static let defaultRelayURLString = ""
+    // This local-first fork ships unlocked and does not require hosted subscription checks.
+    static let requiresProSubscription = false
     static let repositoryURL = URL(string: "https://github.com/helizaga/remodex")!
 
     static var relayBaseURL: String {

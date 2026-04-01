@@ -69,6 +69,10 @@ final class SubscriptionService {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        guard AppEnvironment.requiresProSubscription else {
+            applyUnlockedForkState()
+            return
+        }
         restoreCachedStateIfAvailable()
         startCustomerInfoObserverIfConfigured()
     }
@@ -79,6 +83,11 @@ final class SubscriptionService {
 
     // Bootstraps subscription state once at launch or from the recovery retry action.
     func bootstrap() async {
+        guard AppEnvironment.requiresProSubscription else {
+            applyUnlockedForkState()
+            return
+        }
+
         guard !isBootstrapping else {
             return
         }
@@ -112,6 +121,11 @@ final class SubscriptionService {
 
     // Refreshes the current subscription state without re-entering the blocking bootstrap UI.
     func refreshCustomerInfoSilently() async {
+        guard AppEnvironment.requiresProSubscription else {
+            applyUnlockedForkState()
+            return
+        }
+
         guard !isBootstrapping, bootstrapState != .loading else {
             return
         }
@@ -132,6 +146,11 @@ final class SubscriptionService {
 
     // Reads the current RevenueCat offerings and normalizes the package list for SwiftUI.
     func loadOfferings() async {
+        guard AppEnvironment.requiresProSubscription else {
+            applyUnlockedForkState()
+            return
+        }
+
         startCustomerInfoObserverIfConfigured()
         isLoading = true
         lastErrorMessage = nil
@@ -143,6 +162,11 @@ final class SubscriptionService {
 
     // Starts a purchase flow for the selected package and refreshes entitlements on success.
     func purchase(_ option: SubscriptionPackageOption) async {
+        guard AppEnvironment.requiresProSubscription else {
+            applyUnlockedForkState()
+            return
+        }
+
         guard !isPurchasing else {
             return
         }
@@ -178,6 +202,11 @@ final class SubscriptionService {
 
     // Restores store purchases and then re-checks the Pro entitlement state.
     func restorePurchases() async {
+        guard AppEnvironment.requiresProSubscription else {
+            applyUnlockedForkState()
+            return
+        }
+
         guard !isRestoring else {
             return
         }
@@ -205,6 +234,16 @@ final class SubscriptionService {
 }
 
 private extension SubscriptionService {
+    func applyUnlockedForkState() {
+        bootstrapState = .ready
+        hasProAccess = true
+        hasCachedOptimisticAccess = true
+        isLoading = false
+        isPurchasing = false
+        isRestoring = false
+        lastErrorMessage = nil
+    }
+
     func startCustomerInfoObserverIfConfigured() {
         guard customerInfoUpdatesTask == nil, Purchases.isConfigured else {
             return
@@ -266,6 +305,11 @@ private extension SubscriptionService {
 
     // Rehydrates the last known subscription snapshot so launch and foreground recovery are local-first.
     func restoreCachedStateIfAvailable() {
+        guard AppEnvironment.requiresProSubscription else {
+            applyUnlockedForkState()
+            return
+        }
+
         guard let data = defaults.data(forKey: Self.cachedStateDefaultsKey),
               let cachedState = try? JSONDecoder().decode(CachedSubscriptionState.self, from: data) else {
             return

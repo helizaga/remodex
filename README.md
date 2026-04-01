@@ -48,6 +48,39 @@ Build the iOS app from source in Xcode, install your own signed build on-device,
 
 If you scan the pairing QR with a generic camera or QR reader before installing the app, your device may treat the QR payload as plain text and open a web search instead of pairing.
 
+## Free Personal iPhone Install
+
+If you mostly want to run this on your own iPhone without paying for the Apple Developer Program, use your free Apple Account / Personal Team in Xcode.
+
+This repo now supports a local-only signing override so you do not need to keep editing the project file by hand:
+
+```sh
+./scripts/setup-ios-personal-team.sh ABCDE12345 --open
+```
+
+That command creates `CodexMobile/BuildSupport/PrivateOverrides.xcconfig` with:
+
+- your Apple Team ID
+- a local app bundle identifier
+- matching test bundle identifiers
+- a local auth callback URL scheme so your source build does not collide as easily with another installed Remodex build
+
+If you omit the Team ID, the script will prompt for it. A good bundle ID default is `com.<yourname>.remodex.local`.
+
+After the script runs:
+
+1. Connect your iPhone to your Mac.
+2. In Xcode, pick the `CodexMobile` scheme and your iPhone as the run destination.
+3. Let Xcode enable signing for your Personal Team if prompted.
+4. Accept any iPhone prompts for Developer Mode / trust.
+5. Press Run.
+
+For source checkouts of this fork, pair the installed app with the local bridge using:
+
+```sh
+./run-local-remodex.sh up
+```
+
 ## Architecture
 
 ```

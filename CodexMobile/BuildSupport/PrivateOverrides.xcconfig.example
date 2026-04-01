@@ -1,4 +1,10 @@
 // Copy this file to PrivateOverrides.xcconfig and keep the real values local.
 // Xcode will load the private file automatically when it exists.
 
+REMODEX_DEVELOPMENT_TEAM = ABCDE12345
+REMODEX_APP_BUNDLE_IDENTIFIER = com.yourname.remodex.local
+REMODEX_TEST_BUNDLE_IDENTIFIER = $(REMODEX_APP_BUNDLE_IDENTIFIER).tests
+REMODEX_UI_TEST_BUNDLE_IDENTIFIER = $(REMODEX_APP_BUNDLE_IDENTIFIER).uitests
+REMODEX_CODE_SIGN_ENTITLEMENTS = CodexMobile/CodexMobilePersonal.entitlements
+PHODEX_CHATGPT_CALLBACK_SCHEME = phodex-local
 PHODEX_DEFAULT_RELAY_URL =

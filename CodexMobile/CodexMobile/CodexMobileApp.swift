@@ -54,6 +54,10 @@ struct CodexMobileApp: App {
 
     // Configures RevenueCat once at launch using the client-safe public SDK key.
     private static func configureRevenueCatIfAvailable() {
+        guard AppEnvironment.requiresProSubscription else {
+            return
+        }
+
         guard let apiKey = AppEnvironment.revenueCatPublicAPIKey else {
             assertionFailure("Missing RevenueCat public API key in Info.plist")
             return
