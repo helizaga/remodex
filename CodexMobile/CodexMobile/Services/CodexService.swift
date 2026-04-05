@@ -126,7 +126,7 @@ struct CodexBridgeUpdatePrompt: Identifiable, Equatable, Sendable {
     let id = UUID()
     let title: String
     let message: String
-    let command: String
+    let command: String?
 }
 
 struct CodexThreadRuntimeOverride: Codable, Equatable, Sendable {
@@ -304,9 +304,11 @@ final class CodexService {
     var latestTurnTerminalStateByThread: [String: CodexTurnTerminalState] = [:]
     // Preserves terminal outcome per turn so completed/stopped blocks stay distinguishable.
     var terminalStateByTurnID: [String: CodexTurnTerminalState] = [:]
-    var pendingApproval: CodexApprovalRequest?
+    // Ordered pending runtime approvals keyed by request id so concurrent prompts do not overwrite each other.
+    var pendingApprovals: [CodexApprovalRequest] = []
     var lastRawMessage: String?
     var lastErrorMessage: String?
+    var runtimeDebugLogEntries: [String] = []
     var connectionRecoveryState: CodexConnectionRecoveryState = .idle
     // Per-thread queued drafts for client-side turn queueing while a run is active.
     var queuedTurnDraftsByThread: [String: [QueuedTurnDraft]] = [:]
@@ -340,7 +342,7 @@ final class CodexService {
     var supportsTurnCollaborationMode = false
     // Runtime compatibility flag for `thread/start|turn/start.serviceTier` speed controls.
     var supportsServiceTier = true
-    // Runtime compatibility flag for the bridge-owned `voice/resolveAuth` voice flow.
+    // Runtime compatibility flag for the bridge-owned voice transcription flow.
     var supportsBridgeVoiceAuth = true
     // Runtime compatibility flag for native `thread/fork` conversation branching.
     var supportsThreadFork = true
@@ -428,6 +430,14 @@ final class CodexService {
     var gptAccountLoginSyncTask: Task<Void, Never>?
     var postConnectSyncToken: UUID?
     var connectedServerIdentity: String?
+    // Tracks whether the bridge is proxying a real Codex endpoint or a spawned local app-server.
+    var codexTransportMode: CodexRuntimeTransportMode = .unknown
+    // Remembers whether the current plan flow is staying native or has fallen back to inferred UI.
+    var planSessionSourceByThread: [String: CodexPlanSessionSource] = [:] {
+        didSet {
+            persistPlanSessionSources()
+        }
+    }
     var runningThreadWatchByID: [String: CodexRunningThreadWatch] = [:]
     var mirroredRunningCatchupThreadIDs: Set<String> = []
     var lastMirroredRunningCatchupAtByThread: [String: Date] = [:]
@@ -467,6 +477,8 @@ final class CodexService {
     @ObservationIgnored var threadTimelineStateByThread: [String: ThreadTimelineState] = [:]
     @ObservationIgnored var forkedFromThreadIDByThreadID: [String: String] = [:]
     @ObservationIgnored var renamedThreadNameByThreadID: [String: String] = [:]
+    @ObservationIgnored var associatedManagedWorktreePathByThreadID: [String: String] = [:]
+    @ObservationIgnored var authoritativeProjectPathByThreadID: [String: String] = [:]
     @ObservationIgnored var stoppedTurnIDsByThread: [String: Set<String>] = [:]
     // Lazily rebuilt id->index maps keep hot-path message lookups out of repeated linear scans.
     @ObservationIgnored var messageIndexCacheByThread: [String: [String: Int]] = [:]
@@ -489,10 +501,12 @@ final class CodexService {
     static let selectedReasoningEffortDefaultsKey = "codex.selectedReasoningEffort"
     static let selectedServiceTierDefaultsKey = "codex.selectedServiceTier"
     static let threadRuntimeOverridesDefaultsKey = "codex.threadRuntimeOverrides"
+    static let planSessionSourcesDefaultsKey = "codex.planSessionSources"
     static let selectedAccessModeDefaultsKey = "codex.selectedAccessMode"
     static let locallyArchivedThreadIDsKey = "codex.locallyArchivedThreadIDs"
     static let forkedThreadOriginsDefaultsKey = "codex.forkedThreadOrigins"
     static let renamedThreadNamesDefaultsKey = "codex.renamedThreadNames"
+    static let associatedManagedWorktreePathsDefaultsKey = "codex.associatedManagedWorktreePaths"
     static let notificationsPromptedDefaultsKey = "codex.notifications.prompted"
 
     init(
@@ -553,6 +567,16 @@ final class CodexService {
             self.threadRuntimeOverridesByThreadID = [:]
         }
 
+        if let savedPlanSessionSources = defaults.data(forKey: Self.planSessionSourcesDefaultsKey),
+           let decodedPlanSessionSources = try? decoder.decode(
+               [String: CodexPlanSessionSource].self,
+               from: savedPlanSessionSources
+           ) {
+            self.planSessionSourceByThread = decodedPlanSessionSources
+        } else {
+            self.planSessionSourceByThread = [:]
+        }
+
         if let savedForkOrigins = defaults.data(forKey: Self.forkedThreadOriginsDefaultsKey),
            let decodedForkOrigins = try? decoder.decode([String: String].self, from: savedForkOrigins) {
             self.forkedFromThreadIDByThreadID = decodedForkOrigins
@@ -565,6 +589,16 @@ final class CodexService {
             self.renamedThreadNameByThreadID = decodedRenamedThreadNames
         } else {
             self.renamedThreadNameByThreadID = [:]
+        }
+
+        if let savedAssociatedManagedWorktreePaths = defaults.data(forKey: Self.associatedManagedWorktreePathsDefaultsKey),
+           let decodedAssociatedManagedWorktreePaths = try? decoder.decode(
+               [String: String].self,
+               from: savedAssociatedManagedWorktreePaths
+           ) {
+            self.associatedManagedWorktreePathByThreadID = decodedAssociatedManagedWorktreePaths
+        } else {
+            self.associatedManagedWorktreePathByThreadID = [:]
         }
 
         let savedServiceTier = defaults.string(forKey: Self.selectedServiceTierDefaultsKey)?
@@ -634,6 +668,21 @@ final class CodexService {
             self.secureMacFingerprint = codexSecureFingerprint(for: trustedMac.macIdentityPublicKey)
         }
         rebuildThreadLookupCaches()
+    }
+
+    // Persists per-thread plan-mode provenance so reconnect/relaunch keeps native vs fallback behavior stable.
+    private func persistPlanSessionSources() {
+        guard !planSessionSourceByThread.isEmpty else {
+            defaults.removeObject(forKey: Self.planSessionSourcesDefaultsKey)
+            return
+        }
+
+        guard let data = try? encoder.encode(planSessionSourceByThread) else {
+            defaults.removeObject(forKey: Self.planSessionSourcesDefaultsKey)
+            return
+        }
+
+        defaults.set(data, forKey: Self.planSessionSourcesDefaultsKey)
     }
 
     // Remembers whether we can offer reconnect without forcing a fresh QR scan.

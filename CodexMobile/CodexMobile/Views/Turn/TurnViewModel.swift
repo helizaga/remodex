@@ -104,6 +104,10 @@ final class TurnViewModel {
             baseBranch: String,
             changeTransfer: GitWorktreeChangeTransferMode
         )
+        case createManagedWorktree(
+            baseBranch: String,
+            changeTransfer: GitWorktreeChangeTransferMode
+        )
     }
 
     // Preserves the exact composer payload + raw chips so stale-busy recovery can retry cleanly.
@@ -228,6 +232,7 @@ final class TurnViewModel {
     @ObservationIgnored var gitStatusRefreshTask: Task<Void, Never>?
     @ObservationIgnored var pendingGitBranchOperation: GitBranchUserOperation?
     @ObservationIgnored var pendingGitWorktreeOpenHandler: ((GitCreateWorktreeResult) -> Void)?
+    @ObservationIgnored var pendingManagedGitWorktreeOpenHandler: ((GitCreateManagedWorktreeResult) -> Void)?
     @ObservationIgnored private var cachedSkillSearchIndexByRoot: [String: [TurnSkillSearchIndexEntry]] = [:]
     @ObservationIgnored var unsupportedSkillsAutocompleteRoots: Set<String> = []
 
@@ -1111,28 +1116,50 @@ final class TurnViewModel {
         }
     }
 
-    func approve(codex: CodexService) {
+    func approve(
+        _ request: CodexApprovalRequest,
+        codex: CodexService,
+        completion: @escaping @MainActor (Bool) -> Void
+    ) {
         Task { @MainActor in
             isHandlingApproval = true
             defer { isHandlingApproval = false }
 
             do {
-                try await codex.approvePendingRequest()
+                try await codex.approvePendingRequest(request)
+                completion(true)
             } catch {
                 // Error message already stored in CodexService.
+                if let serviceError = error as? CodexServiceError,
+                   case .noPendingApproval = serviceError {
+                    completion(true)
+                } else {
+                    completion(false)
+                }
             }
         }
     }
 
-    func decline(codex: CodexService) {
+    func decline(
+        _ request: CodexApprovalRequest,
+        codex: CodexService,
+        completion: @escaping @MainActor (Bool) -> Void
+    ) {
         Task { @MainActor in
             isHandlingApproval = true
             defer { isHandlingApproval = false }
 
             do {
-                try await codex.declinePendingRequest()
+                try await codex.declinePendingRequest(request)
+                completion(true)
             } catch {
                 // Error message already stored in CodexService.
+                if let serviceError = error as? CodexServiceError,
+                   case .noPendingApproval = serviceError {
+                    completion(true)
+                } else {
+                    completion(false)
+                }
             }
         }
     }

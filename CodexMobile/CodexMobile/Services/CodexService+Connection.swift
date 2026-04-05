@@ -155,7 +155,7 @@ extension CodexService {
         isInitialized = false
         isLoadingThreads = false
         isLoadingModels = false
-        pendingApproval = nil
+        clearPendingApprovals()
         finalizeAllStreamingState()
         messagePersistenceDebounceTask?.cancel()
         messagePersistenceDebounceTask = nil
@@ -281,8 +281,24 @@ extension CodexService {
 
         do {
             _ = try await sendRequest(method: "initialize", params: modernParams)
-            supportsTurnCollaborationMode = await runtimeSupportsPlanCollaborationMode()
+            // A successful modern initialize means the runtime accepted the experimental
+            // capability negotiation. Keep plan-mode sends enabled unless the runtime
+            // explicitly rejects `collaborationMode` on a turn request later.
+            supportsTurnCollaborationMode = true
+            debugRuntimeLog("initialize success experimentalApi=true")
+
+            let runtimeReportedPlanSupport = await runtimeSupportsPlanCollaborationMode()
+            debugRuntimeLog("collaborationMode/list plan=\(runtimeReportedPlanSupport)")
+            if !runtimeReportedPlanSupport {
+                debugRuntimeLog(
+                    "collaborationMode/list did not report plan; will still attempt collaborationMode until runtime rejects it"
+                )
+            }
         } catch {
+            if let incompatibleAppVersionError = incompatibleBridgeAppVersionError(from: error) {
+                throw incompatibleAppVersionError
+            }
+
             guard shouldRetryInitializeWithoutCapabilities(error) else {
                 throw error
             }
@@ -290,12 +306,80 @@ extension CodexService {
             let legacyParams: JSONValue = .object([
                 "clientInfo": clientInfo,
             ])
-            _ = try await sendRequest(method: "initialize", params: legacyParams)
+            do {
+                _ = try await sendRequest(method: "initialize", params: legacyParams)
+            } catch {
+                if let incompatibleAppVersionError = incompatibleBridgeAppVersionError(from: error) {
+                    throw incompatibleAppVersionError
+                }
+                throw error
+            }
             supportsTurnCollaborationMode = false
+            debugRuntimeLog("initialize fallback experimentalApi=false")
         }
 
         try await sendNotification(method: "initialized", params: nil)
         isInitialized = true
+    }
+
+    // Converts a bridge-declared "your iPhone app is too old" initialize failure into
+    // a direct connect error and surfaces the app-update recovery sheet.
+    func incompatibleBridgeAppVersionError(from error: Error) -> CodexServiceError? {
+        guard let serviceError = error as? CodexServiceError,
+              case .rpcError(let rpcError) = serviceError else {
+            return nil
+        }
+
+        let dataObject = rpcError.data?.objectValue
+        let errorCode = dataObject?["errorCode"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard errorCode == "ios_app_update_required" else {
+            return nil
+        }
+
+        let minimumSupportedAppVersion = dataObject?["minimumSupportedAppVersion"]?.stringValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let bridgeVersion = dataObject?["bridgeVersion"]?.stringValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let message = rpcError.message.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let promptMessage: String
+        if !message.isEmpty {
+            promptMessage = message
+        } else if let bridgeVersion, !bridgeVersion.isEmpty,
+                  let minimumSupportedAppVersion, !minimumSupportedAppVersion.isEmpty {
+            promptMessage =
+                "This Mac bridge is running Remodex \(bridgeVersion), which requires Remodex iPhone \(minimumSupportedAppVersion) or newer. Update the iPhone app, then reconnect."
+        } else if let minimumSupportedAppVersion, !minimumSupportedAppVersion.isEmpty {
+            promptMessage =
+                "This Mac bridge requires Remodex iPhone \(minimumSupportedAppVersion) or newer. Update the iPhone app, then reconnect."
+        } else {
+            promptMessage = "This Mac bridge requires a newer Remodex iPhone app. Update the app, then reconnect."
+        }
+
+        bridgeUpdatePrompt = CodexBridgeUpdatePrompt(
+            title: "Update Remodex on your iPhone to reconnect",
+            message: promptMessage,
+            command: nil
+        )
+
+        if !message.isEmpty {
+            return .invalidInput(message)
+        }
+
+        if let bridgeVersion, !bridgeVersion.isEmpty,
+           let minimumSupportedAppVersion, !minimumSupportedAppVersion.isEmpty {
+            return .invalidInput(
+                "This Mac bridge is running Remodex \(bridgeVersion), which requires Remodex iPhone \(minimumSupportedAppVersion) or newer. Update the iPhone app, then reconnect."
+            )
+        }
+
+        if let minimumSupportedAppVersion, !minimumSupportedAppVersion.isEmpty {
+            return .invalidInput(
+                "This Mac bridge requires Remodex iPhone \(minimumSupportedAppVersion) or newer. Update the iPhone app, then reconnect."
+            )
+        }
+
+        return .invalidInput("This Mac bridge requires a newer Remodex iPhone app. Update the app, then reconnect.")
     }
 
     // Classifies socket failures so transient relay hiccups reconnect, while dead pairings are forgotten.
@@ -398,7 +482,7 @@ extension CodexService {
         activeTurnIdByThread.removeAll()
         refreshAllThreadTimelineStates()
         threadIdByTurnID.removeAll()
-        pendingApproval = nil
+        clearPendingApprovals()
         currentOutput = ""
         lastErrorMessage = nil
         isLoadingModels = false
@@ -606,9 +690,13 @@ extension CodexService {
     // Uses the documented experimental listing endpoint instead of assuming initialize implies plan support.
     func runtimeSupportsPlanCollaborationMode() async -> Bool {
         do {
-            let response = try await sendRequest(method: "collaborationMode/list", params: nil)
+            let response = try await sendRequest(
+                method: "collaborationMode/list",
+                params: .object([:])
+            )
             return responseContainsPlanCollaborationMode(response)
         } catch {
+            debugRuntimeLog("collaborationMode/list failed: \(error.localizedDescription)")
             return false
         }
     }
@@ -617,6 +705,7 @@ extension CodexService {
     func responseContainsPlanCollaborationMode(_ response: RPCMessage) -> Bool {
         let candidateArrays: [[JSONValue]?] = [
             response.result?.arrayValue,
+            response.result?.objectValue?["data"]?.arrayValue,
             response.result?.objectValue?["modes"]?.arrayValue,
             response.result?.objectValue?["collaborationModes"]?.arrayValue,
             response.result?.objectValue?["items"]?.arrayValue,
