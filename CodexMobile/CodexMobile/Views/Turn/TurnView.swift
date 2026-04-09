@@ -12,6 +12,7 @@ struct TurnView: View {
     let thread: CodexThread
 
     @Environment(CodexService.self) private var codex
+    @Environment(SubscriptionService.self) private var subscriptions
     @Environment(\.openURL) private var openURL
     @Environment(\.reconnectAction) private var reconnectAction
     @Environment(\.scenePhase) private var scenePhase
@@ -19,7 +20,6 @@ struct TurnView: View {
     @State private var isInputFocused = false
     @State private var isShowingThreadPathSheet = false
     @State private var isShowingStatusSheet = false
-    @State private var isShowingRuntimeLogSheet = false
     @State private var isLoadingRepositoryDiff = false
     @State private var repositoryDiffPresentation: TurnDiffPresentation?
     @State private var assistantRevertSheetState: AssistantRevertSheetState?
@@ -47,6 +47,7 @@ struct TurnView: View {
         let timelineState = codex.timelineState(for: thread.id)
         let renderSnapshot = timelineState.renderSnapshot
         let activeTurnID = renderSnapshot.activeTurnID
+        let planSessionSource = codex.currentPlanSessionSource(for: thread.id)
         let gitWorkingDirectory = resolvedThread.gitWorkingDirectory
         let isThreadRunning = renderSnapshot.isThreadRunning
         let isEmptyThread = renderSnapshot.messages.isEmpty
@@ -71,8 +72,12 @@ struct TurnView: View {
                 activeTurnID: activeTurnID,
                 isThreadRunning: isThreadRunning,
                 latestTurnTerminalState: renderSnapshot.latestTurnTerminalState,
+                completedTurnIDs: renderSnapshot.completedTurnIDs,
                 stoppedTurnIDs: renderSnapshot.stoppedTurnIDs,
                 assistantRevertStatesByMessageID: renderSnapshot.assistantRevertStatesByMessageID,
+                planSessionSource: planSessionSource,
+                allowsAssistantPlanFallbackRecovery: planSessionSource == .compatibilityFallback,
+                threadMessagesForPlanMatching: renderSnapshot.planMatchingMessages,
                 errorMessage: codex.lastErrorMessage,
                 composerRecoveryAccessory: composerRecoveryAccessory,
                 shouldAnchorToAssistantResponse: shouldAnchorToAssistantResponseBinding,
@@ -89,6 +94,9 @@ struct TurnView: View {
                     showsGitControls: showsGitControls,
                     gitWorkingDirectory: gitWorkingDirectory
                 )),
+                structuredPromptReplacementComposer: { message in
+                    AnyView(composerStructuredPromptReplacement(message: message))
+                },
                 repositoryLoadingToastOverlay: AnyView(EmptyView()),
                 usageToastOverlay: AnyView(EmptyView()),
                 isRepositoryLoadingToastVisible: false,
@@ -160,15 +168,6 @@ struct TurnView: View {
                 },
                 isShowingPathSheet: $isShowingThreadPathSheet
             )
-
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    isShowingRuntimeLogSheet = true
-                } label: {
-                    Image(systemName: "list.bullet.rectangle")
-                }
-                .accessibilityLabel("Runtime logs")
-            }
         }
         .overlay {
             if isShowingWorktreeHandoff {
@@ -178,8 +177,9 @@ struct TurnView: View {
                     isHandoffAvailable: isWorktreeHandoffAvailable,
                     isSubmitting: viewModel.isCreatingGitWorktree,
                     onClose: { isShowingWorktreeHandoff = false },
-                    onSubmit: { baseBranch in
+                    onSubmit: { branchName, baseBranch in
                         submitWorktreeHandoff(
+                            branchName: branchName,
                             baseBranch: baseBranch,
                             gitWorkingDirectory: gitWorkingDirectory,
                             activeTurnID: activeTurnID
@@ -196,8 +196,9 @@ struct TurnView: View {
                     isHandoffAvailable: isWorktreeHandoffAvailable,
                     isSubmitting: viewModel.isCreatingGitWorktree || isForkingThread,
                     onClose: { isShowingForkWorktree = false },
-                    onSubmit: { baseBranch in
+                    onSubmit: { branchName, baseBranch in
                         submitForkIntoNewWorktree(
+                            branchName: branchName,
                             baseBranch: baseBranch,
                             gitWorkingDirectory: gitWorkingDirectory,
                             activeTurnID: activeTurnID
@@ -298,6 +299,9 @@ struct TurnView: View {
                 threadID: thread.id
             )
         }
+        .onChange(of: renderSnapshot.timelineChangeToken) { _, _ in
+            viewModel.reconcileDismissedStructuredPlanPrompts(messages: renderSnapshot.messages, codex: codex)
+        }
         .sheet(isPresented: $isShowingThreadPathSheet) {
             if let context = threadNavigationContext(for: resolvedThread) {
                 TurnThreadPathSheet(
@@ -316,9 +320,6 @@ struct TurnView: View {
                 isLoadingRateLimits: codex.isLoadingRateLimits,
                 rateLimitsErrorMessage: codex.rateLimitsErrorMessage
             )
-        }
-        .sheet(isPresented: $isShowingRuntimeLogSheet) {
-            RuntimeDebugLogSheet()
         }
         .sheet(isPresented: $isShowingVoiceSetupSheet) {
             GPTVoiceSetupSheet()
@@ -613,7 +614,50 @@ struct TurnView: View {
     private func handleSend() {
         isInputFocused = false
         viewModel.clearComposerAutocomplete()
-        viewModel.sendTurn(codex: codex, threadID: thread.id)
+        viewModel.sendTurn(codex: codex, subscriptions: subscriptions, threadID: thread.id)
+    }
+
+    @ViewBuilder
+    private func composerStructuredPromptReplacement(message: CodexMessage) -> some View {
+        if let request = message.structuredUserInputRequest {
+            let isDismissed = viewModel.isStructuredPlanPromptDismissed(request.requestID, codex: codex)
+            let isDismissing = viewModel.isStructuredPlanPromptDismissing(request.requestID, codex: codex)
+
+            if !isDismissed {
+                StructuredUserInputCard(
+                    request: request,
+                    isInteractionLocked: isDismissing,
+                    secondaryActionTitle: isDismissing ? "Closing..." : "ESC",
+                    onSecondaryAction: isDismissing ? nil : {
+                        isInputFocused = true
+                        viewModel.dismissStructuredPlanPrompt(message, codex: codex, threadID: thread.id)
+                    }
+                )
+                .id(request.requestID)
+                .padding(.horizontal, 12)
+                .padding(.top, 4)
+            } else {
+                composerWithSubagentAccessory(
+                    currentThread: currentResolvedThread,
+                    activeTurnID: codex.activeTurnID(for: thread.id),
+                    isThreadRunning: codex.timelineState(for: thread.id).renderSnapshot.isThreadRunning,
+                    isEmptyThread: codex.timelineState(for: thread.id).renderSnapshot.messages.isEmpty,
+                    isWorktreeProject: currentResolvedThread.isManagedWorktreeProject,
+                    showsGitControls: codex.isConnected && currentResolvedThread.gitWorkingDirectory != nil,
+                    gitWorkingDirectory: currentResolvedThread.gitWorkingDirectory
+                )
+            }
+        } else {
+            composerWithSubagentAccessory(
+                currentThread: currentResolvedThread,
+                activeTurnID: codex.activeTurnID(for: thread.id),
+                isThreadRunning: codex.timelineState(for: thread.id).renderSnapshot.isThreadRunning,
+                isEmptyThread: codex.timelineState(for: thread.id).renderSnapshot.messages.isEmpty,
+                isWorktreeProject: currentResolvedThread.isManagedWorktreeProject,
+                showsGitControls: codex.isConnected && currentResolvedThread.gitWorkingDirectory != nil,
+                gitWorkingDirectory: currentResolvedThread.gitWorkingDirectory
+            )
+        }
     }
 
     private func handleGitActionSelection(
@@ -865,49 +909,60 @@ struct TurnView: View {
         return viewModel.gitDefaultBranch
     }
 
-    // Creates the managed worktree inside the coordinator, then rebinds this same chat to the returned project path.
+    // Creates a named worktree, then rebinds this same chat to that checkout.
     private func submitWorktreeHandoff(
+        branchName: String,
         baseBranch: String,
         gitWorkingDirectory: String?,
         activeTurnID: String?
     ) {
-        guard activeTurnID == nil,
-              !codex.runningThreadIDs.contains(thread.id),
-              !viewModel.isRunningGitAction,
-              !viewModel.isSwitchingGitBranch,
-              !viewModel.isCreatingGitWorktree else { return }
-
-        Task { @MainActor in
-            viewModel.isCreatingGitWorktree = true
-            defer { viewModel.isCreatingGitWorktree = false }
-
-            do {
-                let outcome = try await WorktreeFlowCoordinator.handoffThreadToWorktree(
-                    threadID: thread.id,
-                    sourceProjectPath: gitWorkingDirectory,
-                    associatedWorktreePath: nil,
-                    baseBranchForNewWorktree: baseBranch,
-                    codex: codex
-                )
-
-                if case .moved(let move) = outcome {
-                    isShowingWorktreeHandoff = false
-                    viewModel.refreshGitBranchTargets(
-                        codex: codex,
-                        workingDirectory: move.projectPath,
-                        threadID: thread.id
+        viewModel.requestCreateGitWorktree(
+            named: branchName,
+            fromBaseBranch: baseBranch,
+            changeTransfer: .none,
+            codex: codex,
+            workingDirectory: gitWorkingDirectory,
+            threadID: thread.id,
+            activeTurnID: activeTurnID,
+            onOpenWorktree: { result in
+                guard !result.alreadyExisted else {
+                    viewModel.gitSyncAlert = TurnGitSyncAlert(
+                        title: "Branch Already Exists",
+                        message: "A worktree for '\(result.branch)' already exists. Choose a different name.",
+                        action: .dismissOnly
                     )
+                    return
                 }
-            } catch {
-                viewModel.gitSyncAlert = TurnGitSyncAlert(
-                    title: "Worktree Handoff Failed",
-                    message: error.localizedDescription.isEmpty
-                        ? "Could not hand off the thread to the new worktree."
-                        : error.localizedDescription,
-                    action: .dismissOnly
-                )
+
+                Task { @MainActor in
+                    do {
+                        let outcome = try await WorktreeFlowCoordinator.handoffThreadToWorktree(
+                            threadID: thread.id,
+                            sourceProjectPath: gitWorkingDirectory,
+                            associatedWorktreePath: result.worktreePath,
+                            codex: codex
+                        )
+
+                        if case .moved(let move) = outcome {
+                            isShowingWorktreeHandoff = false
+                            viewModel.refreshGitBranchTargets(
+                                codex: codex,
+                                workingDirectory: move.projectPath,
+                                threadID: thread.id
+                            )
+                        }
+                    } catch {
+                        viewModel.gitSyncAlert = TurnGitSyncAlert(
+                            title: "Worktree Handoff Failed",
+                            message: error.localizedDescription.isEmpty
+                                ? "Could not hand off the thread to the new worktree."
+                                : error.localizedDescription,
+                            action: .dismissOnly
+                        )
+                    }
+                }
             }
-        }
+        )
     }
 
     // Forks the current conversation into the Local checkout when possible.
@@ -946,42 +1001,54 @@ struct TurnView: View {
         }
     }
 
-    // Creates a fresh clean detached worktree inside the coordinator, then forks the conversation into it.
+    // Creates a named worktree, then forks the conversation into that checkout.
     private func submitForkIntoNewWorktree(
+        branchName: String,
         baseBranch: String,
         gitWorkingDirectory: String?,
         activeTurnID: String?
     ) {
-        guard activeTurnID == nil,
-              !codex.runningThreadIDs.contains(thread.id),
-              !viewModel.isRunningGitAction,
-              !viewModel.isSwitchingGitBranch,
-              !viewModel.isCreatingGitWorktree,
-              !isForkingThread else { return }
+        viewModel.requestCreateGitWorktree(
+            named: branchName,
+            fromBaseBranch: baseBranch,
+            changeTransfer: .none,
+            codex: codex,
+            workingDirectory: gitWorkingDirectory,
+            threadID: thread.id,
+            activeTurnID: activeTurnID,
+            onOpenWorktree: { result in
+                guard !result.alreadyExisted else {
+                    viewModel.gitSyncAlert = TurnGitSyncAlert(
+                        title: "Branch Already Exists",
+                        message: "A worktree for '\(result.branch)' already exists. Choose a different name.",
+                        action: .dismissOnly
+                    )
+                    return
+                }
 
-        isForkingThread = true
-        Task { @MainActor in
-            defer { isForkingThread = false }
+                isForkingThread = true
+                Task { @MainActor in
+                    defer { isForkingThread = false }
 
-            do {
-                let forkedThread = try await WorktreeFlowCoordinator.forkThreadToWorktree(
-                    sourceThreadId: thread.id,
-                    sourceProjectPath: gitWorkingDirectory,
-                    baseBranch: baseBranch,
-                    codex: codex
-                )
-                isShowingForkWorktree = false
-                openThread(forkedThread.id)
-            } catch {
-                viewModel.gitSyncAlert = TurnGitSyncAlert(
-                    title: "Worktree Fork Failed",
-                    message: error.localizedDescription.isEmpty
-                        ? "Could not fork the thread into the new worktree."
-                        : error.localizedDescription,
-                    action: .dismissOnly
-                )
+                    do {
+                        let forkedThread = try await codex.forkThreadIfReady(
+                            from: thread.id,
+                            target: .projectPath(result.worktreePath)
+                        )
+                        isShowingForkWorktree = false
+                        openThread(forkedThread.id)
+                    } catch {
+                        viewModel.gitSyncAlert = TurnGitSyncAlert(
+                            title: "Worktree Fork Failed",
+                            message: error.localizedDescription.isEmpty
+                                ? "Could not fork the thread into the new worktree."
+                                : error.localizedDescription,
+                            action: .dismissOnly
+                        )
+                    }
+                }
             }
-        }
+        )
     }
 
     // Re-resolves the thread at action time so follow-up chats inherit the freshest cwd after sync/reconnect.
@@ -1591,58 +1658,6 @@ struct TurnView: View {
     }
 }
 
-private struct RuntimeDebugLogSheet: View {
-    @Environment(CodexService.self) private var codex
-    @Environment(\.dismiss) private var dismiss
-
-    private var combinedLogText: String {
-        codex.runtimeDebugLogEntries.joined(separator: "\n")
-    }
-
-    var body: some View {
-        NavigationStack {
-            Group {
-                if codex.runtimeDebugLogEntries.isEmpty {
-                    ContentUnavailableView(
-                        "No Runtime Logs Yet",
-                        systemImage: "list.bullet.rectangle",
-                        description: Text("Start a Plan Mode turn and the RPC events will appear here.")
-                    )
-                } else {
-                    ScrollView {
-                        Text(combinedLogText)
-                            .font(AppFont.mono(.footnote))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(16)
-                    }
-                    .background(Color(.systemBackground))
-                }
-            }
-            .navigationTitle("Runtime Logs")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Close") {
-                        dismiss()
-                    }
-                }
-
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button("Clear") {
-                        codex.clearRuntimeDebugLog()
-                    }
-
-                    Button("Copy") {
-                        UIPasteboard.general.string = combinedLogText
-                    }
-                    .disabled(combinedLogText.isEmpty)
-                }
-            }
-        }
-    }
-}
-
 private enum VoiceRecoveryAction: Equatable {
     case reconnect
     case showSetupHelp
@@ -1713,6 +1728,58 @@ private struct CheckedOutElsewhereAlert: Identifiable {
         }
 
         return "'\(branch)' is already checked out in another worktree. Open that chat from the sidebar to continue there."
+    }
+}
+
+private struct RuntimeDebugLogSheet: View {
+    @Environment(CodexService.self) private var codex
+    @Environment(\.dismiss) private var dismiss
+
+    private var combinedLogText: String {
+        codex.runtimeDebugLogEntries.joined(separator: "\n")
+    }
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if codex.runtimeDebugLogEntries.isEmpty {
+                    ContentUnavailableView(
+                        "No Runtime Logs Yet",
+                        systemImage: "list.bullet.rectangle",
+                        description: Text("Start a Plan Mode turn and the RPC events will appear here.")
+                    )
+                } else {
+                    ScrollView {
+                        Text(combinedLogText)
+                            .font(AppFont.mono(.footnote))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(16)
+                    }
+                    .background(Color(.systemBackground))
+                }
+            }
+            .navigationTitle("Runtime Logs")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Close") {
+                        dismiss()
+                    }
+                }
+
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button("Clear") {
+                        codex.clearRuntimeDebugLog()
+                    }
+
+                    Button("Copy") {
+                        UIPasteboard.general.string = combinedLogText
+                    }
+                    .disabled(combinedLogText.isEmpty)
+                }
+            }
+        }
     }
 }
 

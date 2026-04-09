@@ -203,6 +203,12 @@ final class TurnViewModel {
         return nil
     }
     var canCreatePullRequest: Bool { createPullRequestValidationMessage == nil }
+    var localSelectableGitDefaultBranch: String? {
+        remodexSelectableDefaultBranch(
+            defaultBranch: gitDefaultBranch,
+            availableGitBranchTargets: availableGitBranchTargets
+        )
+    }
     var shouldShowDiscardRuntimeChangesAndSync: Bool {
         guard let sync = gitRepoSync else { return false }
         let dangerousStates = ["dirty", "dirty_and_behind", "diverged"]
@@ -235,6 +241,8 @@ final class TurnViewModel {
     @ObservationIgnored var pendingManagedGitWorktreeOpenHandler: ((GitCreateManagedWorktreeResult) -> Void)?
     @ObservationIgnored private var cachedSkillSearchIndexByRoot: [String: [TurnSkillSearchIndexEntry]] = [:]
     @ObservationIgnored var unsupportedSkillsAutocompleteRoots: Set<String> = []
+    @ObservationIgnored private var dismissedStructuredPlanPromptRequestKeys: Set<String> = []
+    @ObservationIgnored private var dismissingStructuredPlanPromptRequestKeys: Set<String> = []
 
     let maxComposerImages = 4
     let maxFileAutocompleteItems = 6
@@ -918,7 +926,11 @@ final class TurnViewModel {
     }
 
     // Sends a composer payload, queueing follow-ups while the current run is still active.
-    func sendTurn(codex: CodexService, threadID: String) {
+    func sendTurn(
+        codex: CodexService,
+        subscriptions: SubscriptionService? = nil,
+        threadID: String
+    ) {
         let payload = buildPayloadWithMentions()
         let attachments = readyComposerAttachments
         let skillMentions = composerMentionedSkills.map {
@@ -935,6 +947,11 @@ final class TurnViewModel {
 
         if reviewSelection != nil, hasComposerContentConflictingWithReview {
             codex.lastErrorMessage = "Clear text, files, skills, and images before starting a code review."
+            return
+        }
+
+        if let subscriptions, !subscriptions.hasAppAccess {
+            codex.lastErrorMessage = "Your 5 free messages are over. Unlock Remodex Pro to keep chatting."
             return
         }
 
@@ -966,6 +983,7 @@ final class TurnViewModel {
         let threadBusy = isThreadBusy(codex: codex, threadID: threadID)
         let queuePaused = isQueuePaused(codex: codex, threadID: threadID)
 
+        subscriptions?.consumeFreeSendAttemptIfNeeded()
         isSending = true
         Task { @MainActor in
             defer { isSending = false }
@@ -1114,6 +1132,61 @@ final class TurnViewModel {
                 // Error message already stored in CodexService.
             }
         }
+    }
+
+    func dismissStructuredPlanPrompt(_ message: CodexMessage, codex: CodexService, threadID: String) {
+        guard let request = message.structuredUserInputRequest else {
+            return
+        }
+
+        let requestKey = codex.idKey(from: request.requestID)
+        guard !dismissedStructuredPlanPromptRequestKeys.contains(requestKey) else {
+            return
+        }
+        guard dismissingStructuredPlanPromptRequestKeys.insert(requestKey).inserted else {
+            return
+        }
+
+        isPlanModeArmed = false
+        clearComposerAutocomplete()
+
+        Task { @MainActor in
+            defer {
+                dismissingStructuredPlanPromptRequestKeys.remove(requestKey)
+            }
+
+            do {
+                try await codex.cancelStructuredPlanSession(
+                    requestID: request.requestID,
+                    turnId: message.turnId,
+                    threadId: threadID
+                )
+                dismissedStructuredPlanPromptRequestKeys.insert(requestKey)
+            } catch {
+                codex.lastErrorMessage = codex.userFacingTurnErrorMessage(from: error)
+            }
+        }
+    }
+
+    func isStructuredPlanPromptDismissed(_ requestID: JSONValue, codex: CodexService) -> Bool {
+        dismissedStructuredPlanPromptRequestKeys.contains(codex.idKey(from: requestID))
+    }
+
+    func isStructuredPlanPromptDismissing(_ requestID: JSONValue, codex: CodexService) -> Bool {
+        dismissingStructuredPlanPromptRequestKeys.contains(codex.idKey(from: requestID))
+    }
+
+    func reconcileDismissedStructuredPlanPrompts(messages: [CodexMessage], codex: CodexService) {
+        let activeRequestKeys: Set<String> = Set(messages.compactMap { message in
+            guard message.kind == .userInputPrompt,
+                  let request = message.structuredUserInputRequest else {
+                return nil
+            }
+            return codex.idKey(from: request.requestID)
+        })
+
+        dismissedStructuredPlanPromptRequestKeys = dismissedStructuredPlanPromptRequestKeys.intersection(activeRequestKeys)
+        dismissingStructuredPlanPromptRequestKeys = dismissingStructuredPlanPromptRequestKeys.intersection(activeRequestKeys)
     }
 
     func approve(
@@ -1955,7 +2028,7 @@ final class TurnViewModel {
         guard selection.target == .baseBranch else {
             return nil
         }
-        return selectedGitBaseBranch.nilIfEmpty ?? gitDefaultBranch.nilIfEmpty
+        return selectedGitBaseBranch.nilIfEmpty ?? localSelectableGitDefaultBranch
     }
 
     /// Removes the first occurrence of `token` that sits at a word boundary

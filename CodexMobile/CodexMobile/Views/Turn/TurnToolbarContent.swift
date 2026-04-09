@@ -37,7 +37,7 @@ struct TurnToolbarContent: ToolbarContent {
     @Binding var isShowingPathSheet: Bool
 
     var body: some ToolbarContent {
-        let hasTrailingCluster = repoDiffTotals != nil || showsGitActions
+        let hasTrailingCluster = repoDiffTotals != nil
         let isThreadActionLoading = isHandingOffToMac || isStartingNewChat
         let canTapMacHandoff = onTapMacHandoff != nil && !isThreadActionLoading
         let canTapWorktreeHandoff = onTapWorktreeHandoff != nil
@@ -121,24 +121,13 @@ struct TurnToolbarContent: ToolbarContent {
             }
         }
 
-        if repoDiffTotals != nil || showsGitActions {
+        if repoDiffTotals != nil {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 if let repoDiffTotals {
                     TurnToolbarDiffTotalsLabel(
                         totals: repoDiffTotals,
                         isLoading: isLoadingRepoDiff,
                         onTap: onTapRepoDiff
-                    )
-                }
-
-                if showsGitActions {
-                    TurnGitActionsToolbarButton(
-                        isEnabled: isGitActionEnabled,
-                        disabledActions: disabledGitActions,
-                        isRunningAction: isRunningGitAction,
-                        showsDiscardRuntimeChangesAndSync: showsDiscardRuntimeChangesAndSync,
-                        gitSyncState: gitSyncState,
-                        onSelect: onGitAction
                     )
                 }
             }
@@ -238,9 +227,9 @@ private struct TurnToolbarDiffTotalsLabel: View {
                     .controlSize(.mini)
             }
             Text("+\(totals.additions)")
-                .foregroundStyle(.primary)
+                .foregroundStyle(Color.green)
             Text("-\(totals.deletions)")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.red)
             if totals.binaryFiles > 0 {
                 Text("B\(totals.binaryFiles)")
                     .foregroundStyle(.secondary)

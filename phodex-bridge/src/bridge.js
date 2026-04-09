@@ -2,7 +2,7 @@
 // Purpose: Runs Codex locally, bridges relay traffic, and coordinates desktop refreshes for Codex.app.
 // Layer: CLI service
 // Exports: startBridge
-// Depends on: ws, crypto, os, ./qr, ./codex-desktop-refresher, ./codex-transport, ./rollout-watch, ./voice-handler
+// Depends on: ws, crypto, os, ./qr, ./codex-desktop-refresher, ./codex-transport, ./rollout-watch, ./voice-handler, ./ios-app-compatibility
 
 const WebSocket = require("ws");
 const { randomBytes } = require("crypto");
@@ -31,11 +31,18 @@ const { createPushNotificationServiceClient } = require("./push-notification-ser
 const { createPushNotificationTracker } = require("./push-notification-tracker");
 const {
   loadOrCreateBridgeDeviceState,
+  rememberLastSeenPhoneAppVersion,
   resolveBridgeRelaySession,
 } = require("./secure-device-state");
 const { createBridgeSecureTransport } = require("./secure-transport");
 const { createRolloutLiveMirrorController } = require("./rollout-live-mirror");
 const { version: bridgePackageVersion = "" } = require("../package.json");
+const {
+  MINIMUM_SUPPORTED_IOS_APP_VERSION,
+  buildCachedIOSAppCompatibilityWarning,
+  buildIOSAppCompatibilitySnapshot,
+  normalizeVersionString,
+} = require("./ios-app-compatibility");
 
 const RELAY_STABLE_CONNECTION_MS = 15_000;
 const MAX_RELAY_RECONNECT_DELAY_MS = 30_000;
@@ -45,8 +52,6 @@ const RELAY_WATCHDOG_STALE_AFTER_MS = 25_000;
 const BRIDGE_STATUS_HEARTBEAT_INTERVAL_MS = 5_000;
 const STALE_RELAY_STATUS_MESSAGE = "Relay heartbeat stalled; reconnect pending.";
 const RELAY_HISTORY_IMAGE_REFERENCE_URL = "remodex://history-image-elided";
-const MINIMUM_SUPPORTED_IOS_APP_VERSION = "1.3";
-
 function startBridge({
   config: explicitConfig = null,
   printPairingQr = true,
@@ -74,6 +79,12 @@ function startBridge({
   }
   const relaySession = resolveBridgeRelaySession(deviceState);
   deviceState = relaySession.deviceState;
+  let lastIOSAppCompatibilityWarning = "";
+  const cachedIOSAppCompatibilityWarning = buildCachedIOSAppCompatibilityWarning({
+    bridgeVersion: bridgePackageVersion,
+    iosAppVersion: deviceState.lastSeenPhoneAppVersion,
+  });
+  logIOSAppCompatibilityWarning(cachedIOSAppCompatibilityWarning);
   const sessionId = relaySession.sessionId;
   const relaySessionUrl = `${relayBaseUrl}/${sessionId}`;
   const notificationSecret = randomBytes(24).toString("hex");
@@ -921,55 +932,45 @@ function startBridge({
     }
 
     const clientVersion = normalizeVersionString(clientInfo?.version);
-    if (clientVersion && compareNumericVersions(clientVersion, MINIMUM_SUPPORTED_IOS_APP_VERSION) >= 0) {
+    if (clientVersion) {
+      deviceState = rememberLastSeenPhoneAppVersion(deviceState, clientVersion);
+    }
+
+    const compatibility = buildIOSAppCompatibilitySnapshot({
+      bridgeVersion: bridgePackageVersion,
+      iosAppVersion: clientVersion,
+    });
+    if (!compatibility.requiresAppUpdate) {
       return null;
     }
 
-    const message = clientVersion
-      ? `This Mac bridge is running Remodex ${bridgePackageVersion || "latest"}, which requires Remodex iPhone ${MINIMUM_SUPPORTED_IOS_APP_VERSION} or newer. Update the iPhone app, then reconnect.`
-      : `This Mac bridge requires Remodex iPhone ${MINIMUM_SUPPORTED_IOS_APP_VERSION} or newer. Update the iPhone app, then reconnect.`;
+    logIOSAppCompatibilityWarning(buildCachedIOSAppCompatibilityWarning({
+      bridgeVersion: bridgePackageVersion,
+      iosAppVersion: clientVersion,
+    }));
 
     return {
       code: -32001,
-      message,
+      message: compatibility.message,
       data: {
         errorCode: "ios_app_update_required",
         minimumSupportedAppVersion: MINIMUM_SUPPORTED_IOS_APP_VERSION,
         bridgeVersion: normalizeVersionString(bridgePackageVersion) || null,
         clientVersion,
+        compatibleBridgeVersion: compatibility.legacyBridgeVersion,
+        downgradeCommand: compatibility.downgradeCommand,
       },
     };
   }
 
-  function normalizeVersionString(value) {
-    return typeof value === "string" ? value.trim() : "";
-  }
-
-  function compareNumericVersions(left, right) {
-    const leftParts = splitVersionParts(left);
-    const rightParts = splitVersionParts(right);
-    const maxLength = Math.max(leftParts.length, rightParts.length);
-
-    for (let index = 0; index < maxLength; index += 1) {
-      const leftPart = leftParts[index] || 0;
-      const rightPart = rightParts[index] || 0;
-      if (leftPart < rightPart) {
-        return -1;
-      }
-      if (leftPart > rightPart) {
-        return 1;
-      }
+  function logIOSAppCompatibilityWarning(warning) {
+    const normalizedWarning = typeof warning === "string" ? warning.trim() : "";
+    if (!normalizedWarning || normalizedWarning === lastIOSAppCompatibilityWarning) {
+      return;
     }
 
-    return 0;
-  }
-
-  function splitVersionParts(version) {
-    return normalizeVersionString(version)
-      .split(/[^0-9]+/)
-      .filter(Boolean)
-      .map((part) => Number.parseInt(part, 10))
-      .filter((part) => Number.isFinite(part));
+    lastIOSAppCompatibilityWarning = normalizedWarning;
+    console.warn(normalizedWarning);
   }
 
   // Learns whether the underlying Codex transport has already completed its own MCP handshake.
@@ -1302,7 +1303,8 @@ function nextRelayReconnectDelayMs(reconnectAttempt) {
   return Math.min(1_000 * (2 ** (normalizedAttempt - 1)), MAX_RELAY_RECONNECT_DELAY_MS);
 }
 
-// Shrinks `thread/read` and `thread/resume` snapshots by eliding inline image blobs.
+// Shrinks `thread/read` and `thread/resume` snapshots by eliding bulky history payloads
+// that the iPhone does not render directly (inline images, compaction replacement history).
 function sanitizeThreadHistoryImagesForRelay(rawMessage, requestMethod) {
   if (requestMethod !== "thread/read" && requestMethod !== "thread/resume") {
     return rawMessage;
@@ -1322,28 +1324,41 @@ function sanitizeThreadHistoryImagesForRelay(rawMessage, requestMethod) {
 
     let turnDidChange = false;
     const sanitizedItems = turn.items.map((item) => {
-      if (!item || typeof item !== "object" || !Array.isArray(item.content)) {
+      if (!item || typeof item !== "object") {
         return item;
       }
 
       let itemDidChange = false;
-      const sanitizedContent = item.content.map((contentItem) => {
-        const sanitizedEntry = sanitizeInlineHistoryImageContentItem(contentItem);
-        if (sanitizedEntry !== contentItem) {
-          itemDidChange = true;
-        }
-        return sanitizedEntry;
-      });
+      let sanitizedItem = item;
 
-      if (!itemDidChange) {
-        return item;
+      if (Array.isArray(item.content)) {
+        const sanitizedContent = item.content.map((contentItem) => {
+          const sanitizedEntry = sanitizeInlineHistoryImageContentItem(contentItem);
+          if (sanitizedEntry !== contentItem) {
+            itemDidChange = true;
+          }
+          return sanitizedEntry;
+        });
+
+        if (itemDidChange) {
+          sanitizedItem = {
+            ...sanitizedItem,
+            content: sanitizedContent,
+          };
+        }
       }
 
-      turnDidChange = true;
-      return {
-        ...item,
-        content: sanitizedContent,
-      };
+      const sanitizedCompactionItem = sanitizeCompactionHistoryItem(sanitizedItem);
+      if (sanitizedCompactionItem !== sanitizedItem) {
+        sanitizedItem = sanitizedCompactionItem;
+        itemDidChange = true;
+      }
+
+      if (itemDidChange) {
+        turnDidChange = true;
+      }
+
+      return itemDidChange ? sanitizedItem : item;
     });
 
     if (!turnDidChange) {
@@ -1371,6 +1386,48 @@ function sanitizeThreadHistoryImagesForRelay(rawMessage, requestMethod) {
       },
     },
   });
+}
+
+// Drops huge replacement-history blobs from compaction items because the phone only needs
+// the compacted marker itself, not the entire pre-compaction transcript snapshot.
+function sanitizeCompactionHistoryItem(item) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    return item;
+  }
+
+  let sanitizedItem = omitCompactionReplacementHistory(item);
+  const payload = sanitizedItem.payload;
+  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+    const sanitizedPayload = omitCompactionReplacementHistory(payload);
+    if (sanitizedPayload !== payload) {
+      sanitizedItem = {
+        ...sanitizedItem,
+        payload: sanitizedPayload,
+      };
+    }
+  }
+
+  return sanitizedItem;
+}
+
+function omitCompactionReplacementHistory(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+
+  let nextValue = value;
+  let didChange = false;
+  for (const key of ["replacement_history", "replacementHistory"]) {
+    if (Object.prototype.hasOwnProperty.call(nextValue, key)) {
+      if (!didChange) {
+        nextValue = { ...nextValue };
+        didChange = true;
+      }
+      delete nextValue[key];
+    }
+  }
+
+  return didChange ? nextValue : value;
 }
 
 // Converts `data:image/...` history content into a tiny placeholder the iPhone can render safely.
