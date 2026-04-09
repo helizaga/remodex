@@ -11,7 +11,7 @@ function printQR(pairingPayload) {
 
   console.log("\nScan this QR with the iPhone:\n");
   qrcode.generate(payload, { small: true });
-  console.log(`\nSession ID: ${pairingPayload.sessionId}`);
+  console.log("\nPairing token: embedded in QR only");
   console.log(`Device ID: ${pairingPayload.macDeviceId}`);
   console.log(`Expires: ${new Date(pairingPayload.expiresAt).toISOString()}\n`);
 }
