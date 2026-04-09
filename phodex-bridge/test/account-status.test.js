@@ -275,6 +275,35 @@ test("composeSanitizedAuthStatusFromSettledResults keeps authenticated UI state 
   });
 });
 
+test("composeSanitizedAuthStatusFromSettledResults propagates transportMode into codexTransportMode", () => {
+  const status = composeSanitizedAuthStatusFromSettledResults({
+    accountReadResult: {
+      status: "fulfilled",
+      value: {
+        account: {
+          type: "chatgpt",
+          email: "user@example.com",
+        },
+        requiresOpenaiAuth: false,
+      },
+    },
+    authStatusResult: {
+      status: "fulfilled",
+      value: {
+        authMethod: "chatgpt",
+        authToken: "token-value",
+      },
+    },
+    transportMode: "local_relay",
+    bridgeVersionInfo: {
+      bridgeVersion: bridgePackageVersion,
+      bridgeLatestVersion: "9.9.9",
+    },
+  });
+
+  assert.equal(status.codexTransportMode, "local_relay");
+});
+
 test("composeSanitizedAuthStatusFromSettledResults fails when both auth reads fail", () => {
   assert.throws(() => composeSanitizedAuthStatusFromSettledResults({
     accountReadResult: {
