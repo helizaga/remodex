@@ -3,8 +3,21 @@ const assert = require("node:assert/strict");
 
 const {
   createHealthPayload,
+  createLocalRelayServer,
   createStatusPayload,
 } = require("./local-server");
+
+test("createLocalRelayServer defaults to loopback and still allows explicit overrides", () => {
+  const defaultServer = createLocalRelayServer();
+  assert.equal(defaultServer.host, "127.0.0.1");
+  defaultServer.wss.close();
+  defaultServer.server.close();
+
+  const explicitServer = createLocalRelayServer({ host: "0.0.0.0" });
+  assert.equal(explicitServer.host, "0.0.0.0");
+  explicitServer.wss.close();
+  explicitServer.server.close();
+});
 
 test("createHealthPayload keeps the minimal relay health shape", () => {
   assert.deepEqual(

@@ -48,7 +48,7 @@ function createStatusPayload({
 }
 
 function createLocalRelayServer({
-  host = "0.0.0.0",
+  host = "127.0.0.1",
   port = "9000",
 } = {}) {
   const server = http.createServer((req, res) => {
@@ -77,7 +77,7 @@ function createLocalRelayServer({
 
 function main(argv = process.argv.slice(2)) {
   const port = readFlag(argv, "--port", "9000");
-  const host = readFlag(argv, "--host", "0.0.0.0");
+  const host = readFlag(argv, "--host", "127.0.0.1");
   const { server } = createLocalRelayServer({ host, port });
 
   server.listen(Number(port), host, () => {
