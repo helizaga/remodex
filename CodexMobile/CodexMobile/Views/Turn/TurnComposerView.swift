@@ -5,6 +5,7 @@
 // Depends on: SwiftUI, ComposerAttachmentsPreview, FileAutocompletePanel, SkillAutocompletePanel, SlashCommandAutocompletePanel, ComposerBottomBar, QueuedDraftsPanel, FileMentionChip, TurnComposerInputTextView, TurnComposerSecondaryBar
 
 import SwiftUI
+import UIKit
 
 struct TurnComposerView: View {
     @Binding var input: String
@@ -114,7 +115,7 @@ struct TurnComposerView: View {
                 ZStack(alignment: .topLeading) {
                     if input.isEmpty {
                         Text("Ask anything... @files, $skills, /commands")
-                            .font(AppFont.system(size: 15))
+                            .font(AppFont.body())
                             .foregroundStyle(Color(.placeholderText))
                             .allowsHitTesting(false)
                     }
