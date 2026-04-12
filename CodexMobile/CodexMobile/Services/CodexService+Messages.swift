@@ -37,9 +37,58 @@ extension CodexService {
         }
     }
 
+    enum ThreadDisplayPhase: Equatable {
+        case loading
+        case empty
+        case ready
+    }
+
     // Returns the full persisted timeline for a single thread.
     func messages(for threadId: String) -> [CodexMessage] {
         messagesByThread[threadId] ?? []
+    }
+
+    // Centralizes first-open display state so reconnect jitter does not bounce
+    // an existing chat between loading and the empty placeholder.
+    func threadDisplayPhase(threadId: String) -> ThreadDisplayPhase {
+        if !messages(for: threadId).isEmpty || threadHasActiveOrRunningTurn(threadId) {
+            return .ready
+        }
+
+        if shouldSkipInitialDisplayHydration(threadId: threadId)
+            || shouldShowImmediateEmptyPlaceholder(threadId: threadId) {
+            return .empty
+        }
+
+        if loadingThreadIDs.contains(threadId) {
+            return .loading
+        }
+
+        if !hydratedThreadIDs.contains(threadId) {
+            return .loading
+        }
+
+        return .empty
+    }
+
+    // Treats placeholder-only chats as intentionally blank so the UI does not flash
+    // a loading state before the thread-open preparation path can confirm the skip.
+    func shouldShowImmediateEmptyPlaceholder(threadId: String) -> Bool {
+        guard !threadHasActiveOrRunningTurn(threadId),
+              messages(for: threadId).isEmpty,
+              let thread = thread(for: threadId),
+              thread.syncState == .live else {
+            return false
+        }
+
+        let preview = thread.preview?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard preview.isEmpty else {
+            return false
+        }
+
+        // Keep a brand-new blank chat on the empty composer even if a hydration
+        // race briefly toggled the thread into a loading state behind the scenes.
+        return thread.displayTitle == CodexThread.defaultDisplayTitle
     }
 
     // Returns a lightweight per-thread revision token for any message timeline mutation.

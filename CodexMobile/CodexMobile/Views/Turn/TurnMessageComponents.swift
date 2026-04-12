@@ -103,19 +103,34 @@ struct MarkdownTextView: View {
     let text: String
     let profile: MarkdownRenderProfile
     var enablesSelection: Bool = false
+    var constrainsToAvailableWidth: Bool = false
 
     var body: some View {
         let transformed = MarkdownTextFormatter.renderableText(from: text, profile: profile)
         // Keep prose on the app font, but let Textual own markdown/code layout to avoid block sizing regressions.
+        // Force code-block overflow to wrap instead of scroll so horizontal ScrollViews
+        // inside the timeline do not compete with the sidebar swipe gesture or let
+        // the chat feel like a pannable canvas.
         let baseView = StructuredText(transformed, parser: CachingMarkdownParser.shared)
             .font(AppFont.body())
             .textual.structuredTextStyle(.gitHub)
+            .textual.overflowMode(.wrap)
 
-        if enablesSelection {
-            baseView
-                .textual.textSelection(.enabled)
+        let renderedContent = Group {
+            if enablesSelection {
+                baseView
+                    .textual.textSelection(.enabled)
+            } else {
+                baseView
+            }
+        }
+
+        if constrainsToAvailableWidth {
+            renderedContent
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
         } else {
-            baseView
+            renderedContent
         }
     }
 }
@@ -581,7 +596,58 @@ private enum AttachmentPreviewImageResolver {
 
 // ─── Message row ────────────────────────────────────────────────────
 
+private struct UserBubbleTextBlock<Content: View>: View {
+    private static var collapseLineLimit: Int { 10 }
+    private static var collapseCharacterThreshold: Int { 360 }
+    private static var collapseNewlineThreshold: Int { 8 }
+
+    let contentIdentity: String
+    let rawText: String
+    @ViewBuilder let content: () -> Content
+
+    @State private var isExpanded = false
+
+    private var canCollapse: Bool {
+        let newlineCount = rawText.reduce(into: 0) { count, character in
+            if character == "\n" {
+                count += 1
+            }
+        }
+        return rawText.count > Self.collapseCharacterThreshold
+            || newlineCount >= Self.collapseNewlineThreshold
+    }
+
+    private var collapseResetKey: Int {
+        var hasher = Hasher()
+        hasher.combine(contentIdentity)
+        hasher.combine(rawText)
+        return hasher.finalize()
+    }
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            content()
+                .lineLimit(canCollapse ? (isExpanded ? nil : Self.collapseLineLimit) : nil)
+
+            if canCollapse {
+                Button(isExpanded ? "Show less" : "Show more") {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        isExpanded.toggle()
+                    }
+                }
+                .buttonStyle(.plain)
+                .font(AppFont.footnote())
+                .foregroundStyle(.secondary)
+            }
+        }
+        .onChange(of: collapseResetKey) { _, _ in
+            isExpanded = false
+        }
+    }
+}
+
 struct MessageRow: View, Equatable {
+
     let message: CodexMessage
     let isRetryAvailable: Bool
     let onRetryUserMessage: (String) -> Void
@@ -663,8 +729,13 @@ struct MessageRow: View, Equatable {
                 }
 
                 if !text.isEmpty {
-                    userBubbleText(text)
-                        .font(AppFont.body())
+                    UserBubbleTextBlock(
+                        contentIdentity: message.id,
+                        rawText: text
+                    ) {
+                        userBubbleText(text)
+                            .font(AppFont.body())
+                    }
                         .padding(.vertical, 12)
                         .padding(.horizontal, 16)
                         .background {
@@ -896,7 +967,8 @@ struct MessageRow: View, Equatable {
                         MarkdownTextView(
                             text: introText,
                             profile: .assistantProse,
-                            enablesSelection: enablesInlineMarkdownSelectionInTimeline
+                            enablesSelection: enablesInlineMarkdownSelectionInTimeline,
+                            constrainsToAvailableWidth: true
                         )
                     }
 
@@ -917,7 +989,8 @@ struct MessageRow: View, Equatable {
                         MarkdownTextView(
                             text: renderedPlanText,
                             profile: .assistantProse,
-                            enablesSelection: enablesInlineMarkdownSelectionInTimeline
+                            enablesSelection: enablesInlineMarkdownSelectionInTimeline,
+                            constrainsToAvailableWidth: true
                         )
                     }
 
@@ -931,7 +1004,8 @@ struct MessageRow: View, Equatable {
                     MarkdownTextView(
                         text: visibleAssistantText,
                         profile: .assistantProse,
-                        enablesSelection: enablesInlineMarkdownSelectionInTimeline
+                        enablesSelection: enablesInlineMarkdownSelectionInTimeline,
+                        constrainsToAvailableWidth: true
                     )
                 }
             }
@@ -1120,9 +1194,9 @@ struct MessageRow: View, Equatable {
     @State private var isShowingBlockDiffSheet = false
 
     private var hasTurnEndActions: Bool {
-        guard let accessory = assistantBlockAccessoryState else { return false }
-        return accessory.blockRevertPresentation != nil
-            || accessory.blockDiffEntries != nil
+        AssistantTurnEndActionVisibility.shouldShow(
+            accessoryState: assistantBlockAccessoryState
+        )
     }
 
     private var isInlineCommitAndPushRunning: Bool {
@@ -1780,6 +1854,16 @@ struct ToolCallSystemBlockPreviewHost: View {
             )
         }
         .environment(CodexService())
+    }
+}
+
+enum AssistantTurnEndActionVisibility {
+    // Ties Diff/Revert to the block's own streaming state so interrupted and
+    // turn-less recovered rows keep their end-of-turn controls once settled.
+    static func shouldShow(accessoryState: AssistantBlockAccessoryState?) -> Bool {
+        guard let accessoryState, !accessoryState.showsRunningIndicator else { return false }
+        return accessoryState.blockRevertPresentation != nil
+            || accessoryState.blockDiffEntries != nil
     }
 }
 

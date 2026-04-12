@@ -37,6 +37,7 @@ struct TurnView: View {
     @State private var isVoicePreflighting = false
     @State private var voicePreflightGeneration = 0
     @State private var isVoiceTranscribing = false
+    @State private var hasTriggeredVoiceAutoStop = false
     @State private var voiceRecoveryReason: CodexVoiceFailureReason?
     @State private var isShowingVoiceSetupSheet = false
     @StateObject private var voiceTranscriptionManager = GPTVoiceTranscriptionManager()
@@ -51,6 +52,10 @@ struct TurnView: View {
         let gitWorkingDirectory = resolvedThread.gitWorkingDirectory
         let isThreadRunning = renderSnapshot.isThreadRunning
         let isEmptyThread = renderSnapshot.messages.isEmpty
+        let threadDisplayPhase = codex.threadDisplayPhase(threadId: thread.id)
+        // Keep the service-owned loading vs empty-state decision intact while
+        // history hydration catches up for previously active conversations.
+        let resolvedEmptyConversationState = resolvedEmptyState(for: threadDisplayPhase)
         let showsGitControls = codex.isConnected && gitWorkingDirectory != nil
         let isWorktreeProject = resolvedThread.isManagedWorktreeProject
         let isComposerAutocompletePresented = viewModel.isFileAutocompleteVisible
@@ -64,6 +69,25 @@ struct TurnView: View {
             isThreadRunning: isThreadRunning,
             gitWorkingDirectory: gitWorkingDirectory
         )
+        let toolbarNavigationContext = threadNavigationContext(for: resolvedThread)
+        let toolbarWorktreeHandoffTitle = isWorktreeProject ? "Hand off to Local" : "Hand off to Worktree"
+        let isGitActionEnabled = canRunGitAction(
+            isThreadRunning: isThreadRunning,
+            gitWorkingDirectory: gitWorkingDirectory
+        )
+        let disabledGitActions: Set<TurnGitActionKind> = viewModel.canCreatePullRequest ? [] : [.createPR]
+        let onTapMacHandoff: (() -> Void)? = codex.isConnected ? {
+            isShowingMacHandoffConfirm = true
+        } : nil
+        let onTapWorktreeHandoff: (() -> Void)? = showsGitControls ? {
+            handleWorktreeHandoffTap(currentThread: resolvedThread)
+        } : nil
+        let onTapNewChat: (() -> Void)? = codex.isConnected && !isWorktreeProject ? {
+            startSiblingChat()
+        } : nil
+        let onTapRepoDiff: (() -> Void)? = showsGitControls ? {
+            presentRepositoryDiff(workingDirectory: gitWorkingDirectory)
+        } : nil
 
         return TurnConversationContainerView(
                 threadID: thread.id,
@@ -84,7 +108,7 @@ struct TurnView: View {
                 isScrolledToBottom: isScrolledToBottomBinding,
                 isComposerFocused: isInputFocused,
                 isComposerAutocompletePresented: isComposerAutocompletePresented,
-                emptyState: AnyView(emptyState),
+                emptyState: resolvedEmptyConversationState,
                 composer: AnyView(composerWithSubagentAccessory(
                     currentThread: resolvedThread,
                     activeTurnID: activeTurnID,
@@ -129,36 +153,25 @@ struct TurnView: View {
         .toolbar {
             TurnToolbarContent(
                 displayTitle: resolvedThread.displayTitle,
-                navigationContext: threadNavigationContext(for: resolvedThread),
+                navigationContext: toolbarNavigationContext,
                 showsThreadActions: codex.isConnected,
                 isHandingOffToMac: isHandingOffToMac,
                 isStartingNewChat: isStartingSiblingChat,
                 canHandOffToWorktree: canHandOffToWorktree,
-                worktreeHandoffTitle: isWorktreeProject ? "Hand off to Local" : "Hand off to Worktree",
+                worktreeHandoffTitle: toolbarWorktreeHandoffTitle,
                 isCreatingGitWorktree: viewModel.isCreatingGitWorktree,
                 repoDiffTotals: viewModel.gitRepoSync?.repoDiffTotals,
                 isLoadingRepoDiff: isLoadingRepositoryDiff,
                 showsGitActions: showsGitControls,
-                isGitActionEnabled: canRunGitAction(
-                    isThreadRunning: isThreadRunning,
-                    gitWorkingDirectory: gitWorkingDirectory
-                ),
-                disabledGitActions: viewModel.canCreatePullRequest ? [] : [.createPR],
+                isGitActionEnabled: isGitActionEnabled,
+                disabledGitActions: disabledGitActions,
                 isRunningGitAction: viewModel.isRunningGitAction,
                 showsDiscardRuntimeChangesAndSync: viewModel.shouldShowDiscardRuntimeChangesAndSync,
                 gitSyncState: viewModel.gitSyncState,
-                onTapMacHandoff: codex.isConnected ? {
-                    isShowingMacHandoffConfirm = true
-                } : nil,
-                onTapWorktreeHandoff: showsGitControls ? {
-                    handleWorktreeHandoffTap(currentThread: resolvedThread)
-                } : nil,
-                onTapNewChat: codex.isConnected && !isWorktreeProject ? {
-                    startSiblingChat()
-                } : nil,
-                onTapRepoDiff: showsGitControls ? {
-                    presentRepositoryDiff(workingDirectory: gitWorkingDirectory)
-                } : nil,
+                onTapMacHandoff: onTapMacHandoff,
+                onTapWorktreeHandoff: onTapWorktreeHandoff,
+                onTapNewChat: onTapNewChat,
+                onTapRepoDiff: onTapRepoDiff,
                 onGitAction: { action in
                     handleGitActionSelection(
                         action,
@@ -301,6 +314,19 @@ struct TurnView: View {
         }
         .onChange(of: renderSnapshot.timelineChangeToken) { _, _ in
             viewModel.reconcileDismissedStructuredPlanPrompts(messages: renderSnapshot.messages, codex: codex)
+        }
+        .onReceive(voiceTranscriptionManager.$recordingDuration) { duration in
+            guard isVoiceRecording,
+                  !isVoiceTranscribing,
+                  !hasTriggeredVoiceAutoStop,
+                  duration >= voiceAutoStopThreshold else {
+                return
+            }
+
+            hasTriggeredVoiceAutoStop = true
+            Task { @MainActor in
+                await stopVoiceTranscription()
+            }
         }
         .sheet(isPresented: $isShowingThreadPathSheet) {
             if let context = threadNavigationContext(for: resolvedThread) {
@@ -1367,6 +1393,7 @@ struct TurnView: View {
 
     // Stops the recorder, transcribes through the bridge, and appends the final text into the draft.
     private func stopVoiceTranscription() async {
+        hasTriggeredVoiceAutoStop = false
         isVoiceTranscribing = true
         defer { isVoiceTranscribing = false }
 
@@ -1417,6 +1444,7 @@ struct TurnView: View {
 
         clearVoiceRecovery()
         codex.lastErrorMessage = nil
+        hasTriggeredVoiceAutoStop = false
         // Dismiss any active text focus before recording so the keyboard does not
         // compete with the waveform UI or waste vertical space during capture.
         isInputFocused = false
@@ -1453,6 +1481,12 @@ struct TurnView: View {
 
         voiceTranscriptionManager.cancelRecording()
         isVoiceRecording = false
+        hasTriggeredVoiceAutoStop = false
+    }
+
+    // Trigger a hair before the hard validation limit so the saved WAV never misses by timer drift.
+    private var voiceAutoStopThreshold: TimeInterval {
+        max(0, CodexVoiceTranscriptionPreflight.maxDurationSeconds - 0.25)
     }
 
     private func clearVoiceRecovery() {
@@ -1632,11 +1666,35 @@ struct TurnView: View {
     private func openThread(_ threadId: String) {
         codex.activeThreadId = threadId
         codex.markThreadAsViewed(threadId)
+        codex.requestImmediateActiveThreadSync(threadId: threadId)
     }
 
     // MARK: - Empty State
 
+    private var loadingState: some View {
+        chatPlaceholderState(
+            title: "Loading chat...",
+            subtitle: "Fetching the latest messages for this conversation."
+        )
+    }
+
+    private func resolvedEmptyState(for phase: CodexService.ThreadDisplayPhase) -> AnyView {
+        switch phase {
+        case .loading:
+            return AnyView(loadingState)
+        case .empty, .ready:
+            return AnyView(emptyState)
+        }
+    }
+
     private var emptyState: some View {
+        chatPlaceholderState(
+            title: "Hi! How can I help you?",
+            subtitle: "Chats are End-to-end encrypted"
+        )
+    }
+
+    private func chatPlaceholderState(title: String, subtitle: String) -> some View {
         VStack(spacing: 12) {
             Spacer()
             Image("AppLogo")
@@ -1645,12 +1703,13 @@ struct TurnView: View {
                 .frame(width: 56, height: 56)
                 .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .adaptiveGlass(in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            Text("Hi! How can I help you?")
+            Text(title)
                 .font(AppFont.title2(weight: .semibold))
-            // Reinforces the secure transport upgrade right where a new chat starts.
-            Text("Chats are End-to-end encrypted")
+            Text(subtitle)
                 .font(AppFont.caption())
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 28)
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

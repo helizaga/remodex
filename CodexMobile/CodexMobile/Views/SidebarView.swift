@@ -13,8 +13,11 @@ struct SidebarView: View {
     @Binding var selectedThread: CodexThread?
     @Binding var showSettings: Bool
     @Binding var isSearchActive: Bool
+    var showsInlineCloseButton: Bool = false
+    var isVisible: Bool = true
 
     let onClose: () -> Void
+    let onOpenThread: (CodexThread) -> Void
 
     @State private var searchText = ""
     @State private var isCreatingThread = false
@@ -26,14 +29,19 @@ struct SidebarView: View {
     @State private var cachedDiffTotals: [String: TurnSessionDiffTotals] = [:]
     @State private var cachedDiffRevisionByThreadID: [String: Int] = [:]
     @State private var cachedRunBadges: [String: CodexThreadRunBadgeState] = [:]
+    @State private var lastGroupedThreadsFingerprint: Int = 0
     @State private var lastDiffFingerprint: Int = 0
     @State private var lastBadgeFingerprint: Int = 0
+    @State private var sidebarDebugSequence = 0
 
     var body: some View {
         let diffTotalsByThreadID = cachedDiffTotals
 
         VStack(alignment: .leading, spacing: 0) {
-            SidebarHeaderView()
+            SidebarHeaderView(
+                showsCloseButton: showsInlineCloseButton,
+                onClose: onClose
+            )
 
             SidebarSearchField(text: $searchText, isActive: $isSearchActive)
                 .padding(.horizontal, 16)
@@ -105,6 +113,7 @@ struct SidebarView: View {
         .frame(maxHeight: .infinity)
         .background(Color(.systemBackground))
         .task {
+            debugSidebarLog("task start visible=\(isVisible) threadCount=\(codex.threads.count)")
             rebuildGroupedThreads()
             rebuildCachedSidebarState()
             if codex.isConnected, codex.threads.isEmpty {
@@ -112,17 +121,27 @@ struct SidebarView: View {
             }
         }
         .onChange(of: codex.threads) { _, _ in
+            debugSidebarLog(
+                "threads changed while \(isVisible ? "visible" : "hidden-prewarmed") "
+                    + "threadCount=\(codex.threads.count)"
+            )
             rebuildGroupedThreads()
             rebuildCachedSidebarState()
         }
         .onChange(of: searchText) { _, _ in
+            debugSidebarLog("search changed queryLength=\(searchText.count)")
             rebuildGroupedThreads()
         }
         .onChange(of: diffFingerprint) { _, _ in
+            debugSidebarLog("diff fingerprint changed visible=\(isVisible)")
             rebuildCachedDiffTotals()
         }
         .onChange(of: badgeFingerprint) { _, _ in
+            debugSidebarLog("badge fingerprint changed visible=\(isVisible)")
             rebuildCachedRunBadges()
+        }
+        .onChange(of: isVisible) { _, visible in
+            debugSidebarLog("visibility changed visible=\(visible)")
         }
         .overlay {
             if SidebarThreadsLoadingPresentation.shouldShowOverlay(
@@ -206,9 +225,19 @@ struct SidebarView: View {
 
     private func refreshThreads() async {
         guard codex.isConnected else { return }
+        let startedAt = Date()
+        debugSidebarLog("refreshThreads start threadCount=\(codex.threads.count)")
         do {
             try await codex.listThreads()
+            debugSidebarLog(
+                "refreshThreads success durationMs=\(Int(Date().timeIntervalSince(startedAt) * 1000)) "
+                    + "threadCount=\(codex.threads.count)"
+            )
         } catch {
+            debugSidebarLog(
+                "refreshThreads failed durationMs=\(Int(Date().timeIntervalSince(startedAt) * 1000)) "
+                    + "error=\(error.localizedDescription)"
+            )
             // Error stored in CodexService.
         }
     }
@@ -234,8 +263,7 @@ struct SidebarView: View {
                     preferredProjectPath: preferredProjectPath,
                     codex: codex
                 )
-                selectedThread = thread
-                onClose()
+                onOpenThread(thread)
             } catch {
                 let message = error.localizedDescription
                 codex.lastErrorMessage = message
@@ -255,8 +283,7 @@ struct SidebarView: View {
                     preferredProjectPath: preferredProjectPath,
                     codex: codex
                 )
-                selectedThread = thread
-                onClose()
+                onOpenThread(thread)
             } catch {
                 let message = error.localizedDescription
                 codex.lastErrorMessage = message
@@ -266,11 +293,9 @@ struct SidebarView: View {
     }
 
     private func selectThread(_ thread: CodexThread) {
+        debugSidebarLog("selectThread id=\(thread.id) title=\(thread.displayTitle)")
         searchText = ""
-        codex.activeThreadId = thread.id
-        codex.markThreadAsViewed(thread.id)
-        selectedThread = thread
-        onClose()
+        onOpenThread(thread)
     }
 
     private func openSettings() {
@@ -301,6 +326,7 @@ struct SidebarView: View {
 
     // Rebuilds sidebar sections only when the source thread array changes.
     private func rebuildGroupedThreads() {
+        let startedAt = Date()
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let source: [CodexThread]
         if query.isEmpty {
@@ -311,7 +337,23 @@ struct SidebarView: View {
                 || $0.projectDisplayName.localizedCaseInsensitiveContains(query)
             }
         }
+        let fingerprint = groupingFingerprint(query: query, source: source)
+        guard fingerprint != lastGroupedThreadsFingerprint else { return }
+        lastGroupedThreadsFingerprint = fingerprint
         groupedThreads = SidebarThreadGrouping.makeGroups(from: source)
+        debugSidebarLog(
+            "rebuildGroupedThreads durationMs=\(Int(Date().timeIntervalSince(startedAt) * 1000)) "
+                + "queryLength=\(query.count) sourceCount=\(source.count) groupCount=\(groupedThreads.count)"
+        )
+    }
+
+    private func groupingFingerprint(query: String, source: [CodexThread]) -> Int {
+        var hasher = Hasher()
+        hasher.combine(query)
+        for thread in source {
+            hasher.combine(thread)
+        }
+        return hasher.finalize()
     }
 
     // Cheap fingerprint: hashes thread IDs + message revisions (O(n) integer work, no message access).
@@ -338,15 +380,24 @@ struct SidebarView: View {
     }
 
     private func rebuildCachedSidebarState() {
+        let startedAt = Date()
         rebuildCachedDiffTotals()
         rebuildCachedRunBadges()
+        debugSidebarLog(
+            "rebuildCachedSidebarState durationMs=\(Int(Date().timeIntervalSince(startedAt) * 1000)) "
+                + "diffTotals=\(cachedDiffTotals.count) runBadges=\(cachedRunBadges.count)"
+        )
     }
 
     private func rebuildCachedDiffTotals() {
         let fp = diffFingerprint
         guard fp != lastDiffFingerprint else { return }
         // Keep streaming smooth: diff totals are sidebar-only and can wait until active runs settle.
-        guard !codex.hasAnyRunningTurn else { return }
+        guard !codex.hasAnyRunningTurn else {
+            debugSidebarLog("rebuildCachedDiffTotals skipped runningTurn=true")
+            return
+        }
+        let startedAt = Date()
         lastDiffFingerprint = fp
 
         let currentThreadIDs = Set(codex.threads.map(\.id))
@@ -364,11 +415,16 @@ struct SidebarView: View {
             )
             cachedDiffRevisionByThreadID[thread.id] = revision
         }
+        debugSidebarLog(
+            "rebuildCachedDiffTotals durationMs=\(Int(Date().timeIntervalSince(startedAt) * 1000)) "
+                + "threadCount=\(codex.threads.count) cached=\(cachedDiffTotals.count)"
+        )
     }
 
     private func rebuildCachedRunBadges() {
         let fp = badgeFingerprint
         guard fp != lastBadgeFingerprint else { return }
+        let startedAt = Date()
         lastBadgeFingerprint = fp
 
         var byThreadID: [String: CodexThreadRunBadgeState] = [:]
@@ -378,6 +434,10 @@ struct SidebarView: View {
             }
         }
         cachedRunBadges = byThreadID
+        debugSidebarLog(
+            "rebuildCachedRunBadges durationMs=\(Int(Date().timeIntervalSince(startedAt) * 1000)) "
+                + "threadCount=\(codex.threads.count) cached=\(cachedRunBadges.count)"
+        )
     }
 
     // Keeps the chooser in sync with the same project buckets shown in the sidebar.
@@ -387,6 +447,11 @@ struct SidebarView: View {
 
     private var canCreateThread: Bool {
         codex.isConnected && codex.isInitialized
+    }
+
+    private func debugSidebarLog(_ message: String) {
+        sidebarDebugSequence += 1
+        print("[SidebarData] #\(sidebarDebugSequence) \(message)")
     }
 }
 
