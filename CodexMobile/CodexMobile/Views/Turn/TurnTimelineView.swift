@@ -1176,22 +1176,12 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
             )
 
             // Aggregate file-change entries across the block for the turn-end Diff button.
-            let fileChangeMessages = messages[blockStart...blockEnd].filter {
+            let fileChangeMessages = Array(messages[blockStart...blockEnd].filter {
                 $0.role == .system && $0.kind == .fileChange && !$0.isStreaming
-            }
-            let blockDiffEntries: [TurnFileChangeSummaryEntry]? = fileChangeMessages.isEmpty ? nil : {
-                var allEntries: [TurnFileChangeSummaryEntry] = []
-                for msg in fileChangeMessages {
-                    if let parsed = TurnFileChangeSummaryParser.parse(from: msg.text) {
-                        allEntries.append(contentsOf: parsed.entries)
-                    }
-                }
-                return allEntries.isEmpty ? nil : allEntries
-            }()
-            let blockDiffText: String? = fileChangeMessages.isEmpty ? nil :
-                fileChangeMessages.map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
-                    .filter { !$0.isEmpty }
-                    .joined(separator: "\n\n")
+            })
+            let blockDiffPresentation = FileChangeBlockPresentationBuilder.build(from: fileChangeMessages)
+            let blockDiffText = blockDiffPresentation?.bodyText
+            let blockDiffEntries = blockDiffPresentation?.entries
 
             // Use the last assistant revert presentation in this block.
             let blockRevert = messages[blockStart...blockEnd]

@@ -42,6 +42,24 @@ test("readBridgeConfig keeps safe defaults and explicit overrides", () => {
     platform: "darwin",
     ...commonPackagedArgs,
   });
+  const persistedKeepAwakeConfig = readBridgeConfig({
+    env: {
+      REMODEX_DEVICE_STATE_DIR: "/tmp/remodex-state",
+    },
+    platform: "darwin",
+    runtimeRoot: "/tmp/remodex-package",
+    fsImpl: {
+      existsSync(targetPath) {
+        return targetPath === "/tmp/remodex-state/daemon-config.json";
+      },
+      readFileSync(targetPath) {
+        if (targetPath === "/tmp/remodex-state/daemon-config.json") {
+          return JSON.stringify({ keepMacAwakeEnabled: false });
+        }
+        throw new Error("unexpected read");
+      },
+    },
+  });
   const macEndpointConfig = readBridgeConfig({
     env: { REMODEX_CODEX_ENDPOINT: "ws://localhost:8080" },
     platform: "darwin",
@@ -69,6 +87,7 @@ test("readBridgeConfig keeps safe defaults and explicit overrides", () => {
     env: {
       REMODEX_REFRESH_COMMAND: "echo refresh",
       REMODEX_REFRESH_ENABLED: "false",
+      REMODEX_KEEP_MAC_AWAKE: "false",
     },
     platform: "darwin",
     ...commonPackagedArgs,
@@ -89,11 +108,13 @@ test("readBridgeConfig keeps safe defaults and explicit overrides", () => {
   });
 
   assert.equal(macConfig.refreshEnabled, false);
+  assert.equal(macConfig.keepMacAwakeEnabled, true);
   assert.equal(macConfig.relayUrl, "");
   assert.equal(macConfig.pushServiceUrl, "");
   assert.equal(macConfig.pairingTtlMs, 30 * 60 * 1000);
   assert.equal(macConfig.resetRelaySession, false);
   assert.equal(explicitRelayConfig.relayUrl, "ws://127.0.0.1:9000/relay");
+  assert.equal(persistedKeepAwakeConfig.keepMacAwakeEnabled, false);
   assert.equal(macEndpointConfig.refreshEnabled, false);
   assert.equal(linuxConfig.refreshEnabled, false);
   assert.equal(linuxCommandConfig.refreshEnabled, false);
@@ -101,6 +122,7 @@ test("readBridgeConfig keeps safe defaults and explicit overrides", () => {
   assert.equal(explicitOffConfig.refreshEnabled, false);
   assert.equal(customPairingTtlConfig.pairingTtlMs, 2_700_000);
   assert.equal(resetSessionConfig.resetRelaySession, true);
+  assert.equal(explicitOffConfig.keepMacAwakeEnabled, false);
 });
 
 test("readBridgeConfig uses only the packaged relay default outside a source checkout", () => {

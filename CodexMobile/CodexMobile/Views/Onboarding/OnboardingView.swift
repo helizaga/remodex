@@ -42,7 +42,8 @@ struct OnboardingView: View {
                         icon: "link",
                         title: "Start the Local Bridge",
                         description: "From this fork's repo root on your Mac, run the local-first launcher so the bridge and relay come up together.",
-                        command: localBridgeCommand
+                        command: localBridgeCommand,
+                        commandCaption: "Remodex uses macOS caffeinate by default while the bridge is running so your Mac stays reachable even if the display turns off. You can change this later in Settings."
                     )
                     .tag(3)
 

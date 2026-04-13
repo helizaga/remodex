@@ -19,7 +19,6 @@ struct TurnComposerInputTextView: UIViewRepresentable {
 
     private let minVisibleLines: CGFloat = 1
     private let maxVisibleLines: CGFloat = 4
-
     func makeUIView(context: Context) -> TurnComposerPasteInterceptingTextView {
         let textView = TurnComposerPasteInterceptingTextView(frame: .zero, textContainer: nil)
         textView.delegate = context.coordinator
@@ -71,6 +70,7 @@ struct TurnComposerInputTextView: UIViewRepresentable {
         uiView.typingAttributes[.font] = composerUIFont()
         uiView.typingAttributes[.foregroundColor] = UIColor.label
         uiView.adjustsFontForContentSizeCategory = true
+        uiView.textContainerInset = .zero
         uiView.textContainer.widthTracksTextView = true
         // Preserve internal scrolling without letting composer drags dismiss the keyboard.
         uiView.keyboardDismissMode = .none

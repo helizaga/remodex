@@ -291,3 +291,97 @@ test("desktop/continueOnMac refuses non-mac platforms", async () => {
   assert.equal(responses[0].id, "request-3");
   assert.equal(responses[0].error?.data?.errorCode, "unsupported_platform");
 });
+
+test("desktop/wakeDisplay sends a stronger caffeinate display wake pulse", async () => {
+  const executorCalls = [];
+  const responses = [];
+
+  handleDesktopRequest(JSON.stringify({
+    id: "request-4",
+    method: "desktop/wakeDisplay",
+    params: {},
+  }), (response) => {
+    responses.push(JSON.parse(response));
+  }, {
+    platform: "darwin",
+    executor: async (...args) => {
+      executorCalls.push(args);
+      return { stdout: "", stderr: "" };
+    },
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(executorCalls.length, 1);
+  assert.equal(executorCalls[0][0], "/usr/bin/caffeinate");
+  assert.deepEqual(executorCalls[0][1], ["-d", "-u", "-t", "30"]);
+  assert.deepEqual(responses, [{
+    id: "request-4",
+    result: {
+      success: true,
+      durationSeconds: 30,
+    },
+  }]);
+});
+
+test("desktop/preferences/update forwards bridge preference changes", async () => {
+  const responses = [];
+  const updates = [];
+
+  handleDesktopRequest(JSON.stringify({
+    id: "request-5",
+    method: "desktop/preferences/update",
+    params: {
+      keepMacAwake: false,
+    },
+  }), (response) => {
+    responses.push(JSON.parse(response));
+  }, {
+    platform: "darwin",
+    updateBridgePreferences(nextPreferences) {
+      updates.push(nextPreferences);
+      return {
+        success: true,
+        preferences: nextPreferences,
+        applied: false,
+      };
+    },
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(updates, [{
+    keepMacAwake: false,
+  }]);
+  assert.deepEqual(responses, [{
+    id: "request-5",
+    result: {
+      success: true,
+      preferences: {
+        keepMacAwake: false,
+      },
+      applied: false,
+    },
+  }]);
+});
+
+test("desktop/preferences/update rejects invalid bridge preference payloads", async () => {
+  const responses = [];
+
+  handleDesktopRequest(JSON.stringify({
+    id: "request-6",
+    method: "desktop/preferences/update",
+    params: {},
+  }), (response) => {
+    responses.push(JSON.parse(response));
+  }, {
+    platform: "darwin",
+    updateBridgePreferences() {
+      throw new Error("should not be called");
+    },
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(responses[0].error?.data?.errorCode, "invalid_bridge_preferences");
+});

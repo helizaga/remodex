@@ -1,11 +1,12 @@
 // FILE: QRScannerView.swift
-// Purpose: AVFoundation camera-based QR scanner for relay session pairing.
+// Purpose: AVFoundation pairing screen dedicated to camera-based QR scans.
 // Layer: View
 // Exports: QRScannerView
 // Depends on: SwiftUI, AVFoundation
 
 import AVFoundation
 import SwiftUI
+import UIKit
 
 struct QRScannerView: View {
     let onBack: (() -> Void)?
@@ -51,6 +52,7 @@ struct QRScannerView: View {
             } else {
                 cameraPermissionView
             }
+
         }
         .safeAreaInset(edge: .top) {
             if let onBack {
@@ -65,7 +67,7 @@ struct QRScannerView: View {
         .task {
             await checkCameraPermission()
         }
-        .alert("Scan Error", isPresented: Binding(
+        .alert("Pairing Error", isPresented: Binding(
             get: { scannerError != nil },
             set: { if !$0 { scannerError = nil } }
         )) {
@@ -210,7 +212,7 @@ struct QRScannerView: View {
                 .stroke(Color.white.opacity(0.6), lineWidth: 2)
                 .frame(width: 250, height: 250)
 
-            Text("Scan QR code from Remodex CLI")
+            Text("Scan the Remodex QR code")
                 .font(AppFont.subheadline(weight: .medium))
                 .foregroundStyle(.white)
 
@@ -270,6 +272,9 @@ struct QRScannerView: View {
         switch validatePairingQRCode(code) {
         case .success(let payload):
             onScan(payload)
+        case .shortCode:
+            scannerError = "Use Pair with Code from the previous screen."
+            resetScanLock()
         case .scanError(let message):
             scannerError = message
             resetScanLock()
