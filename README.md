@@ -123,11 +123,21 @@ If you do not know your Team ID yet, run the script without arguments and it wil
 That command creates a local `CodexMobile/BuildSupport/PrivateOverrides.xcconfig` with:
 
 - your Apple Team ID
-- a local app bundle identifier
+- a team-scoped local app bundle identifier
 - matching test bundle identifiers
-- a local auth callback URL scheme so your source build does not collide with another installed Remodex build
+- a team-scoped local auth callback URL scheme so your source build does not collide with another installed Remodex build
 
 ### 4. Install the app on iPhone
+
+Preferred:
+
+```sh
+./scripts/install-ios-on-device.sh
+```
+
+That wrapper builds `CodexMobile` for the first connected iPhone, installs it, launches it, and automatically handles the common case where iOS rejects the install because an older copy of the same bundle ID was signed under a different team.
+
+Manual fallback:
 
 1. Connect the iPhone to the Mac with a cable for first install.
 2. In Xcode, choose the `CodexMobile` scheme and your actual iPhone as the run destination.

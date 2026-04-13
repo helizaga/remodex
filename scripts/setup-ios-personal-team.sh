@@ -67,21 +67,23 @@ if [[ ! "$TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]; then
 fi
 
 DEFAULT_SLUG="$(sanitize_slug "${USER:-local}")"
-DEFAULT_BUNDLE_ID="com.${DEFAULT_SLUG}.remodex.local"
+TEAM_SUFFIX="$(printf '%s' "$TEAM_ID" | tr '[:upper:]' '[:lower:]')"
+DEFAULT_BUNDLE_ID="com.${DEFAULT_SLUG}.remodex.${TEAM_SUFFIX}.local"
 BUNDLE_ID="${BUNDLE_ID:-$DEFAULT_BUNDLE_ID}"
 BUNDLE_ID="$(prompt_if_empty "Bundle identifier [$BUNDLE_ID]: " "$BUNDLE_ID")"
 if [[ ! "$BUNDLE_ID" =~ ^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$ ]]; then
   echo "[setup-ios] invalid bundle identifier: $BUNDLE_ID" >&2
-  echo "[setup-ios] expected reverse-DNS style, for example com.tommy.remodex.local." >&2
+  echo "[setup-ios] expected reverse-DNS style, for example com.tommy.remodex.p5m598f2h6.local." >&2
   exit 1
 fi
 
-DEFAULT_CALLBACK_SCHEME="phodex-$(sanitize_slug "${BUNDLE_ID##*.}")"
+DEFAULT_CALLBACK_SUFFIX="$(sanitize_slug "$BUNDLE_ID" | sed -E 's/^com-//; s/-local$//')"
+DEFAULT_CALLBACK_SCHEME="phodex-${DEFAULT_CALLBACK_SUFFIX}"
 CALLBACK_SCHEME="${CALLBACK_SCHEME:-$DEFAULT_CALLBACK_SCHEME}"
 CALLBACK_SCHEME="$(prompt_if_empty "Callback URL scheme [$CALLBACK_SCHEME]: " "$CALLBACK_SCHEME")"
 if [[ ! "$CALLBACK_SCHEME" =~ ^[A-Za-z][A-Za-z0-9.+-]*$ ]]; then
   echo "[setup-ios] invalid callback scheme: $CALLBACK_SCHEME" >&2
-  echo "[setup-ios] expected something like phodex-local or phodex-tommy." >&2
+  echo "[setup-ios] expected something like phodex-tommy-remodex-p5m598f2h6." >&2
   exit 1
 fi
 
@@ -103,6 +105,7 @@ PHODEX_DEFAULT_RELAY_URL =
 EOF
 
 echo "[setup-ios] wrote $OVERRIDES_PATH"
+echo "[setup-ios] team id: $TEAM_ID"
 echo "[setup-ios] app bundle id: $BUNDLE_ID"
 echo "[setup-ios] callback scheme: $CALLBACK_SCHEME"
 echo
