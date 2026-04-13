@@ -54,6 +54,9 @@ const RELAY_WATCHDOG_STALE_AFTER_MS = 25_000;
 const BRIDGE_STATUS_HEARTBEAT_INTERVAL_MS = 5_000;
 const STALE_RELAY_STATUS_MESSAGE = "Relay heartbeat stalled; reconnect pending.";
 const RELAY_HISTORY_IMAGE_REFERENCE_URL = "remodex://history-image-elided";
+// Leave headroom under the iPhone websocket frame ceiling so thread reopen snapshots
+// do not fail once secure-envelope overhead is added on top of the JSON payload.
+const RELAY_HISTORY_SOFT_CAP_BYTES = 12 * 1024 * 1024;
 function startBridge({
   config: explicitConfig = null,
   printPairingQr = true,
@@ -1462,7 +1465,13 @@ function nextRelayReconnectDelayMs(reconnectAttempt) {
 
 // Shrinks `thread/read` and `thread/resume` snapshots by eliding bulky history payloads
 // that the iPhone does not render directly (inline images, compaction replacement history).
-function sanitizeThreadHistoryImagesForRelay(rawMessage, requestMethod) {
+function sanitizeThreadHistoryImagesForRelay(
+  rawMessage,
+  requestMethod,
+  {
+    softCapBytes = RELAY_HISTORY_SOFT_CAP_BYTES,
+  } = {}
+) {
   if (requestMethod !== "thread/read" && requestMethod !== "thread/resume") {
     return rawMessage;
   }
@@ -1473,123 +1482,107 @@ function sanitizeThreadHistoryImagesForRelay(rawMessage, requestMethod) {
     return rawMessage;
   }
 
-  let didSanitize = false;
-  const sanitizedTurns = thread.turns.map((turn) => {
-    if (!turn || typeof turn !== "object" || !Array.isArray(turn.items)) {
-      return turn;
-    }
+  const recursivelySanitized = sanitizeRelayThreadHistoryNode(thread);
+  const firstPassThread = recursivelySanitized.didChange
+    ? recursivelySanitized.value
+    : thread;
 
-    let turnDidChange = false;
-    const sanitizedItems = turn.items.map((item) => {
-      if (!item || typeof item !== "object") {
-        return item;
-      }
-
-      let itemDidChange = false;
-      let sanitizedItem = item;
-
-      if (Array.isArray(item.content)) {
-        const sanitizedContent = item.content.map((contentItem) => {
-          const sanitizedEntry = sanitizeInlineHistoryImageContentItem(contentItem);
-          if (sanitizedEntry !== contentItem) {
-            itemDidChange = true;
-          }
-          return sanitizedEntry;
-        });
-
-        if (itemDidChange) {
-          sanitizedItem = {
-            ...sanitizedItem,
-            content: sanitizedContent,
-          };
-        }
-      }
-
-      const sanitizedCompactionItem = sanitizeCompactionHistoryItem(sanitizedItem);
-      if (sanitizedCompactionItem !== sanitizedItem) {
-        sanitizedItem = sanitizedCompactionItem;
-        itemDidChange = true;
-      }
-
-      if (itemDidChange) {
-        turnDidChange = true;
-      }
-
-      return itemDidChange ? sanitizedItem : item;
-    });
-
-    if (!turnDidChange) {
-      return turn;
-    }
-
-    didSanitize = true;
-    return {
-      ...turn,
-      items: sanitizedItems,
-    };
+  const serialized = JSON.stringify({
+    ...parsed,
+    result: {
+      ...parsed.result,
+      thread: {
+        ...firstPassThread,
+      },
+    },
   });
 
-  if (!didSanitize) {
-    return rawMessage;
+  if (Buffer.byteLength(serialized, "utf8") <= softCapBytes) {
+    return recursivelySanitized.didChange ? serialized : rawMessage;
+  }
+
+  const aggressivelySanitized = stripRelayHistoryAttachmentPreviews(firstPassThread);
+  if (!aggressivelySanitized.didChange) {
+    return recursivelySanitized.didChange ? serialized : rawMessage;
   }
 
   return JSON.stringify({
     ...parsed,
     result: {
       ...parsed.result,
-      thread: {
-        ...thread,
-        turns: sanitizedTurns,
-      },
+      thread: aggressivelySanitized.value,
     },
   });
 }
 
-// Drops huge replacement-history blobs from compaction items because the phone only needs
-// the compacted marker itself, not the entire pre-compaction transcript snapshot.
-function sanitizeCompactionHistoryItem(item) {
-  if (!item || typeof item !== "object" || Array.isArray(item)) {
-    return item;
-  }
-
-  let sanitizedItem = omitCompactionReplacementHistory(item);
-  const payload = sanitizedItem.payload;
-  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-    const sanitizedPayload = omitCompactionReplacementHistory(payload);
-    if (sanitizedPayload !== payload) {
-      sanitizedItem = {
-        ...sanitizedItem,
-        payload: sanitizedPayload,
-      };
-    }
-  }
-
-  return sanitizedItem;
-}
-
-function omitCompactionReplacementHistory(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return value;
-  }
-
-  let nextValue = value;
-  let didChange = false;
-  for (const key of ["replacement_history", "replacementHistory"]) {
-    if (Object.prototype.hasOwnProperty.call(nextValue, key)) {
-      if (!didChange) {
-        nextValue = { ...nextValue };
+function sanitizeRelayThreadHistoryNode(value, key = "") {
+  if (Array.isArray(value)) {
+    let didChange = false;
+    const nextArray = value.map((entry) => {
+      const sanitized = sanitizeRelayThreadHistoryNode(entry, key);
+      if (sanitized.didChange) {
         didChange = true;
       }
-      delete nextValue[key];
-    }
+      return sanitized.value;
+    });
+    return {
+      value: didChange ? nextArray : value,
+      didChange,
+    };
   }
 
-  return didChange ? nextValue : value;
+  if (!value || typeof value !== "object") {
+    return {
+      value,
+      didChange: false,
+    };
+  }
+
+  const sanitizedInlineHistoryImage = sanitizeInlineHistoryImageContentItem(value);
+  if (sanitizedInlineHistoryImage !== value) {
+    return {
+      value: sanitizedInlineHistoryImage,
+      didChange: true,
+    };
+  }
+
+  let didChange = false;
+  const nextObject = {};
+  for (const [entryKey, entryValue] of Object.entries(value)) {
+    if (entryKey === "replacement_history" || entryKey === "replacementHistory") {
+      didChange = true;
+      continue;
+    }
+
+    if (isInlineHistoryImageDataURL(entryValue)) {
+      const replacement = replacementForInlineHistoryImageEntry(entryKey);
+      if (replacement === undefined) {
+        didChange = true;
+        continue;
+      }
+      if (replacement !== entryValue) {
+        didChange = true;
+      }
+      nextObject[entryKey] = replacement;
+      continue;
+    }
+
+    const sanitizedChild = sanitizeRelayThreadHistoryNode(entryValue, entryKey);
+    if (sanitizedChild.didChange) {
+      didChange = true;
+    }
+    nextObject[entryKey] = sanitizedChild.value;
+  }
+
+  return {
+    value: didChange ? nextObject : value,
+    didChange,
+  };
 }
 
 // Converts `data:image/...` history content into a tiny placeholder the iPhone can render safely.
 function sanitizeInlineHistoryImageContentItem(contentItem) {
-  if (!contentItem || typeof contentItem !== "object") {
+  if (!contentItem || typeof contentItem !== "object" || Array.isArray(contentItem)) {
     return contentItem;
   }
 
@@ -1616,6 +1609,70 @@ function sanitizeInlineHistoryImageContentItem(contentItem) {
     ...rest,
     url: RELAY_HISTORY_IMAGE_REFERENCE_URL,
   };
+}
+
+function replacementForInlineHistoryImageEntry(key) {
+  switch (key) {
+    case "payloadDataURL":
+    case "payloadDataUrl":
+    case "payload_data_url":
+      return undefined;
+    default:
+      return RELAY_HISTORY_IMAGE_REFERENCE_URL;
+  }
+}
+
+function stripRelayHistoryAttachmentPreviews(value) {
+  if (Array.isArray(value)) {
+    let didChange = false;
+    const nextArray = value.map((entry) => {
+      const sanitized = stripRelayHistoryAttachmentPreviews(entry);
+      if (sanitized.didChange) {
+        didChange = true;
+      }
+      return sanitized.value;
+    });
+    return {
+      value: didChange ? nextArray : value,
+      didChange,
+    };
+  }
+
+  if (!value || typeof value !== "object") {
+    return {
+      value,
+      didChange: false,
+    };
+  }
+
+  let didChange = false;
+  const nextObject = {};
+  for (const [entryKey, entryValue] of Object.entries(value)) {
+    if (isRelayAttachmentPreviewKey(entryKey) && typeof entryValue === "string" && entryValue.length > 0) {
+      nextObject[entryKey] = "";
+      didChange = true;
+      continue;
+    }
+
+    const sanitizedChild = stripRelayHistoryAttachmentPreviews(entryValue);
+    if (sanitizedChild.didChange) {
+      didChange = true;
+    }
+    nextObject[entryKey] = sanitizedChild.value;
+  }
+
+  return {
+    value: didChange ? nextObject : value,
+    didChange,
+  };
+}
+
+function isRelayAttachmentPreviewKey(key) {
+  return key === "thumbnailBase64JPEG"
+    || key === "thumbnailBase64Jpeg"
+    || key === "thumbnail_base64_jpeg"
+    || key === "thumbnailBase64"
+    || key === "thumbnail_base64";
 }
 
 function normalizeRelayHistoryContentType(value) {

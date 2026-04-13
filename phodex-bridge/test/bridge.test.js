@@ -355,3 +355,76 @@ test("sanitizeThreadHistoryImagesForRelay strips bulky compaction replacement hi
     type: "contextCompaction",
   });
 });
+
+test("sanitizeThreadHistoryImagesForRelay recursively elides inline image payload fields outside content arrays", () => {
+  const rawMessage = JSON.stringify({
+    id: "req-thread-read-recursive",
+    result: {
+      thread: {
+        id: "thread-recursive-images",
+        turns: [
+          {
+            id: "turn-1",
+            items: [
+              {
+                id: "item-recursive-image",
+                type: "user_message",
+                attachment: {
+                  sourceURL: "data:image/png;base64,AAAA",
+                  payloadDataURL: "data:image/png;base64,BBBB",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    },
+  });
+
+  const sanitized = JSON.parse(
+    sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/read")
+  );
+  const attachment = sanitized.result.thread.turns[0].items[0].attachment;
+
+  assert.deepEqual(attachment, {
+    sourceURL: "remodex://history-image-elided",
+  });
+});
+
+test("sanitizeThreadHistoryImagesForRelay strips attachment previews once the sanitized thread is still too large", () => {
+  const rawMessage = JSON.stringify({
+    id: "req-thread-read-soft-cap",
+    result: {
+      thread: {
+        id: "thread-soft-cap",
+        turns: [
+          {
+            id: "turn-1",
+            items: [
+              {
+                id: "item-attachment-preview",
+                type: "user_message",
+                attachment: {
+                  thumbnailBase64JPEG: "A".repeat(10_000),
+                  sourceURL: "https://example.com/image.png",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    },
+  });
+
+  const sanitized = JSON.parse(
+    sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/read", {
+      softCapBytes: 1_000,
+    })
+  );
+  const attachment = sanitized.result.thread.turns[0].items[0].attachment;
+
+  assert.deepEqual(attachment, {
+    thumbnailBase64JPEG: "",
+    sourceURL: "https://example.com/image.png",
+  });
+});
