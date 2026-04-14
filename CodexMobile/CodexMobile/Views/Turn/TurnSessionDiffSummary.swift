@@ -22,10 +22,10 @@ enum TurnSessionDiffScope {
 }
 
 enum TurnSessionDiffResetMarker {
-    static let manualPushItemID = "git.push.reset.marker"
+    nonisolated static let manualPushItemID = "git.push.reset.marker"
 
     // Creates the hidden payload persisted after a successful manual push.
-    static func text(branch: String, remote: String?) -> String {
+    nonisolated static func text(branch: String, remote: String?) -> String {
         let normalizedBranch = branch.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedRemote = remote?.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -39,7 +39,7 @@ enum TurnSessionDiffResetMarker {
     }
 
     // Keeps reset detection stable across persisted hidden markers and legacy visible messages.
-    static func isResetMessage(_ message: CodexMessage) -> Bool {
+    nonisolated static func isResetMessage(_ message: CodexMessage) -> Bool {
         guard message.role == .system else { return false }
         if message.itemId == manualPushItemID {
             return true

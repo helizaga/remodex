@@ -70,7 +70,10 @@ final class ContentViewModelReconnectTests: XCTestCase {
         let reconnectURL = await viewModel.preferredReconnectURL(codex: service)
 
         XCTAssertNil(reconnectURL)
-        XCTAssertEqual(service.lastErrorMessage, "Reconnect is unavailable because the Mac is offline.")
+        XCTAssertEqual(
+            service.lastErrorMessage,
+            "Reconnect could not find your Mac's live session. Wake the screen or try reconnecting."
+        )
     }
 
     func testForegroundReconnectKeepsRetryIntentArmedAfterRetryableFailures() async {

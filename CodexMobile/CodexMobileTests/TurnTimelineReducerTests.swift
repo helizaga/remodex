@@ -1606,7 +1606,7 @@ final class TurnTimelineReducerTests: XCTestCase {
             stoppedTurnIDs: []
         )
 
-        XCTAssertEqual(blockInfo, ["Completed response"])
+        XCTAssertEqual(blockInfo[0]?.copyText, "Completed response")
     }
 
     func testAssistantBlockInfoHidesCopyWhenLatestRunStopped() {
@@ -1631,7 +1631,7 @@ final class TurnTimelineReducerTests: XCTestCase {
             stoppedTurnIDs: ["turn-1"]
         )
 
-        XCTAssertEqual(blockInfo, [nil])
+        XCTAssertNil(blockInfo[0])
     }
 
     func testAssistantBlockInfoDeduplicatesEquivalentSingleFileDiffSnapshots() {

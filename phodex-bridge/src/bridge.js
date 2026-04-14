@@ -1487,30 +1487,41 @@ function sanitizeThreadHistoryImagesForRelay(
     ? recursivelySanitized.value
     : thread;
 
-  const serialized = JSON.stringify({
-    ...parsed,
-    result: {
-      ...parsed.result,
-      thread: {
-        ...firstPassThread,
-      },
-    },
-  });
+  const serialized = serializeRelayThreadResponse(parsed, firstPassThread);
 
   if (Buffer.byteLength(serialized, "utf8") <= softCapBytes) {
     return recursivelySanitized.didChange ? serialized : rawMessage;
   }
 
   const aggressivelySanitized = stripRelayHistoryAttachmentPreviews(firstPassThread);
-  if (!aggressivelySanitized.didChange) {
-    return recursivelySanitized.didChange ? serialized : rawMessage;
+  const aggressivelySanitizedThread = aggressivelySanitized.didChange
+    ? aggressivelySanitized.value
+    : firstPassThread;
+  const aggressivelySerialized = serializeRelayThreadResponse(parsed, aggressivelySanitizedThread);
+  if (Buffer.byteLength(aggressivelySerialized, "utf8") <= softCapBytes) {
+    return aggressivelySerialized;
   }
 
+  const truncatedThread = truncateRelayThreadHistoryForSoftCap(
+    parsed,
+    aggressivelySanitizedThread,
+    softCapBytes
+  );
+  if (truncatedThread) {
+    return serializeRelayThreadResponse(parsed, truncatedThread);
+  }
+
+  return aggressivelySerialized;
+}
+
+function serializeRelayThreadResponse(parsed, thread) {
   return JSON.stringify({
     ...parsed,
     result: {
       ...parsed.result,
-      thread: aggressivelySanitized.value,
+      thread: {
+        ...thread,
+      },
     },
   });
 }
@@ -1665,6 +1676,65 @@ function stripRelayHistoryAttachmentPreviews(value) {
     value: didChange ? nextObject : value,
     didChange,
   };
+}
+
+function truncateRelayThreadHistoryForSoftCap(parsed, thread, softCapBytes) {
+  const turns = Array.isArray(thread?.turns) ? thread.turns : null;
+  if (!turns || turns.length === 0) {
+    return null;
+  }
+
+  let workingTurns = turns.slice();
+  let removedTurns = 0;
+  let removedItems = 0;
+
+  const buildThread = () => ({
+    ...thread,
+    turns: workingTurns,
+    relayHistoryTruncated: true,
+    relayHistoryDroppedTurns: removedTurns,
+    relayHistoryDroppedItems: removedItems,
+  });
+
+  while (workingTurns.length > 1) {
+    workingTurns = workingTurns.slice(1);
+    removedTurns += 1;
+    const candidate = buildThread();
+    if (Buffer.byteLength(serializeRelayThreadResponse(parsed, candidate), "utf8") <= softCapBytes) {
+      return candidate;
+    }
+  }
+
+  const remainingTurn = workingTurns[0];
+  const items = Array.isArray(remainingTurn?.items) ? remainingTurn.items : null;
+  if (items && items.length > 1) {
+    let workingItems = items.slice();
+    while (workingItems.length > 1) {
+      workingItems = workingItems.slice(1);
+      removedItems += 1;
+      workingTurns = [{
+        ...remainingTurn,
+        items: workingItems,
+      }];
+      const candidate = buildThread();
+      if (Buffer.byteLength(serializeRelayThreadResponse(parsed, candidate), "utf8") <= softCapBytes) {
+        return candidate;
+      }
+    }
+  }
+
+  const emptyHistoryThread = {
+    ...thread,
+    turns: [],
+    relayHistoryTruncated: true,
+    relayHistoryDroppedTurns: turns.length,
+    relayHistoryDroppedItems: removedItems,
+  };
+  if (Buffer.byteLength(serializeRelayThreadResponse(parsed, emptyHistoryThread), "utf8") <= softCapBytes) {
+    return emptyHistoryThread;
+  }
+
+  return null;
 }
 
 function isRelayAttachmentPreviewKey(key) {

@@ -7,17 +7,11 @@
 import Foundation
 import UIKit
 
-private enum RunningThreadHistoryCatchupPolicy {
-    // Running-thread reopen only needs the latest transcript tail to catch up the UI.
-    static let recentMergeWindow = 160
-    static let cancellationCheckInterval = 32
-}
-
 extension CodexService {
     nonisolated static func shouldPreferRecentHistoryWindow(
         existingCount: Int,
         historyCount: Int,
-        windowSize: Int = RunningThreadHistoryCatchupPolicy.recentMergeWindow
+        windowSize: Int = 160
     ) -> Bool {
         let normalizedWindowSize = max(1, windowSize)
         guard existingCount > normalizedWindowSize,
@@ -45,7 +39,7 @@ extension CodexService {
                     history,
                     activeThreadIDs: activeThreadIDs,
                     runningThreadIDs: runningThreadIDs,
-                    windowSize: RunningThreadHistoryCatchupPolicy.recentMergeWindow
+                    windowSize: 160
                 )
             }
 
@@ -449,7 +443,7 @@ extension CodexService {
 
         for message in history {
             processedHistoryMessages &+= 1
-            if processedHistoryMessages.isMultiple(of: RunningThreadHistoryCatchupPolicy.cancellationCheckInterval),
+            if processedHistoryMessages.isMultiple(of: 32),
                Task.isCancelled {
                 throw CancellationError()
             }
@@ -574,11 +568,11 @@ extension CodexService {
             if message.role == .system,
                message.kind == .fileChange,
                let turnId = message.turnId, !turnId.isEmpty,
-               let index = merged.lastIndex(where: { candidate in
-                   candidate.role == .system
-                       && candidate.kind == .fileChange
-                       && (candidate.turnId == nil || candidate.turnId == turnId)
-               }) {
+               let index = uniqueFileChangeHistoryMergeIndex(
+                   in: merged,
+                   message: message,
+                   turnId: turnId
+               ) {
                 merged[index] = reconcileExistingMessage(merged[index], with: message, activeThreadIDs: activeThreadIDs, runningThreadIDs: runningThreadIDs)
                 continue
             }
@@ -814,6 +808,13 @@ extension CodexService {
                     && serverItemId != nil
                     && !hasStableToolActivityIdentity(localItemId)
                     && localItemId != serverItemId
+            )
+            || (
+                value.role == .system
+                    && value.kind == .fileChange
+                    && serverItemId != nil
+                    && !hasStableFileChangeIdentity(localItemId)
+                    && localItemId != serverItemId
             ) {
             value.itemId = serverItemId
         }
@@ -908,6 +909,102 @@ extension CodexService {
         return localLines.starts(with: serverLines) || serverLines.starts(with: localLines)
     }
 
+    nonisolated static func uniqueFileChangeHistoryMergeIndex(
+        in merged: [CodexMessage],
+        message: CodexMessage,
+        turnId: String
+    ) -> Int? {
+        let matchingIndices = merged.indices.filter { index in
+            shouldReconcileFileChangeHistoryMessage(
+                merged[index],
+                with: message,
+                turnId: turnId
+            )
+        }
+
+        guard matchingIndices.count == 1 else {
+            return nil
+        }
+
+        return matchingIndices[0]
+    }
+
+    nonisolated static func shouldReconcileFileChangeHistoryMessage(
+        _ candidate: CodexMessage,
+        with message: CodexMessage,
+        turnId: String
+    ) -> Bool {
+        guard candidate.role == .system,
+              candidate.kind == .fileChange else {
+            return false
+        }
+
+        let candidateTurnId = normalizedHistoryIdentifier(candidate.turnId)
+        guard candidateTurnId == nil || candidateTurnId == turnId else {
+            return false
+        }
+
+        let candidateItemId = normalizedHistoryIdentifier(candidate.itemId)
+        let incomingItemId = normalizedHistoryIdentifier(message.itemId)
+        if let candidateItemId, let incomingItemId {
+            return candidateItemId == incomingItemId
+        }
+
+        if let candidateKey = normalizedFileChangeHistoryKey(for: candidate),
+           let incomingKey = normalizedFileChangeHistoryKey(for: message),
+           candidateKey == incomingKey {
+            return true
+        }
+
+        let candidatePaths = normalizedFileChangeHistoryPaths(from: candidate.text)
+        let incomingPaths = normalizedFileChangeHistoryPaths(from: message.text)
+        if !candidatePaths.isEmpty,
+           !incomingPaths.isEmpty,
+           !candidatePaths.isDisjoint(with: incomingPaths) {
+            return true
+        }
+
+        return !hasStableFileChangeIdentity(candidateItemId)
+            && isProvisionalFileChangeHistoryRow(candidate)
+    }
+
+    nonisolated static func normalizedFileChangeHistoryKey(for message: CodexMessage) -> String? {
+        let trimmedText = normalizedMessageText(message.text)
+        guard !trimmedText.isEmpty else {
+            return nil
+        }
+
+        return TurnFileChangeSummaryParser.dedupeKey(from: trimmedText) ?? trimmedText
+    }
+
+    nonisolated static func normalizedFileChangeHistoryPaths(from text: String) -> Set<String> {
+        let entries = TurnFileChangeSummaryParser.parse(from: text)?.entries ?? []
+        return Set(
+            entries
+                .map { entry in
+                    entry.path.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                }
+                .filter { !$0.isEmpty }
+        )
+    }
+
+    nonisolated static func hasStableFileChangeIdentity(_ value: String?) -> Bool {
+        guard let value else {
+            return false
+        }
+        return !(value.hasPrefix("turn:") && value.contains("|kind:\(CodexMessageKind.fileChange.rawValue)"))
+    }
+
+    nonisolated static func isProvisionalFileChangeHistoryRow(_ message: CodexMessage) -> Bool {
+        let normalizedText = normalizedMessageText(message.text)
+        if normalizedText.isEmpty || normalizedText == "Applying file changes..." {
+            return true
+        }
+
+        return normalizedFileChangeHistoryKey(for: message) == nil
+            && normalizedFileChangeHistoryPaths(from: message.text).isEmpty
+    }
+
     nonisolated static func hasStableToolActivityIdentity(_ value: String?) -> Bool {
         guard let value else {
             return false
@@ -989,7 +1086,7 @@ extension CodexService {
 
     nonisolated static func attachmentSignature(for attachments: [CodexImageAttachment]) -> String {
         attachments
-            .map(\.stableIdentityKey)
+            .map { $0.stableIdentityKey }
             .joined(separator: "|")
     }
 

@@ -41,7 +41,7 @@ Remodex uses the relay as a transport hop, not as a trusted application server.
 flowchart TD
     A[Mac bridge starts] --> B[Bridge creates sessionId and notification secret]
     B --> C[Bridge prints QR with relay URL, sessionId, bridge identity key, expiry]
-    B --> D[Mac opens WebSocket to /relay/{sessionId}<br/>x-role: mac]
+    B --> D[Mac opens WebSocket to /relay/{sessionId}<br/>x-role: mac + x-notification-secret]
     D --> E[Relay creates in-memory session room]
     D --> E2[Relay records macDeviceId plus trusted phone metadata for live-session resolve]
 
@@ -71,7 +71,7 @@ flowchart TD
     U --> V[Push registration/completion endpoints only work while live Mac session exists]
 
     D --> W{Mac reconnects?}
-    W -- Yes --> X[Relay replaces older Mac socket<br/>4001 to old connection]
+    W -- Yes --> X[Relay verifies session secret and only replaces the same Mac device<br/>4001 to old connection]
     G --> Y{iPhone reconnects?}
     Y -- Yes --> Z[Relay replaces older iPhone socket<br/>4003 to old connection]
 
@@ -93,10 +93,12 @@ flowchart TD
 
 - WebSocket path: `/relay/{sessionId}`
 - required header: `x-role: mac` or `x-role: iphone`
+- additional required Mac header: `x-notification-secret`
 - close code `4000`: invalid session or role
 - close code `4001`: previous Mac connection replaced
 - close code `4002`: session unavailable / Mac disconnected
 - close code `4003`: previous iPhone connection replaced
+- close code `4005`: Mac session authentication failed
 
 Optional HTTP endpoints:
 

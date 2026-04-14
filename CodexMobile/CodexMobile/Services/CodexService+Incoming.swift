@@ -28,11 +28,11 @@ enum WireMessagePreDecoder {
         let rpcResult: Result?
     }
 
-    private static let secureKindValues = [
+    private nonisolated static let secureKindValues = [
         "\"serverHello\"", "\"secureReady\"", "\"secureError\"", "\"encryptedEnvelope\""
     ]
 
-    static func decodeRPCMessage(from text: String) -> Result {
+    nonisolated static func decodeRPCMessage(from text: String) -> Result {
         guard let data = text.data(using: .utf8) else { return .invalidUTF8 }
         do {
             let message = try JSONDecoder().decode(RPCMessage.self, from: data)
@@ -42,7 +42,7 @@ enum WireMessagePreDecoder {
         }
     }
 
-    static func classify(_ text: String) -> Classification {
+    nonisolated static func classify(_ text: String) -> Classification {
         if text.contains("\"kind\":") {
             for value in secureKindValues {
                 if text.contains(value) {

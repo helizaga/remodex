@@ -11,6 +11,7 @@ const HEARTBEAT_INTERVAL_MS = 30_000;
 const CLOSE_CODE_SESSION_UNAVAILABLE = 4002;
 const CLOSE_CODE_IPHONE_REPLACED = 4003;
 const CLOSE_CODE_MAC_ABSENCE_BUFFER_FULL = 4004;
+const CLOSE_CODE_MAC_AUTH_FAILED = 4005;
 const MAC_ABSENCE_GRACE_MS = 15_000;
 const TRUSTED_SESSION_RESOLVE_TAG = "remodex-trusted-session-resolve-v1";
 const TRUSTED_SESSION_RESOLVE_SKEW_MS = 90_000;
@@ -51,9 +52,20 @@ function setupRelay(
     const match = urlPath.match(/^\/relay\/([^/?]+)/);
     const sessionId = match?.[1];
     const role = req.headers["x-role"];
+    const incomingNotificationSecret = role === "mac"
+      ? readHeaderString(req.headers["x-notification-secret"])
+      : null;
+    const incomingMacRegistration = role === "mac"
+      ? readMacRegistrationHeaders(req.headers, sessionId)
+      : null;
 
     if (!sessionId || (role !== "mac" && role !== "iphone")) {
       ws.close(4000, "Missing sessionId or invalid x-role header");
+      return;
+    }
+
+    if (role === "mac" && !incomingNotificationSecret) {
+      ws.close(4000, "Missing x-notification-secret header");
       return;
     }
 
@@ -87,18 +99,30 @@ function setupRelay(
       return;
     }
 
+    if (role === "mac" && !canAcceptMacConnection(session, {
+      notificationSecret: incomingNotificationSecret,
+      macRegistration: incomingMacRegistration,
+    })) {
+      ws.close(CLOSE_CODE_MAC_AUTH_FAILED, "Mac session authentication failed");
+      return;
+    }
+
     if (session.cleanupTimer) {
       clearTimeoutFn(session.cleanupTimer);
       session.cleanupTimer = null;
     }
 
     if (role === "mac") {
-      retireOtherMacSessions(sessionId, { setTimeoutFn, clearTimeoutFn });
+      retireOtherMacSessions(
+        sessionId,
+        incomingMacRegistration?.macDeviceId,
+        { setTimeoutFn, clearTimeoutFn }
+      );
       clearMacAbsenceTimer(session, { clearTimeoutFn });
       // The relay keeps a per-session push secret so first-time device registration
       // cannot be claimed by someone who only knows the session id.
-      session.notificationSecret = readHeaderString(req.headers["x-notification-secret"]);
-      session.macRegistration = readMacRegistrationHeaders(req.headers, sessionId);
+      session.notificationSecret = incomingNotificationSecret;
+      session.macRegistration = incomingMacRegistration;
       if (session.mac && session.mac.readyState === WebSocket.OPEN) {
         session.mac.close(4001, "Replaced by new Mac connection");
       }
@@ -267,6 +291,46 @@ function canAcceptIphoneConnection(session) {
   // Lets the phone rejoin the same relay session while the Mac is still inside
   // the temporary-absence grace window instead of forcing a full disconnect flow.
   return Boolean(session.macAbsenceTimer);
+}
+
+function canAcceptMacConnection(
+  session,
+  {
+    notificationSecret,
+    macRegistration,
+  } = {}
+) {
+  if (!session || !notificationSecret) {
+    return false;
+  }
+
+  const existingNotificationSecret = normalizeNonEmptyString(session.notificationSecret);
+  if (existingNotificationSecret && existingNotificationSecret !== notificationSecret) {
+    return false;
+  }
+
+  const existingRegistration = session.macRegistration;
+  if (!existingRegistration || !macRegistration) {
+    return true;
+  }
+
+  if (
+    existingRegistration.macDeviceId
+    && macRegistration.macDeviceId
+    && existingRegistration.macDeviceId !== macRegistration.macDeviceId
+  ) {
+    return false;
+  }
+
+  if (
+    existingRegistration.macIdentityPublicKey
+    && macRegistration.macIdentityPublicKey
+    && existingRegistration.macIdentityPublicKey !== macRegistration.macIdentityPublicKey
+  ) {
+    return false;
+  }
+
+  return true;
 }
 
 function closeSessionClients(session, code, reason) {
@@ -480,18 +544,24 @@ function pruneSessionState(session, sessionId = "") {
 
 function retireOtherMacSessions(
   activeSessionId,
+  activeMacDeviceId,
   {
     setTimeoutFn = setTimeout,
     clearTimeoutFn = clearTimeout,
   } = {}
 ) {
+  const normalizedMacDeviceId = normalizeNonEmptyString(activeMacDeviceId);
+  if (!normalizedMacDeviceId) {
+    return;
+  }
+
   for (const [sessionId, session] of sessions.entries()) {
     if (sessionId === activeSessionId) {
       continue;
     }
 
     pruneSessionState(session, sessionId);
-    if (!session.mac) {
+    if (!session.mac || session.macRegistration?.macDeviceId !== normalizedMacDeviceId) {
       continue;
     }
 
@@ -712,6 +782,7 @@ function resetRelayStateForTests() {
   }
   sessions.clear();
   liveSessionsByMacDeviceId.clear();
+  liveSessionsByPairingCode.clear();
   usedResolveNonces.clear();
 }
 

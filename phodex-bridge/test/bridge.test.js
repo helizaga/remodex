@@ -428,3 +428,60 @@ test("sanitizeThreadHistoryImagesForRelay strips attachment previews once the sa
     sourceURL: "https://example.com/image.png",
   });
 });
+
+test("sanitizeThreadHistoryImagesForRelay drops oldest turns once sanitizing still exceeds the relay budget", () => {
+  const oversizedText = "x".repeat(4_096);
+  const rawMessage = JSON.stringify({
+    id: "req-thread-read-truncated",
+    result: {
+      thread: {
+        id: "thread-large-history",
+        turns: [
+          {
+            id: "turn-1",
+            items: [
+              {
+                id: "item-1",
+                type: "assistant_message",
+                text: oversizedText,
+              },
+            ],
+          },
+          {
+            id: "turn-2",
+            items: [
+              {
+                id: "item-2",
+                type: "assistant_message",
+                text: oversizedText,
+              },
+            ],
+          },
+          {
+            id: "turn-3",
+            items: [
+              {
+                id: "item-3",
+                type: "assistant_message",
+                text: "latest",
+              },
+            ],
+          },
+        ],
+      },
+    },
+  });
+
+  const sanitized = JSON.parse(
+    sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/read", {
+      softCapBytes: 5_000,
+    })
+  );
+
+  assert.equal(sanitized.result.thread.relayHistoryTruncated, true);
+  assert.equal(sanitized.result.thread.relayHistoryDroppedTurns, 1);
+  assert.deepEqual(
+    sanitized.result.thread.turns.map((turn) => turn.id),
+    ["turn-2", "turn-3"]
+  );
+});

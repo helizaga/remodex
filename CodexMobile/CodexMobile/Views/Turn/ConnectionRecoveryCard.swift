@@ -92,6 +92,7 @@ struct ConnectionRecoveryCard: View {
             trailingContent
         }
         .opacity(snapshot.isActionable ? 1 : 0.94)
+        .accessibilityIdentifier("turn.connection-recovery.card")
         .accessibilityLabel(snapshot.title)
         .accessibilityValue(snapshot.status.label)
         .accessibilityHint(snapshot.isActionable ? "Opens the suggested recovery action" : "Shows the current recovery status")

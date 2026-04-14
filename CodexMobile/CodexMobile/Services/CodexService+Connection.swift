@@ -42,6 +42,100 @@ extension CodexService {
         }
     }
 
+    private enum ReconnectIssue: Equatable {
+        case unsupportedRelay
+        case liveSessionUnavailable
+        case savedSessionUnavailable
+        case relayPairingInvalid(String)
+        case relayDeliveryInterrupted
+        case versionMismatch(String)
+        case rePairRequired(String)
+        case relayTemporarilyUnavailable
+        case payloadTooLarge
+
+        var message: String {
+            switch self {
+            case .unsupportedRelay:
+                return "This relay does not support trusted reconnect. Scan a fresh QR code to reconnect."
+            case .liveSessionUnavailable:
+                return "Reconnect could not find your Mac's live session. Wake the screen or try reconnecting."
+            case .savedSessionUnavailable:
+                return "Trying to reach your saved Mac. Remodex will keep retrying. If you restarted the bridge on your Mac, scan the new QR code."
+            case .relayPairingInvalid(let message),
+                 .versionMismatch(let message),
+                 .rePairRequired(let message):
+                return message
+            case .relayDeliveryInterrupted:
+                return "The Mac was temporarily unavailable and this message could not be delivered. Wait a moment, then try again."
+            case .relayTemporarilyUnavailable:
+                return "The relay or network is temporarily unavailable. Check your connection and try again."
+            case .payloadTooLarge:
+                return "A thread payload was too large for the relay connection. This can happen while reopening image-heavy chats even if you didn't press Send."
+            }
+        }
+
+        var retryStatusMessage: String? {
+            switch self {
+            case .savedSessionUnavailable:
+                return "Trying your saved Mac again..."
+            case .relayTemporarilyUnavailable:
+                return "The relay or network is temporarily unavailable. Retrying..."
+            default:
+                return nil
+            }
+        }
+
+        var presentationCode: ReconnectFailurePresentation.Code {
+            switch self {
+            case .unsupportedRelay:
+                return .unsupportedRelay
+            case .liveSessionUnavailable:
+                return .macOffline
+            case .savedSessionUnavailable:
+                return .savedSessionUnavailable
+            case .relayPairingInvalid:
+                return .rePairRequired
+            case .relayDeliveryInterrupted:
+                return .relayTemporarilyUnavailable
+            case .versionMismatch:
+                return .versionMismatch
+            case .rePairRequired:
+                return .rePairRequired
+            case .relayTemporarilyUnavailable:
+                return .relayTemporarilyUnavailable
+            case .payloadTooLarge:
+                return .payloadTooLarge
+            }
+        }
+
+        var isPermanent: Bool {
+            switch self {
+            case .unsupportedRelay, .relayPairingInvalid, .versionMismatch, .rePairRequired:
+                return true
+            case .liveSessionUnavailable, .savedSessionUnavailable, .relayDeliveryInterrupted, .relayTemporarilyUnavailable, .payloadTooLarge:
+                return false
+            }
+        }
+
+        var invalidatesSavedSession: Bool {
+            switch self {
+            case .relayPairingInvalid:
+                return true
+            default:
+                return false
+            }
+        }
+
+        var shouldAutoReconnect: Bool {
+            switch self {
+            case .savedSessionUnavailable, .relayDeliveryInterrupted:
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
     // Opens the WebSocket and performs initialize/initialized handshake.
     func connect(
         serverURL: String,
@@ -653,35 +747,28 @@ extension CodexService {
         for error: Error,
         relayCloseCode: NWProtocolWebSocket.CloseCode?
     ) -> ReceiveErrorDisposition {
-        let shouldClearSavedRelaySession = shouldClearSavedRelaySession(for: relayCloseCode)
-        let retryableSessionUnavailableMessage = retryableSessionUnavailableMessage(for: relayCloseCode)
-        // Only relay closes that preserve the saved session should stay on the
-        // auto-reconnect path; dead sessions must fall back to QR recovery.
-        let permanentRelayMessage = shouldClearSavedRelaySession
-            ? (permanentRelayDisconnectMessage(for: relayCloseCode)
-                ?? "This relay pairing is no longer valid. Scan a new QR code to reconnect.")
-            : nil
-        let explicitRelayDropMessage = explicitRelayDropMessage(for: relayCloseCode)
+        let relayReconnectIssue = reconnectIssue(for: relayCloseCode)
+        let shouldClearSavedRelaySession = relayReconnectIssue?.invalidatesSavedSession ?? false
         let isBenignDisconnect = isBenignBackgroundDisconnect(error)
         let shouldSuppressMessage = isBenignDisconnect && !isActivelyForegroundedForConnectionUI()
         // Foreground relay drops should reconnect too, otherwise Stop disappears mid-run.
         let shouldAttemptAutoRecovery = !shouldClearSavedRelaySession
-            && explicitRelayDropMessage == nil
-            && (retryableSessionUnavailableMessage != nil
+            && relayReconnectIssue != .relayDeliveryInterrupted
+            && ((relayReconnectIssue?.shouldAutoReconnect ?? false)
                 || isRecoverableTransientConnectionError(error)
                 || isBenignDisconnect)
 
         let connectionRecoveryState: CodexConnectionRecoveryState = shouldAttemptAutoRecovery
-            ? .retrying(attempt: 0, message: recoveryStatusMessage(for: error))
+            ? .retrying(
+                attempt: 0,
+                message: relayReconnectIssue?.retryStatusMessage ?? recoveryStatusMessage(for: error)
+            )
             : .idle
 
         let lastErrorMessage: String?
-        if let permanentRelayMessage {
-            lastErrorMessage = permanentRelayMessage
-        } else if let retryableSessionUnavailableMessage, !shouldSuppressMessage {
-            lastErrorMessage = retryableSessionUnavailableMessage
-        } else if let explicitRelayDropMessage {
-            lastErrorMessage = explicitRelayDropMessage
+        if let relayReconnectIssue,
+          (!shouldSuppressMessage || relayReconnectIssue == .relayDeliveryInterrupted) {
+            lastErrorMessage = relayReconnectIssue.message
         } else if !shouldSuppressMessage && !shouldAttemptAutoRecovery {
             lastErrorMessage = userFacingConnectFailureMessage(error)
         } else {
@@ -691,7 +778,7 @@ extension CodexService {
         return ReceiveErrorDisposition(
             shouldClearSavedRelaySession: shouldClearSavedRelaySession,
             shouldAutoReconnectOnForeground: !shouldClearSavedRelaySession
-                && (shouldSuppressMessage || shouldAttemptAutoRecovery || explicitRelayDropMessage != nil),
+                && (shouldSuppressMessage || shouldAttemptAutoRecovery || relayReconnectIssue == .relayDeliveryInterrupted),
             connectionRecoveryState: connectionRecoveryState,
             lastErrorMessage: lastErrorMessage
         )
@@ -922,21 +1009,22 @@ extension CodexService {
     }
 
     func recoveryStatusMessage(for error: Error) -> String {
-        if isRetryableSavedSessionConnectError(error) {
-            return "The saved session expired; retrying."
-        }
-        if isRecoverableTransientConnectionError(error) {
-            return "The relay or network is temporarily unavailable. Retrying..."
+        if let reconnectIssue = reconnectIssue(for: error),
+           let retryStatusMessage = reconnectIssue.retryStatusMessage {
+            return retryStatusMessage
         }
         return "Reconnecting..."
     }
 
     func userFacingConnectFailureMessage(_ error: Error) -> String {
-        if let reconnectFailure = reconnectFailurePresentation(for: error) {
-            return reconnectFailure.message
+        if let reconnectIssue = reconnectIssue(for: error) {
+            return reconnectIssue.message
         }
         if shouldTreatSendFailureAsDisconnect(error) || isBenignBackgroundDisconnect(error) {
             return "Connection was interrupted. Tap Reconnect to try again."
+        }
+        if error is NWError {
+            return "The relay or network is temporarily unavailable. Check your connection and try again."
         }
         return error.localizedDescription
     }
@@ -955,88 +1043,93 @@ extension CodexService {
     }
 
     var oversizedRelayPayloadMessage: String {
-        "A thread payload was too large for the relay connection. This can happen while reopening image-heavy chats even if you didn't press Send."
+        ReconnectIssue.payloadTooLarge.message
     }
 
     func reconnectFailurePresentation(for error: Error) -> ReconnectFailurePresentation? {
-        if isRetryableSavedSessionConnectError(error) {
-            return ReconnectFailurePresentation(
-                code: .savedSessionUnavailable,
-                message: "The saved session expired; retrying.",
-                isPermanent: false
-            )
-        }
-        if isOversizedRelayPayloadError(error) {
-            return ReconnectFailurePresentation(
-                code: .payloadTooLarge,
-                message: oversizedRelayPayloadMessage,
-                isPermanent: false
-            )
-        }
-        if let secureTransportError = error as? CodexSecureTransportError {
-            switch secureTransportError {
-            case .incompatibleVersion(let message):
-                return ReconnectFailurePresentation(
-                    code: .versionMismatch,
-                    message: message,
-                    isPermanent: true
-                )
-            case .secureError(let message) where secureConnectionState == .updateRequired:
-                return ReconnectFailurePresentation(
-                    code: .versionMismatch,
-                    message: message,
-                    isPermanent: true
-                )
-            case .secureError(let message) where secureConnectionState == .rePairRequired:
-                return ReconnectFailurePresentation(
-                    code: .rePairRequired,
-                    message: message,
-                    isPermanent: true
-                )
-            default:
-                break
-            }
-        }
-        if isBenignBackgroundDisconnect(error) || isRecoverableTransientConnectionError(error) {
-            return ReconnectFailurePresentation(
-                code: .relayTemporarilyUnavailable,
-                message: "The relay or network is temporarily unavailable. Check your connection and try again.",
-                isPermanent: false
-            )
-        }
-        return nil
+        guard let reconnectIssue = reconnectIssue(for: error) else { return nil }
+        return ReconnectFailurePresentation(
+            code: reconnectIssue.presentationCode,
+            message: reconnectIssue.message,
+            isPermanent: reconnectIssue.isPermanent
+        )
     }
 
     func reconnectFailurePresentation(
         for error: CodexTrustedSessionResolveError
     ) -> ReconnectFailurePresentation? {
+        guard let reconnectIssue = reconnectIssue(for: error) else { return nil }
+        return ReconnectFailurePresentation(
+            code: reconnectIssue.presentationCode,
+            message: reconnectIssue.message,
+            isPermanent: reconnectIssue.isPermanent
+        )
+    }
+
+    private func reconnectIssue(for error: Error) -> ReconnectIssue? {
+        if isRetryableSavedSessionConnectError(error) {
+            return .savedSessionUnavailable
+        }
+        if isOversizedRelayPayloadError(error) {
+            return .payloadTooLarge
+        }
+        if let secureTransportError = error as? CodexSecureTransportError {
+            switch secureTransportError {
+            case .incompatibleVersion(let message):
+                return .versionMismatch(message)
+            case .secureError(let message) where secureConnectionState == .updateRequired:
+                return .versionMismatch(message)
+            case .secureError(let message) where secureConnectionState == .rePairRequired:
+                return .rePairRequired(message)
+            default:
+                break
+            }
+        }
+        if isBenignBackgroundDisconnect(error) || isRecoverableTransientConnectionError(error) {
+            return .relayTemporarilyUnavailable
+        }
+        return nil
+    }
+
+    private func reconnectIssue(for error: CodexTrustedSessionResolveError) -> ReconnectIssue? {
         switch error {
         case .noTrustedMac:
             return nil
         case .unsupportedRelay:
-            return ReconnectFailurePresentation(
-                code: .unsupportedRelay,
-                message: "This relay does not support trusted reconnect; scan a fresh QR.",
-                isPermanent: true
-            )
+            return .unsupportedRelay
         case .macOffline:
-            return ReconnectFailurePresentation(
-                code: .macOffline,
-                message: "Reconnect is unavailable because the Mac is offline.",
-                isPermanent: false
-            )
+            return .liveSessionUnavailable
         case .rePairRequired(let message):
-            return ReconnectFailurePresentation(
-                code: .rePairRequired,
-                message: message,
-                isPermanent: true
-            )
+            return .rePairRequired(message)
         case .invalidResponse, .network:
-            return ReconnectFailurePresentation(
-                code: .relayTemporarilyUnavailable,
-                message: "The relay or network is temporarily unavailable. Check your connection and try again.",
-                isPermanent: false
+            return .relayTemporarilyUnavailable
+        }
+    }
+
+    private func reconnectIssue(for closeCode: NWProtocolWebSocket.CloseCode?) -> ReconnectIssue? {
+        guard let rawValue = relayCloseCodeRawValue(closeCode) else {
+            return nil
+        }
+
+        switch rawValue {
+        case 4001:
+            return .relayPairingInvalid(
+                "This relay session was replaced by another Mac connection. Scan a new QR code to reconnect."
             )
+        case 4002:
+            return .savedSessionUnavailable
+        case 4003:
+            return .relayPairingInvalid(
+                "This device was replaced by a newer connection. Scan a new QR code to reconnect."
+            )
+        case 4004:
+            return .relayDeliveryInterrupted
+        case 4000:
+            return .relayPairingInvalid(
+                "This relay pairing is no longer valid. Scan a new QR code to reconnect."
+            )
+        default:
+            return nil
         }
     }
 
@@ -1081,54 +1174,38 @@ extension CodexService {
 
     // Distinguishes "temporary socket blip" from "that QR pairing is no longer valid".
     func permanentRelayDisconnectMessage(for closeCode: NWProtocolWebSocket.CloseCode?) -> String? {
-        guard let rawValue = relayCloseCodeRawValue(closeCode),
-              Self.permanentRelayCloseCodeRawValues.contains(rawValue) else {
+        guard let reconnectIssue = reconnectIssue(for: closeCode),
+              reconnectIssue.invalidatesSavedSession else {
             return nil
         }
-
-        switch rawValue {
-        case 4001:
-            return "This relay session was replaced by another Mac connection. Scan a new QR code to reconnect."
-        case 4003:
-            return "This device was replaced by a newer connection. Scan a new QR code to reconnect."
-        default:
-            return "This relay pairing is no longer valid. Scan a new QR code to reconnect."
-        }
+        return reconnectIssue.message
     }
 
     // Treats `4002` as ambiguous while the Mac bridge may still be recreating the same relay session.
     func retryableSessionUnavailableMessage(for closeCode: NWProtocolWebSocket.CloseCode?) -> String? {
-        guard relayCloseCodeRawValue(closeCode) == 4002 else {
+        guard reconnectIssue(for: closeCode) == .savedSessionUnavailable else {
             return nil
         }
-
-        return "Trying to reach your saved Mac. Remodex will keep retrying. If you restarted the bridge on your Mac, scan the new QR code."
+        return ReconnectIssue.savedSessionUnavailable.message
     }
 
     func retryableSessionUnavailableMessage(forConnectError error: Error) -> String? {
-        guard isRetryableSavedSessionConnectError(error) else {
+        guard reconnectIssue(for: error) == .savedSessionUnavailable else {
             return nil
         }
-
-        return "Trying to reach your saved Mac. Remodex will keep retrying. If you restarted the bridge on your Mac, scan the new QR code."
+        return ReconnectIssue.savedSessionUnavailable.message
     }
 
     // Surfaces relay-enforced drops that keep the pairing valid but lost the current send.
     func explicitRelayDropMessage(for closeCode: NWProtocolWebSocket.CloseCode?) -> String? {
-        guard let rawValue = relayCloseCodeRawValue(closeCode),
-              Self.explicitRelayDropCloseCodeRawValues.contains(rawValue) else {
+        guard reconnectIssue(for: closeCode) == .relayDeliveryInterrupted else {
             return nil
         }
-
-        return "The Mac was temporarily unavailable and this message could not be delivered. Wait a moment, then try again."
+        return ReconnectIssue.relayDeliveryInterrupted.message
     }
 
     func shouldClearSavedRelaySession(for closeCode: NWProtocolWebSocket.CloseCode?) -> Bool {
-        guard let rawValue = relayCloseCodeRawValue(closeCode) else {
-            return false
-        }
-
-        return Self.permanentRelayCloseCodeRawValues.contains(rawValue)
+        reconnectIssue(for: closeCode)?.invalidatesSavedSession ?? false
     }
 
     var isRunningOnSimulator: Bool {

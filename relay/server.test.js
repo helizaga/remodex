@@ -76,10 +76,7 @@ test("push routes are rate limited", async () => {
 test("push registration requires the live mac notification secret", async () => {
   await withServer(async ({ port }) => {
     const mac = new WebSocket(`ws://127.0.0.1:${port}/relay/session-push`, {
-      headers: {
-        "x-role": "mac",
-        "x-notification-secret": "bridge-secret",
-      },
+      headers: macHeaders(),
     });
     await onceOpen(mac);
 
@@ -118,10 +115,7 @@ test("push registration requires the live mac notification secret", async () => 
 test("completion pushes are rejected after the mac relay session disconnects", async () => {
   await withServer(async ({ port }) => {
     const mac = new WebSocket(`ws://127.0.0.1:${port}/relay/session-push-completion`, {
-      headers: {
-        "x-role": "mac",
-        "x-notification-secret": "bridge-secret",
-      },
+      headers: macHeaders(),
     });
     await onceOpen(mac);
 
@@ -162,14 +156,13 @@ test("trusted session resolve returns the current live session for a trusted iph
 
   await withServer(async ({ port }) => {
     const mac = new WebSocket(`ws://127.0.0.1:${port}/relay/live-session-1`, {
-      headers: {
-        "x-role": "mac",
+      headers: macHeaders({
         "x-mac-device-id": "mac-1",
         "x-mac-identity-public-key": "mac-public-key-1",
         "x-machine-name": "Emanuele-Mac",
         "x-trusted-phone-device-id": phoneIdentity.phoneDeviceId,
         "x-trusted-phone-public-key": phoneIdentity.phoneIdentityPublicKey,
-      },
+      }),
     });
     await onceOpen(mac);
 
@@ -204,14 +197,13 @@ test("pairing code resolve returns bootstrap metadata for a live mac session", a
   await withServer(async ({ port }) => {
     const expiresAt = Date.now() + 60_000;
     const mac = new WebSocket(`ws://127.0.0.1:${port}/relay/pairing-live-1`, {
-      headers: {
-        "x-role": "mac",
+      headers: macHeaders({
         "x-mac-device-id": "mac-pairing-1",
         "x-mac-identity-public-key": "mac-public-key-pairing-1",
         "x-pairing-code": "AB23CD34EF",
         "x-pairing-version": "2",
         "x-pairing-expires-at": String(expiresAt),
-      },
+      }),
     });
     await onceOpen(mac);
 
@@ -240,14 +232,13 @@ test("pairing code resolve returns bootstrap metadata for a live mac session", a
 test("pairing code resolve rejects expired codes", async () => {
   await withServer(async ({ port }) => {
     const mac = new WebSocket(`ws://127.0.0.1:${port}/relay/pairing-live-2`, {
-      headers: {
-        "x-role": "mac",
+      headers: macHeaders({
         "x-mac-device-id": "mac-pairing-2",
         "x-mac-identity-public-key": "mac-public-key-pairing-2",
         "x-pairing-code": "ZX34CV56BN",
         "x-pairing-version": "2",
         "x-pairing-expires-at": String(Date.now() - 1_000),
-      },
+      }),
     });
     await onceOpen(mac);
 
@@ -273,13 +264,12 @@ test("trusted session resolve rejects iphones that are not trusted for the live 
 
   await withServer(async ({ port }) => {
     const mac = new WebSocket(`ws://127.0.0.1:${port}/relay/live-session-2`, {
-      headers: {
-        "x-role": "mac",
+      headers: macHeaders({
         "x-mac-device-id": "mac-2",
         "x-mac-identity-public-key": "mac-public-key-2",
         "x-trusted-phone-device-id": trustedPhone.phoneDeviceId,
         "x-trusted-phone-public-key": trustedPhone.phoneIdentityPublicKey,
-      },
+      }),
     });
     await onceOpen(mac);
 
@@ -309,13 +299,12 @@ test("trusted session resolve rejects replayed nonces", async () => {
 
   await withServer(async ({ port }) => {
     const mac = new WebSocket(`ws://127.0.0.1:${port}/relay/live-session-3`, {
-      headers: {
-        "x-role": "mac",
+      headers: macHeaders({
         "x-mac-device-id": "mac-3",
         "x-mac-identity-public-key": "mac-public-key-3",
         "x-trusted-phone-device-id": phoneIdentity.phoneDeviceId,
         "x-trusted-phone-public-key": phoneIdentity.phoneIdentityPublicKey,
-      },
+      }),
     });
     await onceOpen(mac);
 
@@ -374,11 +363,10 @@ test("trusted session resolve starts working immediately after a mac updates its
 
   await withServer(async ({ port }) => {
     const mac = new WebSocket(`ws://127.0.0.1:${port}/relay/live-session-4`, {
-      headers: {
-        "x-role": "mac",
+      headers: macHeaders({
         "x-mac-device-id": "mac-4",
         "x-mac-identity-public-key": "mac-public-key-4",
-      },
+      }),
     });
     await onceOpen(mac);
 
@@ -499,7 +487,10 @@ test("relay logs redact live session identifiers", async () => {
   try {
     await withServer(async ({ port }) => {
       const mac = new WebSocket(`ws://127.0.0.1:${port}/relay/session-sensitive`, {
-        headers: { "x-role": "mac" },
+        headers: macHeaders({
+          "x-mac-device-id": "mac-sensitive",
+          "x-mac-identity-public-key": "mac-public-key-sensitive",
+        }),
       });
       const iphone = new WebSocket(`ws://127.0.0.1:${port}/relay/session-sensitive`, {
         headers: { "x-role": "iphone" },
@@ -531,7 +522,10 @@ test("redactRelayPathname hides the session path segment", () => {
 test("websocket relay forwards between mac and iphone on the base relay path", async () => {
   await withServer(async ({ port }) => {
     const mac = new WebSocket(`ws://127.0.0.1:${port}/relay/session-1`, {
-      headers: { "x-role": "mac" },
+      headers: macHeaders({
+        "x-mac-device-id": "mac-session-1",
+        "x-mac-identity-public-key": "mac-public-key-session-1",
+      }),
     });
     const iphone = new WebSocket(`ws://127.0.0.1:${port}/relay/session-1`, {
       headers: { "x-role": "iphone" },
@@ -553,10 +547,55 @@ test("websocket relay forwards between mac and iphone on the base relay path", a
   });
 });
 
+test("websocket relay rejects Mac replacement attempts without the live session secret", async () => {
+  await withServer(async ({ port }) => {
+    const mac = new WebSocket(`ws://127.0.0.1:${port}/relay/session-auth`, {
+      headers: macHeaders({
+        "x-notification-secret": "live-secret",
+        "x-mac-device-id": "mac-auth",
+        "x-mac-identity-public-key": "mac-public-key-auth",
+      }),
+    });
+    await onceOpen(mac);
+
+    const attacker = new WebSocket(`ws://127.0.0.1:${port}/relay/session-auth`, {
+      headers: macHeaders({
+        "x-notification-secret": "wrong-secret",
+        "x-mac-device-id": "mac-auth",
+        "x-mac-identity-public-key": "mac-public-key-auth",
+      }),
+    });
+    await onceOpen(attacker);
+
+    const attackerClose = onceCloseDetails(attacker);
+    const iphone = new WebSocket(`ws://127.0.0.1:${port}/relay/session-auth`, {
+      headers: { "x-role": "iphone" },
+    });
+    await onceOpen(iphone);
+
+    const received = onceMessage(iphone);
+    mac.send(JSON.stringify({ stillLive: true }));
+    assert.equal(await received, "{\"stillLive\":true}");
+
+    const attackerDetails = await attackerClose;
+    assert.equal(attackerDetails.code, 4005);
+    assert.equal(attackerDetails.reason, "Mac session authentication failed");
+
+    const macClosed = onceClosed(mac);
+    const iphoneClosed = onceClosed(iphone);
+    mac.close();
+    iphone.close();
+    await Promise.all([macClosed, iphoneClosed]);
+  });
+});
+
 test("relay keeps the iPhone connected briefly but rejects new sends while the mac is absent", async () => {
   await withServer(async ({ port }) => {
     const mac = new WebSocket(`ws://127.0.0.1:${port}/relay/session-grace`, {
-      headers: { "x-role": "mac" },
+      headers: macHeaders({
+        "x-mac-device-id": "mac-grace",
+        "x-mac-identity-public-key": "mac-public-key-grace",
+      }),
     });
     const iphone = new WebSocket(`ws://127.0.0.1:${port}/relay/session-grace`, {
       headers: { "x-role": "iphone" },
@@ -592,7 +631,10 @@ test("relay keeps the iPhone connected briefly but rejects new sends while the m
 test("relay lets the iPhone reconnect during the mac absence grace window", async () => {
   await withServer(async ({ port }) => {
     const mac = new WebSocket(`ws://127.0.0.1:${port}/relay/session-grace-rejoin`, {
-      headers: { "x-role": "mac" },
+      headers: macHeaders({
+        "x-mac-device-id": "mac-grace-rejoin",
+        "x-mac-identity-public-key": "mac-public-key-grace-rejoin",
+      }),
     });
     const iphone = new WebSocket(`ws://127.0.0.1:${port}/relay/session-grace-rejoin`, {
       headers: { "x-role": "iphone" },
@@ -614,7 +656,10 @@ test("relay lets the iPhone reconnect during the mac absence grace window", asyn
     await onceOpen(rejoinedIphone);
 
     const reconnectedMac = new WebSocket(`ws://127.0.0.1:${port}/relay/session-grace-rejoin`, {
-      headers: { "x-role": "mac" },
+      headers: macHeaders({
+        "x-mac-device-id": "mac-grace-rejoin",
+        "x-mac-identity-public-key": "mac-public-key-grace-rejoin",
+      }),
     });
     await onceOpen(reconnectedMac);
 
@@ -638,7 +683,10 @@ test("relay lets the iPhone reconnect during the mac absence grace window", asyn
 test("relay closes with a dedicated code when the iphone sends during mac absence", async () => {
   await withServer(async ({ port }) => {
     const mac = new WebSocket(`ws://127.0.0.1:${port}/relay/session-buffer-full`, {
-      headers: { "x-role": "mac" },
+      headers: macHeaders({
+        "x-mac-device-id": "mac-buffer-full",
+        "x-mac-identity-public-key": "mac-public-key-buffer-full",
+      }),
     });
     const iphone = new WebSocket(`ws://127.0.0.1:${port}/relay/session-buffer-full`, {
       headers: { "x-role": "iphone" },
@@ -753,6 +801,14 @@ function makePhoneIdentity() {
     phoneDeviceId: `phone-${Math.random().toString(16).slice(2)}`,
     phoneIdentityPublicKey: base64UrlToBase64(publicJwk.x),
     phoneIdentityPrivateKey: base64UrlToBase64(privateJwk.d),
+  };
+}
+
+function macHeaders(overrides = {}) {
+  return {
+    "x-role": "mac",
+    "x-notification-secret": "bridge-secret",
+    ...overrides,
   };
 }
 

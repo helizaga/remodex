@@ -40,6 +40,48 @@ private struct CodexManualWebSocketEndpoint {
     let scheme: String
 }
 
+private final class CodexConnectionReadyStateBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private nonisolated(unsafe) var didFinish = false
+    private nonisolated(unsafe) var timeoutTask: Task<Void, Never>?
+    private nonisolated(unsafe) var lastObservedStateDescription = "setup"
+    private nonisolated(unsafe) var lastWaitingErrorDescription: String?
+
+    nonisolated func setTimeoutTask(_ task: Task<Void, Never>) {
+        lock.lock()
+        timeoutTask = task
+        lock.unlock()
+    }
+
+    nonisolated func recordStateDescription(_ value: String) {
+        lock.lock()
+        lastObservedStateDescription = value
+        lock.unlock()
+    }
+
+    nonisolated func recordWaitingErrorDescription(_ value: String?) {
+        lock.lock()
+        lastWaitingErrorDescription = value
+        lock.unlock()
+    }
+
+    nonisolated func finishOnce() -> Task<Void, Never>? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !didFinish else { return nil }
+        didFinish = true
+        let task = timeoutTask
+        timeoutTask = nil
+        return task
+    }
+
+    nonisolated func timeoutContext() -> (stateDescription: String, waitingErrorDescription: String?) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (lastObservedStateDescription, lastWaitingErrorDescription)
+    }
+}
+
 private func codexLogPairingTransport(_ message: String) {
     print("[PAIRING] \(message)")
 }
@@ -200,8 +242,10 @@ extension CodexService {
             guard let self else { return }
 
             // Pre-decode wire text off the main actor so JSONDecoder doesn't block UI frames.
-            let wireText: String? = data.flatMap { String(data: $0, encoding: .utf8) }
-            let preDecoded = wireText.map { WireMessagePreDecoder.classify($0) }
+            let receivedWireMessage: (text: String?, classification: WireMessagePreDecoder.Classification?) = {
+                let wireText = data.flatMap { String(data: $0, encoding: .utf8) }
+                return (wireText, wireText.map(WireMessagePreDecoder.classify))
+            }()
 
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -221,7 +265,8 @@ extension CodexService {
                     return
                 }
 
-                if let text = wireText, let decoded = preDecoded {
+                if let text = receivedWireMessage.text,
+                   let decoded = receivedWireMessage.classification {
                     if decoded.isSecure {
                         // Secure control or encrypted envelope — must stay on MainActor.
                         self.processIncomingWireText(text)
@@ -272,21 +317,21 @@ extension CodexService {
             guard let self else { return }
 
             // Extract text and pre-decode off the main actor.
-            var wireText: String?
-            var preDecoded: WireMessagePreDecoder.Classification?
-            if case .success(let message) = result {
+            let receivedWireMessage: (text: String?, classification: WireMessagePreDecoder.Classification?) = {
+                guard case .success(let message) = result else {
+                    return (nil, nil)
+                }
+                let wireText: String?
                 switch message {
                 case .string(let text):
                     wireText = text
                 case .data(let data):
                     wireText = String(data: data, encoding: .utf8)
                 @unknown default:
-                    break
+                    wireText = nil
                 }
-                if let text = wireText {
-                    preDecoded = WireMessagePreDecoder.classify(text)
-                }
-            }
+                return (wireText, wireText.map(WireMessagePreDecoder.classify))
+            }()
 
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -299,7 +344,8 @@ extension CodexService {
                         relayCloseCode: self.relayCloseCode(for: task.closeCode)
                     )
                 case .success:
-                    if let text = wireText, let decoded = preDecoded {
+                    if let text = receivedWireMessage.text,
+                       let decoded = receivedWireMessage.classification {
                         if decoded.isSecure {
                             self.processIncomingWireText(text)
                         } else if let rpcResult = decoded.rpcResult {
@@ -564,33 +610,27 @@ extension CodexService {
         configuration: CodexConnectionReadyWaitConfiguration
     ) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let lock = NSLock()
-            var didFinish = false
-            var timeoutTask: Task<Void, Never>?
-            var lastObservedStateDescription = "setup"
-            var lastWaitingErrorDescription: String?
+            let stateBox = CodexConnectionReadyStateBox()
 
-            func finish(_ result: Result<Void, Error>) {
-                lock.lock()
-                defer { lock.unlock() }
-                guard !didFinish else { return }
-                didFinish = true
-                timeoutTask?.cancel()
+            @Sendable func finish(_ result: Result<Void, Error>) {
+                guard let timeoutTask = stateBox.finishOnce() else { return }
+                timeoutTask.cancel()
                 continuation.resume(with: result)
                 // Ignore future state transitions after first completion.
                 connection.stateUpdateHandler = { _ in }
             }
 
             connection.stateUpdateHandler = { state in
-                lastObservedStateDescription = String(describing: state)
-                codexLogPairingTransport("\(configuration.logLabel) state: \(state)")
+                let stateDescription = String(describing: state)
+                stateBox.recordStateDescription(stateDescription)
+                print("[PAIRING] \(configuration.logLabel) state: \(stateDescription)")
                 switch state {
                 case .ready:
                     finish(.success(()))
                 case .waiting(let error):
-                    lastWaitingErrorDescription = String(describing: error)
+                    stateBox.recordWaitingErrorDescription(String(describing: error))
                 case .failed(let error):
-                    codexLogPairingTransport("\(configuration.logLabel) failed: \(error)")
+                    print("[PAIRING] \(configuration.logLabel) failed: \(error)")
                     finish(.failure(error))
                 case .cancelled:
                     finish(.failure(CodexServiceError.disconnected))
@@ -600,18 +640,20 @@ extension CodexService {
             }
 
             connection.start(queue: webSocketQueue)
-            timeoutTask = Task { [weak connection] in
+            let timeoutTask = Task { [weak connection, stateBox] in
                 try? await Task.sleep(nanoseconds: configuration.timeoutNanoseconds)
                 guard !Task.isCancelled else { return }
                 let timeoutError = CodexServiceError.invalidInput(configuration.timeoutMessage)
-                var timeoutLog = "\(configuration.logLabel) timed out while state=\(lastObservedStateDescription)"
-                if let lastWaitingErrorDescription {
+                let timeoutContext = stateBox.timeoutContext()
+                var timeoutLog = "\(configuration.logLabel) timed out while state=\(timeoutContext.stateDescription)"
+                if let lastWaitingErrorDescription = timeoutContext.waitingErrorDescription {
                     timeoutLog += " waitingError=\(lastWaitingErrorDescription)"
                 }
-                codexLogPairingTransport(timeoutLog)
+                print("[PAIRING] \(timeoutLog)")
                 finish(.failure(timeoutError))
                 connection?.cancel()
             }
+            stateBox.setTimeoutTask(timeoutTask)
         }
     }
 

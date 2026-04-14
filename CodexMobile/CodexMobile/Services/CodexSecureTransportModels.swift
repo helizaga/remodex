@@ -63,7 +63,7 @@ struct CodexTrustedMacRegistry: Codable, Sendable {
     static let empty = CodexTrustedMacRegistry(records: [:])
 }
 
-struct SecureClientHello: Codable, Sendable {
+struct SecureClientHello: Encodable, Sendable {
     let kind = "clientHello"
     let protocolVersion: Int
     let sessionId: String
@@ -89,7 +89,7 @@ struct SecureServerHello: Codable, Sendable {
     let clientNonce: String?
 }
 
-struct SecureClientAuth: Codable, Sendable {
+struct SecureClientAuth: Encodable, Sendable {
     let kind = "clientAuth"
     let sessionId: String
     let phoneDeviceId: String
@@ -104,7 +104,7 @@ struct SecureReadyMessage: Codable, Sendable {
     let macDeviceId: String
 }
 
-struct SecureResumeState: Codable, Sendable {
+struct SecureResumeState: Encodable, Sendable {
     let kind = "resumeState"
     let sessionId: String
     let keyEpoch: Int

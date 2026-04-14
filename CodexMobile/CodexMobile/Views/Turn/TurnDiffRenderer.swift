@@ -8,7 +8,7 @@ import SwiftUI
 
 // ─── Diff Classification ────────────────────────────────────────────
 
-enum TurnDiffLineKind {
+enum TurnDiffLineKind: Equatable, Sendable {
     case addition
     case deletion
     case hunk
@@ -16,7 +16,7 @@ enum TurnDiffLineKind {
     case neutral
 
     // Detects whether a code snippet should be treated as a diff patch.
-    static func detect(in code: String) -> Bool {
+    nonisolated static func detect(in code: String) -> Bool {
         let lines = code.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         let additionCount = lines.filter { classify($0) == .addition }.count
         let deletionCount = lines.filter { classify($0) == .deletion }.count
@@ -26,7 +26,7 @@ enum TurnDiffLineKind {
 
     // Strict diff detection: accepts real patch metadata-only diffs (e.g. rename/mode-only),
     // while still avoiding generic prose/code blocks.
-    static func detectVerifiedPatch(in code: String) -> Bool {
+    nonisolated static func detectVerifiedPatch(in code: String) -> Bool {
         let lines = code.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         guard !lines.isEmpty else { return false }
 
@@ -83,7 +83,7 @@ enum TurnDiffLineKind {
     }
 
     // Classifies each diff row so the renderer can color it consistently.
-    static func classify(_ line: String) -> TurnDiffLineKind {
+    nonisolated static func classify(_ line: String) -> TurnDiffLineKind {
         if line.hasPrefix("@@") { return .hunk }
         if line.hasPrefix("diff ") || line.hasPrefix("index ") || line.hasPrefix("---") || line.hasPrefix("+++") {
             return .meta
@@ -91,6 +91,19 @@ enum TurnDiffLineKind {
         if line.hasPrefix("+") && !line.hasPrefix("+++") { return .addition }
         if line.hasPrefix("-") && !line.hasPrefix("---") { return .deletion }
         return .neutral
+    }
+
+    nonisolated static func == (lhs: TurnDiffLineKind, rhs: TurnDiffLineKind) -> Bool {
+        switch (lhs, rhs) {
+        case (.addition, .addition),
+             (.deletion, .deletion),
+             (.hunk, .hunk),
+             (.meta, .meta),
+             (.neutral, .neutral):
+            return true
+        default:
+            return false
+        }
     }
 
     // Left-side marker color (only on added/removed rows).

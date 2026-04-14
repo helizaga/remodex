@@ -189,6 +189,7 @@ struct StructuredUserInputCardView: View {
         questions.first(where: { $0.id == questionID })
     }
 
+    @MainActor
     private var questionSignature: [QuestionSignature] {
         questions.map(QuestionSignature.init)
     }

@@ -483,7 +483,7 @@ final class CodexServiceIncomingRunIndicatorTests: XCTestCase {
         XCTAssertTrue(service.shouldAutoReconnectOnForeground)
         XCTAssertEqual(
             service.connectionRecoveryState,
-            .retrying(attempt: 0, message: "Reconnecting...")
+            .retrying(attempt: 0, message: "The relay or network is temporarily unavailable. Retrying...")
         )
     }
 
@@ -502,7 +502,7 @@ final class CodexServiceIncomingRunIndicatorTests: XCTestCase {
         XCTAssertTrue(service.shouldAutoReconnectOnForeground)
         XCTAssertEqual(
             service.connectionRecoveryState,
-            .retrying(attempt: 0, message: "Connection timed out. Retrying...")
+            .retrying(attempt: 0, message: "The relay or network is temporarily unavailable. Retrying...")
         )
     }
 
@@ -554,9 +554,9 @@ final class CodexServiceIncomingRunIndicatorTests: XCTestCase {
             XCTAssertEqual(service.relayUrl, SecureStore.readString(for: CodexSecureKeys.relayUrl))
             XCTAssertEqual(
                 service.lastErrorMessage,
-                "The saved session expired; retrying."
+                "Trying to reach your saved Mac. Remodex will keep retrying. If you restarted the bridge on your Mac, scan the new QR code."
             )
-            XCTAssertEqual(service.connectionRecoveryState, .retrying(attempt: 0, message: "The saved session expired; retrying."))
+            XCTAssertEqual(service.connectionRecoveryState, .retrying(attempt: 0, message: "Trying your saved Mac again..."))
         }
     }
 
@@ -653,7 +653,10 @@ final class CodexServiceIncomingRunIndicatorTests: XCTestCase {
 
         XCTAssertEqual(service.trustedReconnectFailureCount, 0)
         XCTAssertTrue(service.shouldAutoReconnectOnForeground)
-        XCTAssertEqual(service.connectionRecoveryState, .retrying(attempt: 0, message: "Reconnecting..."))
+        XCTAssertEqual(
+            service.connectionRecoveryState,
+            .retrying(attempt: 0, message: "The relay or network is temporarily unavailable. Retrying...")
+        )
         XCTAssertEqual(service.secureConnectionState, .trustedMac)
         XCTAssertNotNil(service.relaySessionId)
         XCTAssertNotNil(service.relayUrl)
@@ -711,7 +714,7 @@ final class CodexServiceIncomingRunIndicatorTests: XCTestCase {
         XCTAssertTrue(service.isRecoverableTransientConnectionError(NWError.posix(.ETIMEDOUT)))
         XCTAssertEqual(
             service.userFacingConnectFailureMessage(NWError.posix(.ETIMEDOUT)),
-            "Connection timed out. Check server/network."
+            "The relay or network is temporarily unavailable. Check your connection and try again."
         )
     }
 
