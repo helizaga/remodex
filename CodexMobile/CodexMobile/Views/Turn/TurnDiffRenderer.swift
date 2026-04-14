@@ -93,19 +93,6 @@ enum TurnDiffLineKind: Equatable, Sendable {
         return .neutral
     }
 
-    nonisolated static func == (lhs: TurnDiffLineKind, rhs: TurnDiffLineKind) -> Bool {
-        switch (lhs, rhs) {
-        case (.addition, .addition),
-             (.deletion, .deletion),
-             (.hunk, .hunk),
-             (.meta, .meta),
-             (.neutral, .neutral):
-            return true
-        default:
-            return false
-        }
-    }
-
     // Left-side marker color (only on added/removed rows).
     var indicatorColor: Color {
         switch self {

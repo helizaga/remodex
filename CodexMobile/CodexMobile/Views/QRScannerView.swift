@@ -78,6 +78,7 @@ struct QRScannerView: View {
         .onDisappear {
             copyResetTask?.cancel()
             copyResetTask = nil
+            didCopyBridgeUpdateCommand = false
         }
     }
 

@@ -174,21 +174,31 @@ function readJSONBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let totalSize = 0;
+    let didReject = false;
 
     req.on("data", (chunk) => {
+      if (didReject) {
+        return;
+      }
+
       totalSize += chunk.length;
       if (totalSize > 64 * 1024) {
+        didReject = true;
+        req.removeAllListeners("data");
+        req.resume();
         reject(Object.assign(new Error("Request body too large"), {
           status: 413,
           code: "body_too_large",
         }));
-        req.destroy();
         return;
       }
       chunks.push(chunk);
     });
 
     req.on("end", () => {
+      if (didReject) {
+        return;
+      }
       const rawBody = Buffer.concat(chunks).toString("utf8");
       if (!rawBody.trim()) {
         resolve({});

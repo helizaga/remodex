@@ -349,6 +349,7 @@ private struct FileChangeBlockAggregate {
     var action: TurnFileChangeAction?
     var diffSections: [String]
     var lastTotalsSourceIndex: Int
+    var totalsAreAuthoritative: Bool
 }
 
 private struct RawFileChangeDiffSection {
@@ -366,6 +367,7 @@ private struct MessageFileChangeContribution {
     var action: TurnFileChangeAction?
     var diffSections: [String]
     var hasDiffSection: Bool
+    var hasAuthoritativeTotals: Bool
 }
 
 // Builds one per-file diff model from raw file-change messages so Totals stay authoritative
@@ -442,20 +444,28 @@ enum FileChangeBlockPresentationBuilder {
             updated.path = FileChangePathIdentity.preferredDisplayPath(existing.path, contribution.path)
             updated.action = mergedFileChangeAction(existing: existing.action, incoming: contribution.action)
 
-            if contribution.hasDiffSection {
-                let newDiffSections = contribution.diffSections.filter { !updated.diffSections.contains($0) }
-                if !newDiffSections.isEmpty {
-                    updated.additions += contribution.additions
-                    updated.deletions += contribution.deletions
+            let newDiffSections = contribution.diffSections.filter { !updated.diffSections.contains($0) }
+            if contribution.hasAuthoritativeTotals {
+                if sourceIndex >= existing.lastTotalsSourceIndex || !existing.totalsAreAuthoritative {
+                    updated.additions = contribution.additions
+                    updated.deletions = contribution.deletions
+                    updated.lastTotalsSourceIndex = sourceIndex
+                    updated.totalsAreAuthoritative = true
                 }
+            } else if contribution.hasDiffSection
+                && !updated.totalsAreAuthoritative
+                && !newDiffSections.isEmpty {
+                updated.additions += contribution.additions
+                updated.deletions += contribution.deletions
                 updated.lastTotalsSourceIndex = max(existing.lastTotalsSourceIndex, sourceIndex)
-                for diffSection in newDiffSections {
-                    updated.diffSections.append(diffSection)
-                }
-            } else if sourceIndex >= existing.lastTotalsSourceIndex {
+            } else if sourceIndex >= existing.lastTotalsSourceIndex && !existing.totalsAreAuthoritative {
                 updated.additions = contribution.additions
                 updated.deletions = contribution.deletions
                 updated.lastTotalsSourceIndex = sourceIndex
+            }
+
+            for diffSection in newDiffSections {
+                updated.diffSections.append(diffSection)
             }
 
             aggregates[existingIndex] = updated
@@ -469,7 +479,8 @@ enum FileChangeBlockPresentationBuilder {
                 deletions: contribution.deletions,
                 action: contribution.action,
                 diffSections: contribution.diffSections,
-                lastTotalsSourceIndex: sourceIndex
+                lastTotalsSourceIndex: sourceIndex,
+                totalsAreAuthoritative: contribution.hasAuthoritativeTotals
             )
         )
     }
@@ -513,6 +524,7 @@ enum FileChangeBlockPresentationBuilder {
                 existing.additions = entry.additions
                 existing.deletions = entry.deletions
                 existing.action = mergedFileChangeAction(existing: existing.action, incoming: entry.action)
+                existing.hasAuthoritativeTotals = true
                 contributions[existingIndex] = existing
                 continue
             }
@@ -524,7 +536,8 @@ enum FileChangeBlockPresentationBuilder {
                     deletions: entry.deletions,
                     action: entry.action,
                     diffSections: [],
-                    hasDiffSection: false
+                    hasDiffSection: false,
+                    hasAuthoritativeTotals: true
                 )
             )
         }
@@ -543,9 +556,7 @@ enum FileChangeBlockPresentationBuilder {
                 existing.action = mergedFileChangeAction(existing: existing.action, incoming: section.action)
                 if !existing.diffSections.contains(normalizedDiff) {
                     existing.diffSections.append(normalizedDiff)
-                    if !parsedEntries.contains(where: {
-                        FileChangePathIdentity.representsSameFile($0.path, section.path)
-                    }) {
+                    if !existing.hasAuthoritativeTotals {
                         existing.additions += section.additions
                         existing.deletions += section.deletions
                     }
@@ -562,7 +573,8 @@ enum FileChangeBlockPresentationBuilder {
                     deletions: section.deletions,
                     action: section.action,
                     diffSections: [normalizedDiff],
-                    hasDiffSection: true
+                    hasDiffSection: true,
+                    hasAuthoritativeTotals: false
                 )
             )
         }
@@ -945,7 +957,7 @@ enum FileChangePathIdentity {
         if let range = normalized.range(of: #":\d+(?::\d+)?$"#, options: .regularExpression) {
             normalized.removeSubrange(range)
         }
-        return normalized.lowercased()
+        return normalized
     }
 
     private nonisolated static func isAbsolutePath(_ rawPath: String) -> Bool {

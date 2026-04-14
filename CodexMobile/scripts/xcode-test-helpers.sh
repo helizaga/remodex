@@ -7,7 +7,7 @@ pick_ios_simulator_destination() {
   shift 2
   local preferred_names=("$@")
   local destinations
-  destinations="$(xcodebuild -project "$project_path" -scheme "$scheme" -showdestinations 2>/dev/null)"
+  destinations="$(xcodebuild -project "$project_path" -scheme "$scheme" -showdestinations)"
 
   DESTINATIONS="$destinations" python3 - "${preferred_names[@]}" <<'PY'
 import os

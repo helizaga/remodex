@@ -7,16 +7,20 @@ const {
   createStatusPayload,
 } = require("./local-server");
 
-test("createLocalRelayServer defaults to loopback and still allows explicit overrides", () => {
+test("createLocalRelayServer defaults to loopback and still allows explicit overrides", (t) => {
   const defaultServer = createLocalRelayServer();
+  t.after(() => {
+    defaultServer.wss.close();
+    defaultServer.server.close();
+  });
   assert.equal(defaultServer.host, "127.0.0.1");
-  defaultServer.wss.close();
-  defaultServer.server.close();
 
   const explicitServer = createLocalRelayServer({ host: "0.0.0.0" });
+  t.after(() => {
+    explicitServer.wss.close();
+    explicitServer.server.close();
+  });
   assert.equal(explicitServer.host, "0.0.0.0");
-  explicitServer.wss.close();
-  explicitServer.server.close();
 });
 
 test("createHealthPayload keeps the minimal relay health shape", () => {

@@ -11,6 +11,10 @@ function runLauncherFunction(command) {
     `source "${launcherPath}" >/dev/null 2>&1; set +e; ${command}`,
   ], {
     encoding: "utf8",
+    env: {
+      ...process.env,
+      REMODEX_TUNNEL_MODE: "",
+    },
   }).trim();
 }
 

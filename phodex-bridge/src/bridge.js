@@ -33,6 +33,7 @@ const { createPushNotificationTracker } = require("./push-notification-tracker")
 const {
   loadOrCreateBridgeDeviceState,
   rememberLastSeenPhoneAppVersion,
+  resetBridgeDeviceState,
   resolveBridgeRelaySession,
 } = require("./secure-device-state");
 const { createBridgeSecureTransport } = require("./secure-transport");
@@ -1439,6 +1440,12 @@ function relayCloseDiagnostic(closeCode, reasonText = "") {
         message: "The Mac was temporarily unavailable and the bridge will retry.",
         isPermanent: false,
       };
+    case 4005:
+      return {
+        code: "re_pair_required",
+        message: "This saved relay session is no longer trusted by the Mac. Scan a new QR code to reconnect.",
+        isPermanent: true,
+      };
     default:
       if (closeCode == null || closeCode === 1000) {
         return null;
@@ -1455,7 +1462,7 @@ function relayCloseDiagnostic(closeCode, reasonText = "") {
 }
 
 function shouldShutdownOnRelayCloseCode(closeCode) {
-  return closeCode === 4000;
+  return closeCode === 4000 || closeCode === 4005;
 }
 
 function nextRelayReconnectDelayMs(reconnectAttempt) {

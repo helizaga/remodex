@@ -32,6 +32,7 @@ test("nextRelayReconnectDelayMs backs off exponentially and caps the delay", () 
 
 test("shouldShutdownOnRelayCloseCode only fails closed for invalid relay sessions", () => {
   assert.equal(shouldShutdownOnRelayCloseCode(4000), true);
+  assert.equal(shouldShutdownOnRelayCloseCode(4005), true);
   assert.equal(shouldShutdownOnRelayCloseCode(4001), false);
   assert.equal(shouldShutdownOnRelayCloseCode(4002), false);
   assert.equal(shouldShutdownOnRelayCloseCode(1006), false);
@@ -47,6 +48,12 @@ test("relayCloseDiagnostic classifies saved-session and permanent reconnect fail
   assert.deepEqual(relayCloseDiagnostic(4000), {
     code: "re_pair_required",
     message: "This relay pairing is no longer valid. Scan a new QR code to reconnect.",
+    isPermanent: true,
+  });
+
+  assert.deepEqual(relayCloseDiagnostic(4005), {
+    code: "re_pair_required",
+    message: "This saved relay session is no longer trusted by the Mac. Scan a new QR code to reconnect.",
     isPermanent: true,
   });
 

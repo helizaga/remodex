@@ -85,6 +85,30 @@ test("secure transport uses a longer configurable QR pairing ttl", () => {
   );
 });
 
+test("secure transport clamps too-small QR pairing ttls to the minimum window", () => {
+  const macIdentity = createOkpKeyPair("ed25519");
+  const secureTransport = createBridgeSecureTransport({
+    sessionId: "session-ttl-min",
+    relayUrl: "wss://relay.example/relay",
+    pairingTtlMs: 0,
+    deviceState: {
+      macDeviceId: "mac-ttl-min",
+      macIdentityPrivateKey: macIdentity.privateKey,
+      macIdentityPublicKey: macIdentity.publicKey,
+      trustedPhones: {},
+    },
+  });
+
+  const startedAt = Date.now();
+  const pairingPayload = secureTransport.createPairingPayload();
+  const ttlMs = pairingPayload.expiresAt - startedAt;
+
+  assert.ok(
+    ttlMs >= 60_000 - 2_000 && ttlMs <= 60_000 + 2_000,
+    `expected ttl near 60 seconds, got ${ttlMs}ms`
+  );
+});
+
 test("secure transport round-trips encrypted payloads after a trusted reconnect handshake", () => {
   const macIdentity = createOkpKeyPair("ed25519");
   const phoneIdentity = createOkpKeyPair("ed25519");

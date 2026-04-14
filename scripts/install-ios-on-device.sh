@@ -78,10 +78,10 @@ if [[ -z "$DEVICE_ID" ]]; then
     echo "[install-ios] pass a device UDID as the first argument or set REMODEX_IOS_DEVICE_ID." >&2
     exit 1
   fi
-  OLD_IFS="$IFS"
-  IFS=$'\n'
-  DEVICE_INFO=($DEVICE_INFO_RAW)
-  IFS="$OLD_IFS"
+  DEVICE_INFO=()
+  while IFS= read -r line; do
+    DEVICE_INFO+=("$line")
+  done <<< "$DEVICE_INFO_RAW"
   DEVICE_ID="${DEVICE_INFO[0]}"
   DEVICE_NAME="${DEVICE_INFO[1]:-$DEVICE_ID}"
 else
@@ -119,7 +119,7 @@ install_app() {
 
 if ! install_app; then
   cat "$INSTALL_LOG" >&2
-  if rg -q "MismatchedApplicationIdentifierEntitlement|rejecting upgrade|does not match installed application's application-identifier string" "$INSTALL_LOG"; then
+  if grep -qE "MismatchedApplicationIdentifierEntitlement|rejecting upgrade|does not match installed application's application-identifier string" "$INSTALL_LOG"; then
     echo "[install-ios] installed app was signed under a different application-identifier prefix; uninstalling stale copy and retrying."
     xcrun devicectl device uninstall app --device "$DEVICE_ID" "$BUNDLE_ID"
     install_app

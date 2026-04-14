@@ -106,6 +106,20 @@ test("readBridgeConfig keeps safe defaults and explicit overrides", () => {
     platform: "darwin",
     ...commonPackagedArgs,
   });
+  const clampedPairingTtlConfig = readBridgeConfig({
+    env: {
+      REMODEX_PAIRING_TTL_MS: "0",
+    },
+    platform: "darwin",
+    ...commonPackagedArgs,
+  });
+  const typoedResetSessionConfig = readBridgeConfig({
+    env: {
+      REMODEX_RESET_SESSION: "tru",
+    },
+    platform: "darwin",
+    ...commonPackagedArgs,
+  });
 
   assert.equal(macConfig.refreshEnabled, false);
   assert.equal(macConfig.keepMacAwakeEnabled, true);
@@ -121,7 +135,9 @@ test("readBridgeConfig keeps safe defaults and explicit overrides", () => {
   assert.equal(explicitOnConfig.refreshEnabled, true);
   assert.equal(explicitOffConfig.refreshEnabled, false);
   assert.equal(customPairingTtlConfig.pairingTtlMs, 2_700_000);
+  assert.equal(clampedPairingTtlConfig.pairingTtlMs, 60_000);
   assert.equal(resetSessionConfig.resetRelaySession, true);
+  assert.equal(typoedResetSessionConfig.resetRelaySession, false);
   assert.equal(explicitOffConfig.keepMacAwakeEnabled, false);
 });
 

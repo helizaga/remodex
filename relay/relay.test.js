@@ -274,4 +274,5 @@ test("relay logs redact live session identifiers", (t) => {
 
   assert.ok(capturedLogs.some((line) => line.includes("session#")));
   assert.ok(capturedLogs.every((line) => !line.includes("session-sensitive")));
+  assert.ok(capturedLogs.every((line) => !line.includes("secret-sensitive")));
 });

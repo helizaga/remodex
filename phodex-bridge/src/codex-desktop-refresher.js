@@ -554,7 +554,7 @@ function readBridgeConfig({
     env
   );
   const explicitRefreshEnabled = readOptionalBooleanEnv(["REMODEX_REFRESH_ENABLED"], env);
-  const resetRelaySession = readOptionalBooleanEnv(["REMODEX_RESET_SESSION"], env) === true;
+  const resetRelaySession = readStrictOptionalBooleanEnv(["REMODEX_RESET_SESSION"], env) === true;
   const explicitKeepMacAwakeEnabled = readOptionalBooleanEnv(["REMODEX_KEEP_MAC_AWAKE"], env);
   const persistedKeepMacAwakeEnabled = typeof daemonConfig.keepMacAwakeEnabled === "boolean"
     ? daemonConfig.keepMacAwakeEnabled
@@ -572,7 +572,7 @@ function readBridgeConfig({
       readFirstDefinedEnv(["REMODEX_PUSH_PREVIEW_MAX_CHARS"], "160", env),
       160
     ),
-    pairingTtlMs: parseIntegerEnv(
+    pairingTtlMs: parsePairingTtlEnv(
       readFirstDefinedEnv(["REMODEX_PAIRING_TTL_MS"], String(DEFAULT_PAIRING_TTL_MS), env),
       DEFAULT_PAIRING_TTL_MS
     ),
@@ -731,6 +731,16 @@ function readOptionalBooleanEnv(keys, env = process.env) {
   return null;
 }
 
+function readStrictOptionalBooleanEnv(keys, env = process.env) {
+  for (const key of keys) {
+    const value = env[key];
+    if (typeof value === "string" && value.trim() !== "") {
+      return parseStrictBooleanEnv(value.trim());
+    }
+  }
+  return null;
+}
+
 function readFirstDefinedEnv(keys, fallback, env = process.env) {
   for (const key of keys) {
     const value = env[key];
@@ -746,9 +756,28 @@ function parseBooleanEnv(value) {
   return normalized !== "false" && normalized !== "0" && normalized !== "no";
 }
 
+function parseStrictBooleanEnv(value) {
+  const normalized = String(value).trim().toLowerCase();
+  if (["true", "1", "yes"].includes(normalized)) {
+    return true;
+  }
+  if (["false", "0", "no"].includes(normalized)) {
+    return false;
+  }
+  return null;
+}
+
 function parseIntegerEnv(value, fallback) {
   const parsed = Number.parseInt(String(value), 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function parsePairingTtlEnv(value, fallback) {
+  const parsed = Number.parseInt(String(value), 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return parsed < 60 * 1000 ? 60 * 1000 : parsed;
 }
 
 function extractErrorMessage(error) {

@@ -640,7 +640,7 @@ enum MermaidSourceNormalizer {
     }
 
     private static func normalizeNodeLabels(in line: String) -> String {
-        if line.contains("-->") {
+        if line.contains("-->|") {
             return line
         }
 

@@ -558,9 +558,10 @@ function transcriptDigest(transcriptBytes) {
 }
 
 function normalizePairingTtlMs(value) {
-  return Number.isFinite(value) && value >= MIN_PAIRING_TTL_MS
-    ? value
-    : DEFAULT_PAIRING_TTL_MS;
+  if (!Number.isFinite(value)) {
+    return DEFAULT_PAIRING_TTL_MS;
+  }
+  return Math.max(MIN_PAIRING_TTL_MS, value);
 }
 
 function encryptEnvelopePayload(payloadObject, key, sender, counter, sessionId, keyEpoch) {

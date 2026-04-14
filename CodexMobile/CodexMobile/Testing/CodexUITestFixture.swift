@@ -17,7 +17,10 @@ enum CodexUITestHarness {
         }
 
         let suiteName = "CodexUITests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            assertionFailure("Could not create isolated UI test defaults suite: \(suiteName)")
+            return nil
+        }
         defaults.removePersistentDomain(forName: suiteName)
 
         let service = CodexService(defaults: defaults)

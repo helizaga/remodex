@@ -197,7 +197,7 @@ wait_for_relay() {
   local delay_s=0.25
 
   for ((i=1; i<=attempts; i++)); do
-    if curl -fsS "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
+    if curl -fsS "http://${BIND_HOST}:${PORT}/health" >/dev/null 2>&1; then
       return 0
     fi
     sleep "$delay_s"
@@ -425,7 +425,7 @@ report_ngrok_failure() {
 }
 
 ensure_local_relay() {
-  if curl -fsS "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
+  if curl -fsS "http://${BIND_HOST}:${PORT}/health" >/dev/null 2>&1; then
     echo "[remodex-local] reusing existing local relay on :$PORT"
     return 0
   fi

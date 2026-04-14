@@ -663,7 +663,6 @@ extension CodexService {
                 }
             }
 
-            connection.start(queue: webSocketQueue)
             let timeoutTask = Task { [weak connection, stateBox] in
                 try? await Task.sleep(nanoseconds: configuration.timeoutNanoseconds)
                 guard !Task.isCancelled else { return }
@@ -678,6 +677,7 @@ extension CodexService {
                 connection?.cancel()
             }
             stateBox.setTimeoutTask(timeoutTask)
+            connection.start(queue: webSocketQueue)
         }
     }
 

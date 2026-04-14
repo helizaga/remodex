@@ -329,6 +329,9 @@ final class TurnTimelineStore {
         latestAssistantOutputByThread.removeAll()
         latestRepoAffectingMessageSignalByThread.removeAll()
         assistantRevertStateCacheByThread.removeAll()
+        assistantRevertStateRevision = 0
+        busyRepoRoots.removeAll()
+        busyRepoRootsRevision = 0
     }
 }
 
