@@ -1554,6 +1554,58 @@ final class TurnTimelineReducerTests: XCTestCase {
         XCTAssertEqual(normalized, #"W{"Mac reconnects?"}"#)
     }
 
+    // Verifies the early-return guard added in this PR: lines that contain "-->"
+    // are returned verbatim so that transition arrow targets are never quoted.
+    func testMermaidSourceNormalizerDoesNotQuoteNodeLabelsOnArrowLines() {
+        // A line with both an arrow and a labelled target node must be left untouched.
+        let source = "A --> B[Connect to relay]"
+
+        let normalized = MermaidSourceNormalizer.normalized(source)
+
+        XCTAssertEqual(normalized, source)
+    }
+
+    func testMermaidSourceNormalizerQuotesNodeLabelsOnLinesWithoutArrow() {
+        // A line without "-->" should still have its labels quoted (existing behavior).
+        let source = "B[Connect to relay]"
+
+        let normalized = MermaidSourceNormalizer.normalized(source)
+
+        XCTAssertEqual(normalized, #"B["Connect to relay"]"#)
+    }
+
+    func testMermaidSourceNormalizerPreservesMultipleArrowLinesVerbatim() {
+        let source = """
+        flowchart TD
+            A --> B[Step one]
+            B --> C[Step two]
+            C --> D{Done?}
+        """
+
+        let normalized = MermaidSourceNormalizer.normalized(source)
+
+        // Arrow-carrying lines must survive unchanged (early return fires for each of them).
+        XCTAssertTrue(normalized.contains("A --> B[Step one]"))
+        XCTAssertTrue(normalized.contains("B --> C[Step two]"))
+        XCTAssertTrue(normalized.contains("C --> D{Done?}"))
+    }
+
+    func testMermaidSourceNormalizerMixedArrowAndNonArrowLines() {
+        // Non-arrow lines in the same diagram should still be normalised.
+        let source = """
+        flowchart TD
+            StandaloneNode[Some label]
+            A --> B[Labelled target]
+        """
+
+        let normalized = MermaidSourceNormalizer.normalized(source)
+
+        // Standalone node line gets quoted.
+        XCTAssertTrue(normalized.contains(#"StandaloneNode["Some label"]"#))
+        // Arrow line is left untouched.
+        XCTAssertTrue(normalized.contains("A --> B[Labelled target]"))
+    }
+
     func testAssistantRenderModelDefersMermaidUntilStreamingCompletes() {
         MessageRowRenderModelCache.reset()
         MermaidMarkdownContentCache.reset()
@@ -1584,6 +1636,7 @@ final class TurnTimelineReducerTests: XCTestCase {
         XCTAssertEqual(mermaidSegmentKinds(in: finalizedModel.mermaidContent), [.markdown, .mermaid])
     }
 
+    @MainActor
     func testAssistantBlockInfoShowsCopyWhenLatestRunCompleted() {
         let now = Date()
         let messages = [
@@ -1609,6 +1662,7 @@ final class TurnTimelineReducerTests: XCTestCase {
         XCTAssertEqual(blockInfo[0]?.copyText, "Completed response")
     }
 
+    @MainActor
     func testAssistantBlockInfoHidesCopyWhenLatestRunStopped() {
         let now = Date()
         let messages = [
@@ -1634,6 +1688,7 @@ final class TurnTimelineReducerTests: XCTestCase {
         XCTAssertNil(blockInfo[0])
     }
 
+    @MainActor
     func testAssistantBlockInfoDeduplicatesEquivalentSingleFileDiffSnapshots() {
         let now = Date()
         let diffCode = """
@@ -1708,6 +1763,7 @@ final class TurnTimelineReducerTests: XCTestCase {
         XCTAssertEqual(blockInfo[2]?.blockDiffEntries?.first?.deletions, 0)
     }
 
+    @MainActor
     func testAssistantBlockInfoMergesDifferentSnapshotsForSameFile() {
         let now = Date()
         let firstDiff = """
@@ -1783,6 +1839,7 @@ final class TurnTimelineReducerTests: XCTestCase {
         XCTAssertEqual(blockInfo[2]?.blockDiffEntries?.first?.deletions, 0)
     }
 
+    @MainActor
     func testAssistantBlockInfoPrefersLatestSummaryTotalsAfterDiffChunk() {
         let now = Date()
         let diffCode = """
@@ -1850,6 +1907,7 @@ final class TurnTimelineReducerTests: XCTestCase {
         XCTAssertEqual(blockInfo[2]?.blockDiffText?.contains("```diff"), true)
     }
 
+    @MainActor
     func testAssistantBlockInfoPrefersInlineTotalsOverSameMessageDiffCounts() {
         let now = Date()
         let diffCode = """
@@ -1903,6 +1961,7 @@ final class TurnTimelineReducerTests: XCTestCase {
         XCTAssertEqual(blockInfo[1]?.blockDiffText?.contains("```diff"), true)
     }
 
+    @MainActor
     func testAssistantBlockInfoKeepsRepeatedSameFileChunksAtFinalTotals() {
         let now = Date()
         let firstDiff = """
@@ -1967,6 +2026,7 @@ final class TurnTimelineReducerTests: XCTestCase {
         XCTAssertEqual(blockInfo[1]?.blockDiffText?.contains("secondChange"), true)
     }
 
+    @MainActor
     func testAssistantBlockInfoKeepsSummaryOnlyFileWhenSiblingHasDiffChunk() {
         let now = Date()
         let diffCode = """
@@ -2034,6 +2094,7 @@ final class TurnTimelineReducerTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testAssistantBlockInfoKeepsSummaryOnlyEntriesWithoutDiffFencesSeparated() {
         let now = Date()
         let messages = [
@@ -2093,6 +2154,7 @@ final class TurnTimelineReducerTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testAssistantBlockInfoDoesNotDoubleCountIdenticalSummaryOnlySnapshots() {
         let now = Date()
         let messages = [
@@ -2221,6 +2283,7 @@ final class TurnTimelineReducerTests: XCTestCase {
 }
 
 final class TurnScrollStateTrackerTests: XCTestCase {
+    @MainActor
     func testUserDragImmediatelySwitchesFollowBottomToManual() {
         XCTAssertEqual(
             TurnScrollStateTracker.modeAfterUserDragBegan(currentMode: .followBottom),
@@ -2228,6 +2291,7 @@ final class TurnScrollStateTrackerTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testUserDragKeepsAssistantAnchorModeUntilAnchorCompletes() {
         XCTAssertEqual(
             TurnScrollStateTracker.modeAfterUserDragBegan(currentMode: .anchorAssistantResponse),
@@ -2235,6 +2299,7 @@ final class TurnScrollStateTrackerTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testUserDragEndingAtBottomRestoresFollowBottom() {
         XCTAssertEqual(
             TurnScrollStateTracker.modeAfterUserDragEnded(
@@ -2245,6 +2310,7 @@ final class TurnScrollStateTrackerTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testUserDragEndingAwayFromBottomKeepsManualMode() {
         XCTAssertEqual(
             TurnScrollStateTracker.modeAfterUserDragEnded(
@@ -2253,6 +2319,16 @@ final class TurnScrollStateTrackerTests: XCTestCase {
             ),
             .manual
         )
+    }
+
+    // Regression: TurnAutoScrollMode must be Equatable for XCTAssertEqual comparisons.
+    @MainActor
+    func testTurnAutoScrollModeValuesAreEquatable() {
+        XCTAssertEqual(TurnAutoScrollMode.followBottom, .followBottom)
+        XCTAssertEqual(TurnAutoScrollMode.manual, .manual)
+        XCTAssertEqual(TurnAutoScrollMode.anchorAssistantResponse, .anchorAssistantResponse)
+        XCTAssertNotEqual(TurnAutoScrollMode.followBottom, .manual)
+        XCTAssertNotEqual(TurnAutoScrollMode.manual, .anchorAssistantResponse)
     }
 
     func testCorrectsBottomForMeaningfulContentGrowthWhenPinned() {
@@ -2352,6 +2428,136 @@ private func parseMarkdownSegments(_ source: String) -> [MarkdownSegment] {
     }
 
     return segments
+}
+
+// MARK: - FileChangePathIdentity Tests
+
+// Tests for the nonisolated static helpers on FileChangePathIdentity that were
+// explicitly made nonisolated in this PR so they can be called from concurrent contexts.
+final class FileChangePathIdentityTests: XCTestCase {
+
+    // MARK: representsSameFile
+
+    func testRepresentsSameFileMatchesIdenticalPaths() {
+        XCTAssertTrue(FileChangePathIdentity.representsSameFile(
+            "src/main.swift",
+            "src/main.swift"
+        ))
+    }
+
+    func testRepresentsSameFileMatchesAbsoluteAndRelativePath() {
+        XCTAssertTrue(FileChangePathIdentity.representsSameFile(
+            "/Users/dev/project/src/main.swift",
+            "src/main.swift"
+        ))
+    }
+
+    func testRepresentsSameFileMatchesGitDiffPrefixedPaths() {
+        // Git diff emits "a/" and "b/" prefixes; both sides should normalise to the same identity.
+        XCTAssertTrue(FileChangePathIdentity.representsSameFile(
+            "a/src/main.swift",
+            "b/src/main.swift"
+        ))
+    }
+
+    func testRepresentsSameFileKeepsDifferentFileNamesDistinct() {
+        XCTAssertFalse(FileChangePathIdentity.representsSameFile(
+            "src/main.swift",
+            "src/other.swift"
+        ))
+    }
+
+    func testRepresentsSameFileKeepsSameNameInDifferentDirectoriesDistinct() {
+        XCTAssertFalse(FileChangePathIdentity.representsSameFile(
+            "src/foo/helper.swift",
+            "src/bar/helper.swift"
+        ))
+    }
+
+    func testRepresentsSameFileIsCaseInsensitive() {
+        XCTAssertTrue(FileChangePathIdentity.representsSameFile(
+            "SRC/Main.Swift",
+            "src/main.swift"
+        ))
+    }
+
+    func testRepresentsSameFileHandlesLeadingWhitespace() {
+        XCTAssertTrue(FileChangePathIdentity.representsSameFile(
+            "  src/main.swift",
+            "src/main.swift"
+        ))
+    }
+
+    // MARK: preferredDisplayPath
+
+    func testPreferredDisplayPathPrefersAbsoluteOverRelative() {
+        let result = FileChangePathIdentity.preferredDisplayPath(
+            "/abs/path/src/main.swift",
+            "src/main.swift"
+        )
+
+        XCTAssertEqual(result, "/abs/path/src/main.swift")
+    }
+
+    func testPreferredDisplayPathPrefersLongerPathWhenBothRelative() {
+        let result = FileChangePathIdentity.preferredDisplayPath(
+            "src/main.swift",
+            "project/src/main.swift"
+        )
+
+        XCTAssertEqual(result, "project/src/main.swift")
+    }
+
+    func testPreferredDisplayPathReturnsTrimmedLhsWhenBothIdentical() {
+        let result = FileChangePathIdentity.preferredDisplayPath(
+            "src/main.swift",
+            "src/main.swift"
+        )
+
+        XCTAssertEqual(result, "src/main.swift")
+    }
+
+    func testPreferredDisplayPathStripsLeadingWhitespace() {
+        let result = FileChangePathIdentity.preferredDisplayPath(
+            "  src/main.swift  ",
+            "src/main.swift"
+        )
+
+        // Trimmed LHS is "src/main.swift"; equal length, so LHS wins.
+        XCTAssertEqual(result, "src/main.swift")
+    }
+
+    // MARK: normalizedPath
+
+    func testNormalizedPathStripsGitDiffAPrefix() {
+        let result = FileChangePathIdentity.normalizedPath("a/src/main.swift")
+
+        XCTAssertEqual(result, "src/main.swift")
+    }
+
+    func testNormalizedPathStripsGitDiffBPrefix() {
+        let result = FileChangePathIdentity.normalizedPath("b/src/main.swift")
+
+        XCTAssertEqual(result, "src/main.swift")
+    }
+
+    func testNormalizedPathLowercasesResult() {
+        let result = FileChangePathIdentity.normalizedPath("SRC/Main.Swift")
+
+        XCTAssertEqual(result, "src/main.swift")
+    }
+
+    func testNormalizedPathTrimsWhitespace() {
+        let result = FileChangePathIdentity.normalizedPath("  src/main.swift  ")
+
+        XCTAssertEqual(result, "src/main.swift")
+    }
+
+    func testNormalizedPathPreservesAbsolutePath() {
+        let result = FileChangePathIdentity.normalizedPath("/Users/dev/project/main.swift")
+
+        XCTAssertEqual(result, "/users/dev/project/main.swift")
+    }
 }
 
 private func mermaidSegmentKinds(in content: MermaidMarkdownContent?) -> [MermaidSegmentKind] {
