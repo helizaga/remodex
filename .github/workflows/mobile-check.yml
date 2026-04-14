@@ -23,5 +23,5 @@ jobs:
         with:
           xcode-version: latest-stable
 
-      - name: Run reconnect and history regression slice
+      - name: Run required mobile regression slice
         run: ./CodexMobile/scripts/run-reconnect-history-tests.sh

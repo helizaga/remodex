@@ -9,7 +9,6 @@ import XCTest
 
 @MainActor
 final class CodexThreadForkTests: XCTestCase {
-    private static var retainedServices: [CodexService] = []
 
     func testForkSendsOnlyThreadIdToThreadFork() async throws {
         let service = makeService()
@@ -321,7 +320,6 @@ final class CodexThreadForkTests: XCTestCase {
             resolvedDefaults = isolatedDefaults
         }
         let service = CodexService(defaults: resolvedDefaults)
-        Self.retainedServices.append(service)
         return service
     }
 

@@ -782,6 +782,14 @@ enum TurnTimelineReducer {
         let turnId = normalizedIdentifier(message.turnId)
         let key = duplicateFileChangeKey(for: message)
         let entries = TurnFileChangeSummaryParser.parse(from: message.text)?.entries ?? []
+        let entryDescriptors = entries.map {
+            FileChangeSingleEntryDescriptor(
+                path: $0.path,
+                additions: $0.additions,
+                deletions: $0.deletions,
+                action: $0.action
+            )
+        }
 
         let paths = Set(
             entries.map(\.path)
@@ -805,6 +813,7 @@ enum TurnTimelineReducer {
             turnId: turnId,
             key: key,
             paths: paths,
+            entryDescriptors: entryDescriptors,
             singleEntryDescriptor: singleEntryDescriptor,
             isStreaming: message.isStreaming
         )
@@ -832,6 +841,11 @@ enum TurnTimelineReducer {
             return true
         }
 
+        if (older.isStreaming || older.turnId == nil),
+           fileChangeEntryDescriptorsMatch(newer.entryDescriptors, older.entryDescriptors) {
+            return true
+        }
+
         if let newerSingle = newer.singleEntryDescriptor,
            let olderSingle = older.singleEntryDescriptor,
            (older.isStreaming || older.turnId == nil),
@@ -846,18 +860,60 @@ enum TurnTimelineReducer {
         // Turnless local row superseded by a real snapshot that now covers the same or a wider file set.
         if older.turnId == nil,
            newer.turnId != nil,
-           older.paths.isSubset(of: newer.paths) {
+           fileChangePathsRepresentSubset(older.paths, of: newer.paths) {
             return true
         }
 
         // A finalized aggregate snapshot should replace provisional per-file rows from the same turn.
         if older.isStreaming,
            !newer.isStreaming,
-           older.paths.isSubset(of: newer.paths) {
+           fileChangePathsRepresentSubset(older.paths, of: newer.paths) {
             return true
         }
 
         return false
+    }
+
+    private static func fileChangeEntryDescriptorsMatch(
+        _ lhs: [FileChangeSingleEntryDescriptor],
+        _ rhs: [FileChangeSingleEntryDescriptor]
+    ) -> Bool {
+        guard !lhs.isEmpty, !rhs.isEmpty, lhs.count == rhs.count else {
+            return false
+        }
+
+        var unmatched = rhs
+        for lhsEntry in lhs {
+            guard let matchIndex = unmatched.firstIndex(where: {
+                fileChangeEntryDescriptorsRepresentSameSnapshot(lhsEntry, $0)
+            }) else {
+                return false
+            }
+            unmatched.remove(at: matchIndex)
+        }
+
+        return unmatched.isEmpty
+    }
+
+    private static func fileChangeEntryDescriptorsRepresentSameSnapshot(
+        _ lhs: FileChangeSingleEntryDescriptor,
+        _ rhs: FileChangeSingleEntryDescriptor
+    ) -> Bool {
+        lhs.additions == rhs.additions
+            && lhs.deletions == rhs.deletions
+            && lhs.action == rhs.action
+            && FileChangePathIdentity.representsSameFile(lhs.path, rhs.path)
+    }
+
+    private static func fileChangePathsRepresentSubset(
+        _ olderPaths: Set<String>,
+        of newerPaths: Set<String>
+    ) -> Bool {
+        olderPaths.allSatisfy { olderPath in
+            newerPaths.contains { newerPath in
+                FileChangePathIdentity.representsSameFile(olderPath, newerPath)
+            }
+        }
     }
 
     private static func singleFileChangeLooksLikePathUpgrade(
@@ -896,6 +952,7 @@ private struct FileChangeDedupSignature: Equatable {
     let turnId: String?
     let key: String?
     let paths: Set<String>
+    let entryDescriptors: [FileChangeSingleEntryDescriptor]
     let singleEntryDescriptor: FileChangeSingleEntryDescriptor?
     let isStreaming: Bool
 }

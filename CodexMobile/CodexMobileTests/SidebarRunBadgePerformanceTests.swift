@@ -9,7 +9,6 @@ import XCTest
 
 @MainActor
 final class SidebarRunBadgePerformanceTests: XCTestCase {
-    private static var retainedServices: [CodexService] = []
 
     func testSidebarRunBadgeSnapshotPerformance() {
         let service = makeService(threadCount: 1_500)
@@ -96,8 +95,6 @@ private extension SidebarRunBadgePerformanceTests {
                 service.readyThreadIDs.insert(threadID)
             }
         }
-
-        Self.retainedServices.append(service)
         return service
     }
 }

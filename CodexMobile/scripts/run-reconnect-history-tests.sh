@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # FILE: run-reconnect-history-tests.sh
-# Purpose: Runs the narrow CodexMobile reconnect/history regression slice on an available iPhone simulator.
+# Purpose: Runs the required CodexMobile mobile regression slice on an available iPhone simulator.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT_PATH="$ROOT_DIR/CodexMobile.xcodeproj"
@@ -23,8 +23,30 @@ if [[ -z "$DESTINATION" ]]; then
   exit 1
 fi
 
+TEST_SUITES=(
+  CodexApprovalStateTests
+  CodexLifecycleDeallocationTests
+  CodexSecurePairingStateTests
+  CodexServiceCatchupRecoveryTests
+  CodexServiceConnectionErrorTests
+  CodexServiceIncomingRunIndicatorTests
+  CodexServiceRelayHistoryNoticeTests
+  ContentViewModelReconnectTests
+  DesktopHandoffServiceTests
+  TurnComposerSendAvailabilityTests
+  TurnConnectionRecoverySnapshotBuilderTests
+  TurnTimelineReducerTests
+  TurnViewModelQueueTests
+)
+
+ONLY_TESTING_ARGS=()
+for suite in "${TEST_SUITES[@]}"; do
+  ONLY_TESTING_ARGS+=("-only-testing:CodexMobileTests/${suite}")
+done
+
 echo "[codexmobile-ci] destination: $DESTINATION"
 echo "[codexmobile-ci] scheme: $SCHEME"
+echo "[codexmobile-ci] suites: ${TEST_SUITES[*]}"
 
 xcodebuild \
   -project "$PROJECT_PATH" \
@@ -34,10 +56,4 @@ xcodebuild \
   test \
   CODE_SIGNING_ALLOWED=NO \
   CODE_SIGNING_REQUIRED=NO \
-  -only-testing:CodexMobileTests/ContentViewModelReconnectTests \
-  -only-testing:CodexMobileTests/CodexServiceConnectionErrorTests \
-  -only-testing:CodexMobileTests/DesktopHandoffServiceTests \
-  -only-testing:CodexMobileTests/CodexServiceIncomingRunIndicatorTests \
-  -only-testing:CodexMobileTests/CodexServiceRelayHistoryNoticeTests \
-  -only-testing:CodexMobileTests/CodexServiceCatchupRecoveryTests \
-  -only-testing:CodexMobileTests/TurnConnectionRecoverySnapshotBuilderTests
+  "${ONLY_TESTING_ARGS[@]}"

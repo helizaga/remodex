@@ -87,6 +87,37 @@ private func codexLogPairingTransport(_ message: String) {
 }
 
 extension CodexService {
+    func webSocketUpgradeHeaders(token: String, role: String? = nil) -> [(name: String, value: String)] {
+        if let role, !role.isEmpty {
+            var headers: [(name: String, value: String)] = [("x-role", role)]
+            if role == "iphone" {
+                let phoneDeviceID = phoneIdentityState.phoneDeviceId.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !phoneDeviceID.isEmpty {
+                    headers.append(("x-phone-device-id", phoneDeviceID))
+                }
+
+                let phoneIdentityPublicKey = phoneIdentityState.phoneIdentityPublicKey
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !phoneIdentityPublicKey.isEmpty {
+                    headers.append(("x-phone-identity-public-key", phoneIdentityPublicKey))
+                }
+
+                let handshakeMode = shouldForceQRBootstrapOnNextHandshake
+                    ? CodexSecureHandshakeMode.qrBootstrap.rawValue
+                    : CodexSecureHandshakeMode.trustedReconnect.rawValue
+                headers.append(("x-secure-handshake-mode", handshakeMode))
+            }
+            return headers
+        }
+
+        let normalizedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !normalizedToken.isEmpty {
+            return [("Authorization", "Bearer \(normalizedToken)")]
+        }
+
+        return []
+    }
+
     // Rejects oversized relay frames before Network.framework turns them into a raw EMSGSIZE failure.
     func validateOutgoingWebSocketMessageSize(_ text: String) throws {
         let payloadSize = Data(text.utf8).count
@@ -439,12 +470,7 @@ extension CodexService {
         // Network.framework defaults this low enough to reject larger encrypted envelopes.
         webSocketOptions.maximumMessageSize = codexWebSocketMaximumMessageSizeBytes
 
-        var additionalHeaders: [(name: String, value: String)] = []
-        if let role, !role.isEmpty {
-            additionalHeaders.append((name: "x-role", value: role))
-        } else if !token.isEmpty {
-            additionalHeaders.append((name: "Authorization", value: "Bearer \(token)"))
-        }
+        let additionalHeaders = webSocketUpgradeHeaders(token: token, role: role)
         if !additionalHeaders.isEmpty {
             webSocketOptions.setAdditionalHeaders(additionalHeaders)
         }
@@ -492,10 +518,8 @@ extension CodexService {
         role: String? = nil
     ) async throws -> CodexWebSocketTransport {
         var request = URLRequest(url: url)
-        if let role, !role.isEmpty {
-            request.setValue(role, forHTTPHeaderField: "x-role")
-        } else if !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        for header in webSocketUpgradeHeaders(token: token, role: role) {
+            request.setValue(header.value, forHTTPHeaderField: header.name)
         }
 
         let configuration = URLSessionConfiguration.default
@@ -675,10 +699,8 @@ extension CodexService {
             "Sec-WebSocket-Key: \(key)",
             "Sec-WebSocket-Version: 13",
         ]
-        if let role, !role.isEmpty {
-            requestLines.append("x-role: \(role)")
-        } else if !token.isEmpty {
-            requestLines.append("Authorization: Bearer \(token)")
+        for header in webSocketUpgradeHeaders(token: token, role: role) {
+            requestLines.append("\(header.name): \(header.value)")
         }
         requestLines.append(contentsOf: ["", ""])
 

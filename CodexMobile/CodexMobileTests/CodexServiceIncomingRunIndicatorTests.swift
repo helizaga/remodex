@@ -10,7 +10,6 @@ import Network
 
 @MainActor
 final class CodexServiceIncomingRunIndicatorTests: XCTestCase {
-    private static var retainedServices: [CodexService] = []
 
     func testTurnStartedMarksThreadAsRunning() {
         let service = makeService()
@@ -1169,9 +1168,6 @@ final class CodexServiceIncomingRunIndicatorTests: XCTestCase {
         defaults.removePersistentDomain(forName: suiteName)
         let service = CodexService(defaults: defaults)
         service.messagesByThread = [:]
-        // CodexService currently crashes while deallocating in unit-test environment.
-        // Keep instances alive for process lifetime so assertions remain deterministic.
-        Self.retainedServices.append(service)
         return service
     }
 

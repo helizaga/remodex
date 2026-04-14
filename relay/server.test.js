@@ -519,7 +519,7 @@ test("redactRelayPathname hides the session path segment", () => {
   assert.equal(redactRelayPathname("/health"), "/health");
 });
 
-test("websocket relay forwards between mac and iphone on the base relay path", async () => {
+test("bootstrap relay forwards between mac and iphone without trusted phone headers", async () => {
   await withServer(async ({ port }) => {
     const mac = new WebSocket(`ws://127.0.0.1:${port}/relay/session-1`, {
       headers: macHeaders({
@@ -528,7 +528,7 @@ test("websocket relay forwards between mac and iphone on the base relay path", a
       }),
     });
     const iphone = new WebSocket(`ws://127.0.0.1:${port}/relay/session-1`, {
-      headers: { "x-role": "iphone" },
+      headers: phoneHeaders(),
     });
 
     await Promise.all([onceOpen(mac), onceOpen(iphone)]);
@@ -544,6 +544,166 @@ test("websocket relay forwards between mac and iphone on the base relay path", a
     mac.close();
     iphone.close();
     await Promise.all([macClosed, iphoneClosed]);
+  });
+});
+
+test("trusted reconnect with matching phone headers can replace the live iphone socket", async () => {
+  await withServer(async ({ port }) => {
+    const trustedPhone = makePhoneIdentity();
+    const mac = new WebSocket(`ws://127.0.0.1:${port}/relay/session-trusted-replace`, {
+      headers: macHeaders({
+        "x-mac-device-id": "mac-trusted-replace",
+        "x-mac-identity-public-key": "mac-public-key-trusted-replace",
+        "x-trusted-phone-device-id": trustedPhone.phoneDeviceId,
+        "x-trusted-phone-public-key": trustedPhone.phoneIdentityPublicKey,
+      }),
+    });
+    const originalIphone = new WebSocket(`ws://127.0.0.1:${port}/relay/session-trusted-replace`, {
+      headers: phoneHeaders(trustedPhone),
+    });
+
+    await Promise.all([onceOpen(mac), onceOpen(originalIphone)]);
+
+    const originalIphoneClose = onceCloseDetails(originalIphone);
+    const replacementIphone = new WebSocket(`ws://127.0.0.1:${port}/relay/session-trusted-replace`, {
+      headers: phoneHeaders(trustedPhone),
+    });
+    await onceOpen(replacementIphone);
+
+    const closeDetails = await originalIphoneClose;
+    assert.equal(closeDetails.code, 4003);
+    assert.equal(closeDetails.reason, "Replaced by newer iPhone connection");
+
+    const received = onceMessage(replacementIphone);
+    mac.send(JSON.stringify({ trusted: true }));
+    assert.equal(await received, "{\"trusted\":true}");
+
+    const macClosed = onceClosed(mac);
+    const replacementIphoneClosed = onceClosed(replacementIphone);
+    mac.close();
+    replacementIphone.close();
+    await Promise.all([macClosed, replacementIphoneClosed]);
+  });
+});
+
+test("trusted reconnect rejects iphone replacement without phone identity headers", async () => {
+  await withServer(async ({ port }) => {
+    const trustedPhone = makePhoneIdentity();
+    const mac = new WebSocket(`ws://127.0.0.1:${port}/relay/session-trusted-missing`, {
+      headers: macHeaders({
+        "x-mac-device-id": "mac-trusted-missing",
+        "x-mac-identity-public-key": "mac-public-key-trusted-missing",
+        "x-trusted-phone-device-id": trustedPhone.phoneDeviceId,
+        "x-trusted-phone-public-key": trustedPhone.phoneIdentityPublicKey,
+      }),
+    });
+    const iphone = new WebSocket(`ws://127.0.0.1:${port}/relay/session-trusted-missing`, {
+      headers: phoneHeaders(trustedPhone),
+    });
+
+    await Promise.all([onceOpen(mac), onceOpen(iphone)]);
+
+    const attacker = new WebSocket(`ws://127.0.0.1:${port}/relay/session-trusted-missing`, {
+      headers: phoneHeaders(),
+    });
+    const attackerClose = onceCloseDetails(attacker);
+    await onceOpen(attacker);
+
+    const attackerDetails = await attackerClose;
+    assert.equal(attackerDetails.code, 4002);
+    assert.equal(attackerDetails.reason, "Mac session not available");
+
+    const received = onceMessage(iphone);
+    mac.send(JSON.stringify({ stillTrusted: true }));
+    assert.equal(await received, "{\"stillTrusted\":true}");
+
+    const macClosed = onceClosed(mac);
+    const iphoneClosed = onceClosed(iphone);
+    mac.close();
+    iphone.close();
+    await Promise.all([macClosed, iphoneClosed]);
+  });
+});
+
+test("trusted reconnect rejects iphone replacement with mismatched phone identity headers", async () => {
+  await withServer(async ({ port }) => {
+    const trustedPhone = makePhoneIdentity();
+    const mismatchedPhone = makePhoneIdentity();
+    const mac = new WebSocket(`ws://127.0.0.1:${port}/relay/session-trusted-mismatch`, {
+      headers: macHeaders({
+        "x-mac-device-id": "mac-trusted-mismatch",
+        "x-mac-identity-public-key": "mac-public-key-trusted-mismatch",
+        "x-trusted-phone-device-id": trustedPhone.phoneDeviceId,
+        "x-trusted-phone-public-key": trustedPhone.phoneIdentityPublicKey,
+      }),
+    });
+    const iphone = new WebSocket(`ws://127.0.0.1:${port}/relay/session-trusted-mismatch`, {
+      headers: phoneHeaders(trustedPhone),
+    });
+
+    await Promise.all([onceOpen(mac), onceOpen(iphone)]);
+
+    const attacker = new WebSocket(`ws://127.0.0.1:${port}/relay/session-trusted-mismatch`, {
+      headers: phoneHeaders(mismatchedPhone),
+    });
+    const attackerClose = onceCloseDetails(attacker);
+    await onceOpen(attacker);
+
+    const attackerDetails = await attackerClose;
+    assert.equal(attackerDetails.code, 4002);
+    assert.equal(attackerDetails.reason, "Mac session not available");
+
+    const received = onceMessage(iphone);
+    mac.send(JSON.stringify({ trustedClientStayed: true }));
+    assert.equal(await received, "{\"trustedClientStayed\":true}");
+
+    const macClosed = onceClosed(mac);
+    const iphoneClosed = onceClosed(iphone);
+    mac.close();
+    iphone.close();
+    await Promise.all([macClosed, iphoneClosed]);
+  });
+});
+
+test("qr bootstrap can replace the live iphone socket even when the trusted phone identity changed", async () => {
+  await withServer(async ({ port }) => {
+    const trustedPhone = makePhoneIdentity();
+    const replacementPhone = makePhoneIdentity();
+    const mac = new WebSocket(`ws://127.0.0.1:${port}/relay/session-qr-replace`, {
+      headers: macHeaders({
+        "x-mac-device-id": "mac-qr-replace",
+        "x-mac-identity-public-key": "mac-public-key-qr-replace",
+        "x-trusted-phone-device-id": trustedPhone.phoneDeviceId,
+        "x-trusted-phone-public-key": trustedPhone.phoneIdentityPublicKey,
+      }),
+    });
+    const originalIphone = new WebSocket(`ws://127.0.0.1:${port}/relay/session-qr-replace`, {
+      headers: phoneHeaders(trustedPhone),
+    });
+
+    await Promise.all([onceOpen(mac), onceOpen(originalIphone)]);
+
+    const originalIphoneClose = onceCloseDetails(originalIphone);
+    const qrBootstrapIphone = new WebSocket(`ws://127.0.0.1:${port}/relay/session-qr-replace`, {
+      headers: phoneHeaders(replacementPhone, {
+        "x-secure-handshake-mode": "qr_bootstrap",
+      }),
+    });
+    await onceOpen(qrBootstrapIphone);
+
+    const closeDetails = await originalIphoneClose;
+    assert.equal(closeDetails.code, 4003);
+    assert.equal(closeDetails.reason, "Replaced by newer iPhone connection");
+
+    const received = onceMessage(qrBootstrapIphone);
+    mac.send(JSON.stringify({ qrBootstrap: true }));
+    assert.equal(await received, "{\"qrBootstrap\":true}");
+
+    const macClosed = onceClosed(mac);
+    const replacementClosed = onceClosed(qrBootstrapIphone);
+    mac.close();
+    qrBootstrapIphone.close();
+    await Promise.all([macClosed, replacementClosed]);
   });
 });
 
@@ -810,6 +970,20 @@ function macHeaders(overrides = {}) {
     "x-notification-secret": "bridge-secret",
     ...overrides,
   };
+}
+
+function phoneHeaders(phoneIdentity = {}, overrides = {}) {
+  const headers = {
+    "x-role": "iphone",
+    ...overrides,
+  };
+  if (phoneIdentity.phoneDeviceId) {
+    headers["x-phone-device-id"] = phoneIdentity.phoneDeviceId;
+  }
+  if (phoneIdentity.phoneIdentityPublicKey) {
+    headers["x-phone-identity-public-key"] = phoneIdentity.phoneIdentityPublicKey;
+  }
+  return headers;
 }
 
 function makeTrustedResolveBody({

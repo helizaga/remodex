@@ -282,6 +282,47 @@ struct AssistantRevertStateCacheEntry {
 }
 
 @MainActor
+final class TurnTimelineStore {
+    var stateByThread: [String: ThreadTimelineState] = [:]
+    var stoppedTurnIDsByThread: [String: Set<String>] = [:]
+    var messageIndexCacheByThread: [String: [String: Int]] = [:]
+    var latestAssistantOutputByThread: [String: String] = [:]
+    var latestRepoAffectingMessageSignalByThread: [String: String] = [:]
+    var assistantRevertStateCacheByThread: [String: AssistantRevertStateCacheEntry] = [:]
+    var assistantRevertStateRevision: Int = 0
+    var busyRepoRoots: Set<String> = []
+    var busyRepoRootsRevision: Int = 0
+
+    func timelineState(for threadID: String) -> ThreadTimelineState {
+        if let existing = stateByThread[threadID] {
+            return existing
+        }
+
+        let state = ThreadTimelineState(threadID: threadID)
+        stateByThread[threadID] = state
+        return state
+    }
+
+    func removeTimelineState(for threadID: String) {
+        stateByThread.removeValue(forKey: threadID)
+        stoppedTurnIDsByThread.removeValue(forKey: threadID)
+        messageIndexCacheByThread.removeValue(forKey: threadID)
+        latestAssistantOutputByThread.removeValue(forKey: threadID)
+        latestRepoAffectingMessageSignalByThread.removeValue(forKey: threadID)
+        assistantRevertStateCacheByThread.removeValue(forKey: threadID)
+    }
+
+    func removeAllTimelineState() {
+        stateByThread.removeAll()
+        stoppedTurnIDsByThread.removeAll()
+        messageIndexCacheByThread.removeAll()
+        latestAssistantOutputByThread.removeAll()
+        latestRepoAffectingMessageSignalByThread.removeAll()
+        assistantRevertStateCacheByThread.removeAll()
+    }
+}
+
+@MainActor
 @Observable
 final class CodexService {
     static let minimumSupportedBridgePackageVersion = "1.3.5"
@@ -515,21 +556,49 @@ final class CodexService {
     // Canonical repo roots keyed by observed working directories from bridge git/status responses.
     var repoRootByWorkingDirectory: [String: String] = [:]
     var knownRepoRoots: Set<String> = []
-    // Service-owned per-thread UI state keeps the active chat isolated from unrelated thread mutations.
-    @ObservationIgnored var threadTimelineStateByThread: [String: ThreadTimelineState] = [:]
+    // Service-owned per-thread UI state is delegated into a dedicated timeline store.
+    @ObservationIgnored let timelineStore = TurnTimelineStore()
     @ObservationIgnored var forkedFromThreadIDByThreadID: [String: String] = [:]
     @ObservationIgnored var renamedThreadNameByThreadID: [String: String] = [:]
     @ObservationIgnored var associatedManagedWorktreePathByThreadID: [String: String] = [:]
     @ObservationIgnored var authoritativeProjectPathByThreadID: [String: String] = [:]
-    @ObservationIgnored var stoppedTurnIDsByThread: [String: Set<String>] = [:]
     // Lazily rebuilt id->index maps keep hot-path message lookups out of repeated linear scans.
-    @ObservationIgnored var messageIndexCacheByThread: [String: [String: Int]] = [:]
-    @ObservationIgnored var latestAssistantOutputByThread: [String: String] = [:]
-    @ObservationIgnored var latestRepoAffectingMessageSignalByThread: [String: String] = [:]
-    @ObservationIgnored var assistantRevertStateCacheByThread: [String: AssistantRevertStateCacheEntry] = [:]
-    @ObservationIgnored var assistantRevertStateRevision: Int = 0
-    @ObservationIgnored var busyRepoRoots: Set<String> = []
-    @ObservationIgnored var busyRepoRootsRevision: Int = 0
+    @ObservationIgnored var threadTimelineStateByThread: [String: ThreadTimelineState] {
+        get { timelineStore.stateByThread }
+        set { timelineStore.stateByThread = newValue }
+    }
+    @ObservationIgnored var stoppedTurnIDsByThread: [String: Set<String>] {
+        get { timelineStore.stoppedTurnIDsByThread }
+        set { timelineStore.stoppedTurnIDsByThread = newValue }
+    }
+    @ObservationIgnored var messageIndexCacheByThread: [String: [String: Int]] {
+        get { timelineStore.messageIndexCacheByThread }
+        set { timelineStore.messageIndexCacheByThread = newValue }
+    }
+    @ObservationIgnored var latestAssistantOutputByThread: [String: String] {
+        get { timelineStore.latestAssistantOutputByThread }
+        set { timelineStore.latestAssistantOutputByThread = newValue }
+    }
+    @ObservationIgnored var latestRepoAffectingMessageSignalByThread: [String: String] {
+        get { timelineStore.latestRepoAffectingMessageSignalByThread }
+        set { timelineStore.latestRepoAffectingMessageSignalByThread = newValue }
+    }
+    @ObservationIgnored var assistantRevertStateCacheByThread: [String: AssistantRevertStateCacheEntry] {
+        get { timelineStore.assistantRevertStateCacheByThread }
+        set { timelineStore.assistantRevertStateCacheByThread = newValue }
+    }
+    @ObservationIgnored var assistantRevertStateRevision: Int {
+        get { timelineStore.assistantRevertStateRevision }
+        set { timelineStore.assistantRevertStateRevision = newValue }
+    }
+    @ObservationIgnored var busyRepoRoots: Set<String> {
+        get { timelineStore.busyRepoRoots }
+        set { timelineStore.busyRepoRoots = newValue }
+    }
+    @ObservationIgnored var busyRepoRootsRevision: Int {
+        get { timelineStore.busyRepoRootsRevision }
+        set { timelineStore.busyRepoRootsRevision = newValue }
+    }
 
     let encoder: JSONEncoder
     let decoder: JSONDecoder
@@ -717,6 +786,23 @@ final class CodexService {
             self.secureMacFingerprint = codexSecureFingerprint(for: trustedMac.macIdentityPublicKey)
         }
         rebuildThreadLookupCaches()
+    }
+
+    isolated deinit {
+        releaseConnectionResourcesForDeinit()
+        trustedSessionResolveTask?.cancel()
+        trustedSessionResolveTask = nil
+        trustedSessionResolveTaskID = nil
+        gptAccountLoginSyncTask?.cancel()
+        gptAccountLoginSyncTask = nil
+        messagePersistenceDebounceTask?.cancel()
+        messagePersistenceDebounceTask = nil
+        coalescedRevertRefreshTask?.cancel()
+        coalescedRevertRefreshTask = nil
+        failAllPendingRequests(with: CodexServiceError.disconnected)
+        resetSecureTransportState()
+        removeAllThreadTimelineState()
+        tearDownNotifications()
     }
 
     // Persists per-thread plan-mode provenance so reconnect/relaunch keeps native vs fallback behavior stable.

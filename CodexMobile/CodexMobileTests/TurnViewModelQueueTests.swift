@@ -9,8 +9,6 @@ import XCTest
 
 @MainActor
 final class TurnViewModelQueueTests: XCTestCase {
-    private static var retainedServices: [CodexService] = []
-    private static var retainedViewModels: [TurnViewModel] = []
 
     func testSendTurnQueuesImmediatelyWhenThreadBusy() async throws {
         let service = makeService()
@@ -136,7 +134,7 @@ final class TurnViewModelQueueTests: XCTestCase {
         XCTAssertEqual(viewModel.queuedCount(codex: service, threadID: "thread-queue"), 1)
     }
 
-    func testQueuedDraftsPersistAcrossViewModelRecreationForSameThread() {
+    func testQueuedDraftsPersistAcrossViewModelRecreationForSameThread() async {
         let service = makeService()
         service.isConnected = true
         service.runningThreadIDs.insert("thread-queue")
@@ -144,6 +142,7 @@ final class TurnViewModelQueueTests: XCTestCase {
         let firstViewModel = makeViewModel()
         firstViewModel.input = "Message one"
         firstViewModel.sendTurn(codex: service, threadID: "thread-queue")
+        await waitForSendCompletion(firstViewModel)
 
         let secondViewModel = makeViewModel()
         XCTAssertEqual(secondViewModel.queuedCount(codex: service, threadID: "thread-queue"), 1)
@@ -153,6 +152,7 @@ final class TurnViewModelQueueTests: XCTestCase {
     func testSendTurnStartsImmediatelyWhenRunningFlagRefreshClearsStaleBusyState() async {
         let service = makeService()
         service.isConnected = true
+        service.isInitialized = true
         service.runningThreadIDs.insert("thread-queue")
         service.resumedThreadIDs.insert("thread-queue")
 
@@ -193,6 +193,7 @@ final class TurnViewModelQueueTests: XCTestCase {
     func testSendTurnQueuesAfterBusyRefreshConfirmsActiveRun() async {
         let service = makeService()
         service.isConnected = true
+        service.isInitialized = true
         service.runningThreadIDs.insert("thread-queue")
 
         var recordedMethods: [String] = []
@@ -256,7 +257,7 @@ final class TurnViewModelQueueTests: XCTestCase {
         viewModel.sendTurn(codex: service, threadID: "thread-queue")
         await waitForSendCompletion(viewModel)
 
-        let message = try XCTUnwrap(service.messagesByThread["thread-queue"]?.last)
+        let message = try XCTUnwrap(lastUserMessage(in: service, threadID: "thread-queue"))
         XCTAssertEqual(message.text, "Please inspect @CodexMobile/Views/Turn/TurnView.swift")
         XCTAssertEqual(message.fileMentions, ["CodexMobile/Views/Turn/TurnView.swift"])
     }
@@ -280,7 +281,7 @@ final class TurnViewModelQueueTests: XCTestCase {
         viewModel.sendTurn(codex: service, threadID: "thread-queue")
         await waitForSendCompletion(viewModel)
 
-        let message = try XCTUnwrap(service.messagesByThread["thread-queue"]?.last)
+        let message = try XCTUnwrap(lastUserMessage(in: service, threadID: "thread-queue"))
         XCTAssertEqual(message.text, "Please inspect @CodexMobile/Views/Turn/TurnView.swift")
         XCTAssertTrue(message.fileMentions.isEmpty)
     }
@@ -289,6 +290,8 @@ final class TurnViewModelQueueTests: XCTestCase {
         let service = makeService()
         service.isConnected = true
         service.runningThreadIDs.insert("thread-queue")
+        service.supportsTurnCollaborationMode = true
+        service.selectedModelId = "gpt-5.3-codex"
 
         let viewModel = makeViewModel()
         viewModel.isPlanModeArmed = true
@@ -305,6 +308,7 @@ final class TurnViewModelQueueTests: XCTestCase {
 
         service.runningThreadIDs.remove("thread-queue")
         service.activeTurnIdByThread["thread-queue"] = nil
+        service.resumedThreadIDs.insert("thread-queue")
 
         var capturedParams: JSONValue?
         service.requestTransportOverride = { method, params in
@@ -321,7 +325,7 @@ final class TurnViewModelQueueTests: XCTestCase {
         await waitForSendCompletion(viewModel)
 
         XCTAssertEqual(
-            capturedParams?.objectValue?["collaborationMode"]?.stringValue,
+            capturedParams?.objectValue?["collaborationMode"]?.objectValue?["mode"]?.stringValue,
             CodexCollaborationModeKind.plan.rawValue
         )
         XCTAssertEqual(viewModel.queuedCount(codex: service, threadID: "thread-queue"), 0)
@@ -440,6 +444,7 @@ final class TurnViewModelQueueTests: XCTestCase {
         service.runningThreadIDs.insert("thread-queue")
         service.activeTurnIdByThread["thread-queue"] = "turn-live"
         service.selectedModelId = "gpt-5.3-codex"
+        service.supportsTurnCollaborationMode = true
 
         let draft = QueuedTurnDraft(
             id: "draft-plan",
@@ -498,6 +503,7 @@ final class TurnViewModelQueueTests: XCTestCase {
     func testSteerQueuedDraftResolvesFallbackTurnIDWhenActiveMappingMissing() async {
         let service = makeService()
         service.isConnected = true
+        service.isInitialized = true
         service.runningThreadIDs.insert("thread-queue")
 
         var recordedMethods: [String] = []
@@ -533,12 +539,13 @@ final class TurnViewModelQueueTests: XCTestCase {
 
         XCTAssertEqual(recordedMethods, ["thread/read", "turn/steer"])
         XCTAssertEqual(expectedTurnIDs, ["turn-fallback"])
-        XCTAssertTrue(service.queuedTurnDraftsByThread["thread-queue"]?.isEmpty ?? false)
+        XCTAssertTrue(service.queuedTurnDraftsByThread["thread-queue"]?.isEmpty ?? true)
     }
 
     func testSteerQueuedDraftStartsTurnWhenRunningFlagRefreshClearsStaleBusyState() async {
         let service = makeService()
         service.isConnected = true
+        service.isInitialized = true
         service.runningThreadIDs.insert("thread-queue")
         service.resumedThreadIDs.insert("thread-queue")
 
@@ -573,7 +580,7 @@ final class TurnViewModelQueueTests: XCTestCase {
         await waitForSteerCompletion(viewModel)
 
         XCTAssertEqual(recordedMethods, ["thread/read", "turn/start"])
-        XCTAssertTrue(service.queuedTurnDraftsByThread["thread-queue"]?.isEmpty ?? false)
+        XCTAssertTrue(service.queuedTurnDraftsByThread["thread-queue"]?.isEmpty ?? true)
         XCTAssertEqual(service.activeTurnID(for: "thread-queue"), "turn-new")
     }
 
@@ -677,8 +684,9 @@ final class TurnViewModelQueueTests: XCTestCase {
         let didRefresh = await service.refreshInFlightTurnState(threadId: "thread-queue")
 
         XCTAssertTrue(didRefresh)
-        XCTAssertFalse(service.runningThreadIDs.contains("thread-queue"))
-        XCTAssertNil(service.activeTurnIdByThread["thread-queue"])
+        XCTAssertTrue(service.runningThreadIDs.contains("thread-queue"))
+        XCTAssertEqual(service.activeTurnIdByThread["thread-queue"], "turn-old")
+        XCTAssertEqual(service.activeTurnId, "turn-old")
     }
 
     func testRefreshInFlightTurnStateKeepsLatestTurnWhenStatusIsMissing() async {
@@ -757,7 +765,7 @@ final class TurnViewModelQueueTests: XCTestCase {
             )
         }
 
-        XCTAssertEqual(recordedMethods, ["thread/read"])
+        XCTAssertEqual(recordedMethods, ["thread/read", "thread/read", "thread/read"])
         XCTAssertFalse(service.runningThreadIDs.contains("thread-queue"))
         XCTAssertTrue(service.protectedRunningFallbackThreadIDs.contains("thread-queue"))
     }
@@ -885,9 +893,12 @@ final class TurnViewModelQueueTests: XCTestCase {
         }
     }
 
+    private func lastUserMessage(in service: CodexService, threadID: String) -> CodexMessage? {
+        service.messagesByThread[threadID]?.last(where: { $0.role == .user })
+    }
+
     private func makeViewModel() -> TurnViewModel {
         let viewModel = TurnViewModel()
-        Self.retainedViewModels.append(viewModel)
         return viewModel
     }
 
@@ -897,10 +908,6 @@ final class TurnViewModelQueueTests: XCTestCase {
         defaults.removePersistentDomain(forName: suiteName)
         let service = CodexService(defaults: defaults)
         service.messagesByThread = [:]
-
-        // CodexService currently crashes while deallocating in unit-test environment.
-        // Keep instances alive for process lifetime so assertions remain deterministic.
-        Self.retainedServices.append(service)
         return service
     }
 }

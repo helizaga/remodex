@@ -652,7 +652,7 @@ extension CodexService {
     }
 
     // Removes the current socket reference before reconnect/teardown logic mutates shared state.
-    private func cancelCurrentSocketConnection() {
+    func cancelCurrentSocketConnection() {
         if let connection = webSocketConnection {
             connection.stateUpdateHandler = nil
             webSocketConnection = nil
@@ -675,13 +675,25 @@ extension CodexService {
     }
 
     // Drops sync work tied to the old transport so reconnect starts from a clean baseline.
-    private func clearConnectionSyncState() {
+    func clearConnectionSyncState() {
         isBootstrappingConnectionSync = false
         stopSyncLoop()
         postConnectSyncTask?.cancel()
         postConnectSyncTask = nil
         postConnectSyncToken = nil
         cancelAllPerThreadRefreshWork()
+    }
+
+    // Releases transport/session resources synchronously so unit-test teardown does not depend on async disconnect.
+    func releaseConnectionResourcesForDeinit() {
+        cancelCurrentSocketConnection()
+        clearConnectionSyncState()
+        messagePersistenceDebounceTask?.cancel()
+        messagePersistenceDebounceTask = nil
+        messagePersistence.save(messagesByThread)
+        shouldAutoReconnectOnForeground = false
+        connectionRecoveryState = .idle
+        endBackgroundRunGraceTask(reason: "deinit")
     }
 
     // Avoids wiping thread/runtime state when reconnecting after a socket that already died.

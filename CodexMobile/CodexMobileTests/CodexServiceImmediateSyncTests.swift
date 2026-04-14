@@ -9,7 +9,6 @@ import XCTest
 
 @MainActor
 final class CodexServiceImmediateSyncTests: XCTestCase {
-    private static var retainedServices: [CodexService] = []
 
     func testImmediateSyncCoalescesRapidThreadSwitchesIntoLatestThread() async {
         let service = makeService()
@@ -136,7 +135,6 @@ final class CodexServiceImmediateSyncTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard
         defaults.removePersistentDomain(forName: suiteName)
         let service = CodexService(defaults: defaults)
-        Self.retainedServices.append(service)
         return service
     }
 

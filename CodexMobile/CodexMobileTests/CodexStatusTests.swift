@@ -9,7 +9,6 @@ import XCTest
 
 @MainActor
 final class CodexStatusTests: XCTestCase {
-    private static var retainedServices: [CodexService] = []
 
     func testRefreshRateLimitsDecodesBucketsFromReadResponse() async {
         let service = makeService()
@@ -334,7 +333,6 @@ final class CodexStatusTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard
         defaults.removePersistentDomain(forName: suiteName)
         let service = CodexService(defaults: defaults)
-        Self.retainedServices.append(service)
         return service
     }
 }

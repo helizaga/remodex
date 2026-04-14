@@ -258,6 +258,81 @@ final class CodexServiceConnectionErrorTests: XCTestCase {
         XCTAssertFalse(service.requiresLocalNetworkAuthorization(for: url))
     }
 
+    func testWebSocketUpgradeHeadersIncludeTrustedPhoneIdentityForIphoneRole() {
+        let service = CodexService()
+        service.phoneIdentityState = CodexPhoneIdentityState(
+            phoneDeviceId: "phone-123",
+            phoneIdentityPrivateKey: "private-key",
+            phoneIdentityPublicKey: "public-key"
+        )
+
+        let headers = Dictionary(
+            uniqueKeysWithValues: service.webSocketUpgradeHeaders(token: "", role: "iphone").map {
+                ($0.name, $0.value)
+            }
+        )
+
+        XCTAssertEqual(headers["x-role"], "iphone")
+        XCTAssertEqual(headers["x-phone-device-id"], "phone-123")
+        XCTAssertEqual(headers["x-phone-identity-public-key"], "public-key")
+        XCTAssertEqual(headers["x-secure-handshake-mode"], "trusted_reconnect")
+    }
+
+    func testWebSocketUpgradeHeadersForceQrBootstrapModeAfterFreshScan() {
+        let service = CodexService()
+        service.phoneIdentityState = CodexPhoneIdentityState(
+            phoneDeviceId: "phone-123",
+            phoneIdentityPrivateKey: "private-key",
+            phoneIdentityPublicKey: "public-key"
+        )
+        service.shouldForceQRBootstrapOnNextHandshake = true
+
+        let headers = Dictionary(
+            uniqueKeysWithValues: service.webSocketUpgradeHeaders(token: "", role: "iphone").map {
+                ($0.name, $0.value)
+            }
+        )
+
+        XCTAssertEqual(headers["x-role"], "iphone")
+        XCTAssertEqual(headers["x-phone-device-id"], "phone-123")
+        XCTAssertEqual(headers["x-phone-identity-public-key"], "public-key")
+        XCTAssertEqual(headers["x-secure-handshake-mode"], "qr_bootstrap")
+    }
+
+    func testWebSocketUpgradeHeadersDoNotLeakPhoneIdentityForNonIphoneRoles() {
+        let service = CodexService()
+        service.phoneIdentityState = CodexPhoneIdentityState(
+            phoneDeviceId: "phone-123",
+            phoneIdentityPrivateKey: "private-key",
+            phoneIdentityPublicKey: "public-key"
+        )
+
+        let headers = Dictionary(
+            uniqueKeysWithValues: service.webSocketUpgradeHeaders(token: "", role: "mac").map {
+                ($0.name, $0.value)
+            }
+        )
+
+        XCTAssertEqual(headers["x-role"], "mac")
+        XCTAssertNil(headers["x-phone-device-id"])
+        XCTAssertNil(headers["x-phone-identity-public-key"])
+        XCTAssertNil(headers["x-secure-handshake-mode"])
+    }
+
+    func testWebSocketUpgradeHeadersUseAuthorizationWhenRoleIsMissing() {
+        let service = CodexService()
+        let headers = Dictionary(
+            uniqueKeysWithValues: service.webSocketUpgradeHeaders(token: "relay-token", role: nil).map {
+                ($0.name, $0.value)
+            }
+        )
+
+        XCTAssertEqual(headers["Authorization"], "Bearer relay-token")
+        XCTAssertNil(headers["x-role"])
+        XCTAssertNil(headers["x-phone-device-id"])
+        XCTAssertNil(headers["x-secure-handshake-mode"])
+    }
+
     func testDirectRelaySocketTimeoutRemainsRetryable() {
         let service = CodexService()
         let error = CodexServiceError.invalidInput(

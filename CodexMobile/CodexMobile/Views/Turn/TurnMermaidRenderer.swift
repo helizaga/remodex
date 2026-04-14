@@ -640,6 +640,10 @@ enum MermaidSourceNormalizer {
     }
 
     private static func normalizeNodeLabels(in line: String) -> String {
+        if line.contains("-->") {
+            return line
+        }
+
         let squared = replaceNodeLabels(in: line, regex: squareNodeRegex, opening: "[", closing: "]")
         return replaceNodeLabels(in: squared, regex: decisionNodeRegex, opening: "{", closing: "}")
     }

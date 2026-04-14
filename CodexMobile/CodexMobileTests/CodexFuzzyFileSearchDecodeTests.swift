@@ -9,7 +9,6 @@ import XCTest
 
 @MainActor
 final class CodexFuzzyFileSearchDecodeTests: XCTestCase {
-    private static var retainedServices: [CodexService] = []
 
     func testDecodeFuzzyFileSearchParsesResultFiles() {
         let service = makeService()
@@ -50,10 +49,6 @@ final class CodexFuzzyFileSearchDecodeTests: XCTestCase {
         defaults.removePersistentDomain(forName: suiteName)
         let service = CodexService(defaults: defaults)
         service.messagesByThread = [:]
-
-        // CodexService currently crashes while deallocating in unit-test environment.
-        // Keep instances alive for process lifetime so assertions remain deterministic.
-        Self.retainedServices.append(service)
         return service
     }
 }

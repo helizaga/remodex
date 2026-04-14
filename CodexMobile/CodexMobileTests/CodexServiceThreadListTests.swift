@@ -9,7 +9,6 @@ import XCTest
 
 @MainActor
 final class CodexServiceThreadListTests: XCTestCase {
-    private static var retainedServices: [CodexService] = []
 
     func testListThreadsRequestsSixtyActiveThreadsAndAppServerSourceKinds() async throws {
         let service = makeService()
@@ -86,7 +85,6 @@ final class CodexServiceThreadListTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard
         defaults.removePersistentDomain(forName: suiteName)
         let service = CodexService(defaults: defaults)
-        Self.retainedServices.append(service)
         return service
     }
 }

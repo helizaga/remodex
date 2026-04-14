@@ -9,7 +9,6 @@ import XCTest
 
 @MainActor
 final class TurnComposerSendAvailabilityTests: XCTestCase {
-    private static var retainedServices: [CodexService] = []
 
     func testSendDisabledWhenDisconnected() {
         let state = makeState(isConnected: false)
@@ -98,6 +97,7 @@ final class TurnComposerSendAvailabilityTests: XCTestCase {
     func testSendTurnUsesCannedPromptWhenSubagentsChipIsSelected() async {
         let service = makeService()
         service.isConnected = true
+        service.resumedThreadIDs.insert("thread-subagents")
 
         var capturedParams: JSONValue?
         service.requestTransportOverride = { method, params in
@@ -127,6 +127,7 @@ final class TurnComposerSendAvailabilityTests: XCTestCase {
     func testSendTurnPrefixesDraftTextWhenSubagentsChipIsSelected() async {
         let service = makeService()
         service.isConnected = true
+        service.resumedThreadIDs.insert("thread-literal-subagents")
 
         var capturedParams: JSONValue?
         service.requestTransportOverride = { method, params in
@@ -158,6 +159,7 @@ final class TurnComposerSendAvailabilityTests: XCTestCase {
     func testSendTurnPrefixesPromptBeforeOrdinaryDraftText() async {
         let service = makeService()
         service.isConnected = true
+        service.resumedThreadIDs.insert("thread-shifted-subagents")
 
         var capturedParams: JSONValue?
         service.requestTransportOverride = { method, params in
@@ -186,6 +188,7 @@ final class TurnComposerSendAvailabilityTests: XCTestCase {
     func testSendTurnTrimsLeadingWhitespaceBeforeApplyingSubagentsPrompt() async {
         let service = makeService()
         service.isConnected = true
+        service.resumedThreadIDs.insert("thread-trimmed-subagents")
 
         var capturedParams: JSONValue?
         service.requestTransportOverride = { method, params in
@@ -214,6 +217,7 @@ final class TurnComposerSendAvailabilityTests: XCTestCase {
     func testSendTurnPrefixesPromptAfterFileMentionRewrite() async {
         let service = makeService()
         service.isConnected = true
+        service.resumedThreadIDs.insert("thread-file-mention-subagents")
 
         var capturedParams: JSONValue?
         service.requestTransportOverride = { method, params in
@@ -289,10 +293,6 @@ final class TurnComposerSendAvailabilityTests: XCTestCase {
         defaults.removePersistentDomain(forName: suiteName)
         let service = CodexService(defaults: defaults)
         service.messagesByThread = [:]
-
-        // CodexService currently crashes while deallocating in unit-test environment.
-        // Keep instances alive for process lifetime so assertions remain deterministic.
-        Self.retainedServices.append(service)
         return service
     }
 }

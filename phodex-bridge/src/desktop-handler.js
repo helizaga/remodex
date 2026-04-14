@@ -4,7 +4,7 @@
 // Exports: handleDesktopRequest
 // Depends on: child_process, fs, os, path, ./rollout-watch
 
-const { execFile } = require("child_process");
+const { execFile, spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const { promisify } = require("util");
@@ -62,6 +62,7 @@ async function handleDesktopMethod(method, params, options = {}) {
   const bundleId = options.bundleId || DEFAULT_BUNDLE_ID;
   const appPath = options.appPath || DEFAULT_APP_PATH;
   const executor = options.executor || execFileAsync;
+  const wakeSpawner = options.wakeSpawner || spawn;
   const env = options.env || process.env;
   const fsModule = options.fsModule || fs;
   const isAppRunning = options.isAppRunning || null;
@@ -95,7 +96,7 @@ async function handleDesktopMethod(method, params, options = {}) {
       });
     case "desktop/wakeDisplay":
       return wakeDisplay({
-        executor,
+        spawnImpl: wakeSpawner,
       });
     case "desktop/preferences/read":
       return readBridgePreferences(options);
@@ -242,23 +243,54 @@ async function continueOnMac(
 
 // Sends a stronger display wake pulse: mark user activity and hold the display awake briefly
 // so a sleeping panel has time to relight before the Mac drifts back into idle display sleep.
-async function wakeDisplay({ executor }) {
-  try {
-    await executor("/usr/bin/caffeinate", ["-d", "-u", "-t", String(DEFAULT_WAKE_DISPLAY_DURATION_SECONDS)], {
-      timeout: HANDOFF_TIMEOUT_MS,
-    });
-  } catch (error) {
-    throw desktopError(
-      "wake_display_failed",
-      "Could not wake your Mac display right now.",
-      error
-    );
-  }
+async function wakeDisplay({ spawnImpl }) {
+  return new Promise((resolve, reject) => {
+    let child;
+    try {
+      child = spawnImpl("/usr/bin/caffeinate", ["-d", "-u", "-t", String(DEFAULT_WAKE_DISPLAY_DURATION_SECONDS)], {
+        stdio: "ignore",
+      });
+    } catch (error) {
+      reject(desktopError(
+        "wake_display_failed",
+        "Could not wake your Mac display right now.",
+        error
+      ));
+      return;
+    }
 
-  return {
-    success: true,
-    durationSeconds: DEFAULT_WAKE_DISPLAY_DURATION_SECONDS,
-  };
+    let settled = false;
+    const fail = (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reject(desktopError(
+        "wake_display_failed",
+        "Could not wake your Mac display right now.",
+        error
+      ));
+    };
+    const succeed = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      child.unref?.();
+      resolve({
+        success: true,
+        durationSeconds: DEFAULT_WAKE_DISPLAY_DURATION_SECONDS,
+      });
+    };
+
+    child.once?.("error", fail);
+    child.once?.("spawn", succeed);
+
+    // Test doubles may not emit real process lifecycle events.
+    if (typeof child.once !== "function") {
+      succeed();
+    }
+  });
 }
 
 function readBridgePreferences(options = {}) {

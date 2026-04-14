@@ -10,7 +10,6 @@ import XCTest
 
 @MainActor
 final class CodexGPTAccountTests: XCTestCase {
-    private static var retainedServices: [CodexService] = []
 
     func testRefreshGPTAccountStateDecodesSanitizedBridgeStatus() async {
         let service = makeService()
@@ -780,7 +779,6 @@ final class CodexGPTAccountTests: XCTestCase {
 
     private func makeService() -> CodexService {
         let service = CodexService(defaults: makeDefaults())
-        Self.retainedServices.append(service)
         return service
     }
 

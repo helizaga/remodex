@@ -9,8 +9,6 @@ import XCTest
 
 @MainActor
 final class CodexPlanModeTests: XCTestCase {
-    private static var retainedServices: [CodexService] = []
-    private static var retainedViewModels: [TurnViewModel] = []
 
     func testSendTurnUsesPlanModeOnceAndThenResets() async {
         let service = makeService()
@@ -1589,13 +1587,11 @@ final class CodexPlanModeTests: XCTestCase {
         if reset {
             service.messagesByThread = [:]
         }
-        Self.retainedServices.append(service)
         return service
     }
 
     private func makeViewModel() -> TurnViewModel {
         let viewModel = TurnViewModel()
-        Self.retainedViewModels.append(viewModel)
         return viewModel
     }
 

@@ -113,24 +113,14 @@ extension CodexService {
 
     // Returns the service-owned timeline state for a single thread.
     func timelineState(for threadId: String) -> ThreadTimelineState {
-        if let existing = threadTimelineStateByThread[threadId] {
-            return existing
-        }
-
-        let state = ThreadTimelineState(threadID: threadId)
-        threadTimelineStateByThread[threadId] = state
+        let state = timelineStore.timelineState(for: threadId)
         refreshThreadTimelineState(for: threadId)
         return state
     }
 
     // Prunes service-owned render caches so removed/archived threads do not keep stale snapshots alive.
     func removeThreadTimelineState(for threadId: String) {
-        threadTimelineStateByThread.removeValue(forKey: threadId)
-        stoppedTurnIDsByThread.removeValue(forKey: threadId)
-        messageIndexCacheByThread.removeValue(forKey: threadId)
-        latestAssistantOutputByThread.removeValue(forKey: threadId)
-        latestRepoAffectingMessageSignalByThread.removeValue(forKey: threadId)
-        assistantRevertStateCacheByThread.removeValue(forKey: threadId)
+        timelineStore.removeTimelineState(for: threadId)
         threadsPendingCompletionHaptic.remove(threadId)
         threadsNeedingCanonicalHistoryReconcile.remove(threadId)
         threadsWithSatisfiedDeferredHistoryHydration.remove(threadId)
@@ -143,12 +133,7 @@ extension CodexService {
 
     // Clears every service-owned timeline cache during global teardown.
     func removeAllThreadTimelineState() {
-        threadTimelineStateByThread.removeAll()
-        stoppedTurnIDsByThread.removeAll()
-        messageIndexCacheByThread.removeAll()
-        latestAssistantOutputByThread.removeAll()
-        latestRepoAffectingMessageSignalByThread.removeAll()
-        assistantRevertStateCacheByThread.removeAll()
+        timelineStore.removeAllTimelineState()
         threadsNeedingCanonicalHistoryReconcile.removeAll()
         threadsWithSatisfiedDeferredHistoryHydration.removeAll()
         canonicalHistoryReconcileTaskByThreadID.values.forEach { $0.cancel() }
@@ -3032,7 +3017,7 @@ extension CodexService {
 
     // Rebuilds one thread's render snapshot from service-owned caches after any timeline mutation.
     func refreshThreadTimelineState(for threadId: String) {
-        let state = timelineState(for: threadId)
+        let state = timelineStore.timelineState(for: threadId)
         let messages = messagesByThread[threadId] ?? []
         let revision = messageRevisionByThread[threadId] ?? 0
         let activeTurnID = activeTurnIdByThread[threadId]

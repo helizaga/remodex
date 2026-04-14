@@ -57,6 +57,7 @@ final class SidebarThreadGroupingTests: XCTestCase {
         XCTAssertEqual(groups[0].threads.map(\.id), ["thread-a", "thread-b"])
     }
 
+    @MainActor
     func testMakeGroupsKeepsArchivedThreadsInDedicatedTrailingSection() {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let threads = [

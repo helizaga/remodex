@@ -10,7 +10,6 @@ import UserNotifications
 
 @MainActor
 final class CodexPushNotificationRegistrationTests: XCTestCase {
-    private static var retainedServices: [CodexService] = []
 
     func testRequestNotificationPermissionRegistersForRemoteNotificationsWhenAuthorized() async {
         let center = MockUserNotificationCenter(status: .authorized)
@@ -382,7 +381,6 @@ final class CodexPushNotificationRegistrationTests: XCTestCase {
             userNotificationCenter: userNotificationCenter,
             remoteNotificationRegistrar: remoteNotificationRegistrar
         )
-        Self.retainedServices.append(service)
         return service
     }
 

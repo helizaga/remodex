@@ -253,6 +253,13 @@ final class TurnViewModel {
 
     init() {}
 
+    isolated deinit {
+        cancelTransientTasks()
+        pendingGitBranchOperation = nil
+        pendingGitWorktreeOpenHandler = nil
+        pendingManagedGitWorktreeOpenHandler = nil
+    }
+
     // MARK: - Cached Timeline Projection
 
     @ObservationIgnored private var lastProjectedThreadID: String?

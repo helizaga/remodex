@@ -6,6 +6,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { EventEmitter } = require("node:events");
 
 const { handleDesktopRequest } = require("../src/desktop-handler");
 
@@ -293,7 +294,7 @@ test("desktop/continueOnMac refuses non-mac platforms", async () => {
 });
 
 test("desktop/wakeDisplay sends a stronger caffeinate display wake pulse", async () => {
-  const executorCalls = [];
+  const spawnCalls = [];
   const responses = [];
 
   handleDesktopRequest(JSON.stringify({
@@ -304,17 +305,20 @@ test("desktop/wakeDisplay sends a stronger caffeinate display wake pulse", async
     responses.push(JSON.parse(response));
   }, {
     platform: "darwin",
-    executor: async (...args) => {
-      executorCalls.push(args);
-      return { stdout: "", stderr: "" };
+    wakeSpawner: (...args) => {
+      spawnCalls.push(args);
+      const child = new EventEmitter();
+      child.unref = () => {};
+      process.nextTick(() => child.emit("spawn"));
+      return child;
     },
   });
 
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  assert.equal(executorCalls.length, 1);
-  assert.equal(executorCalls[0][0], "/usr/bin/caffeinate");
-  assert.deepEqual(executorCalls[0][1], ["-d", "-u", "-t", "30"]);
+  assert.equal(spawnCalls.length, 1);
+  assert.equal(spawnCalls[0][0], "/usr/bin/caffeinate");
+  assert.deepEqual(spawnCalls[0][1], ["-d", "-u", "-t", "30"]);
   assert.deepEqual(responses, [{
     id: "request-4",
     result: {
@@ -322,6 +326,31 @@ test("desktop/wakeDisplay sends a stronger caffeinate display wake pulse", async
       durationSeconds: 30,
     },
   }]);
+});
+
+test("desktop/wakeDisplay surfaces bridge errors when caffeinate cannot be spawned", async () => {
+  const responses = [];
+
+  handleDesktopRequest(JSON.stringify({
+    id: "request-4b",
+    method: "desktop/wakeDisplay",
+    params: {},
+  }), (response) => {
+    responses.push(JSON.parse(response));
+  }, {
+    platform: "darwin",
+    wakeSpawner: () => {
+      const child = new EventEmitter();
+      process.nextTick(() => child.emit("error", new Error("spawn EACCES")));
+      return child;
+    },
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(responses.length, 1);
+  assert.equal(responses[0].id, "request-4b");
+  assert.equal(responses[0].error?.data?.errorCode, "wake_display_failed");
 });
 
 test("desktop/preferences/update forwards bridge preference changes", async () => {

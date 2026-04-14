@@ -946,7 +946,8 @@ struct TurnView: View {
             workingDirectory: gitWorkingDirectory,
             threadID: thread.id,
             activeTurnID: activeTurnID,
-            onOpenWorktree: { result in
+            onOpenWorktree: { [weak viewModel] result in
+                guard let viewModel else { return }
                 guard !result.alreadyExisted else {
                     viewModel.gitSyncAlert = TurnGitSyncAlert(
                         title: "Branch Already Exists",
@@ -1038,7 +1039,8 @@ struct TurnView: View {
             workingDirectory: gitWorkingDirectory,
             threadID: thread.id,
             activeTurnID: activeTurnID,
-            onOpenWorktree: { result in
+            onOpenWorktree: { [weak viewModel] result in
+                guard let viewModel else { return }
                 guard !result.alreadyExisted else {
                     viewModel.gitSyncAlert = TurnGitSyncAlert(
                         title: "Branch Already Exists",

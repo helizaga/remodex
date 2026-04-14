@@ -98,6 +98,23 @@ private struct CodexThreadNotificationPayload {
 }
 
 extension CodexService {
+    // Removes notification observers/delegate wiring when the service is torn down in tests.
+    func tearDownNotifications() {
+        let delegateProxy = notificationCenterDelegateProxy
+        if userNotificationCenter.delegate === delegateProxy {
+            userNotificationCenter.delegate = nil
+        }
+
+        for token in notificationObserverTokens {
+            NotificationCenter.default.removeObserver(token)
+        }
+        notificationObserverTokens.removeAll()
+        notificationCenterDelegateProxy = nil
+        hasConfiguredNotifications = false
+    }
+}
+
+extension CodexService {
     // Wires the UNUserNotificationCenter delegate once so taps can reopen the right thread.
     func configureNotifications() {
         guard !hasConfiguredNotifications else {
@@ -338,7 +355,7 @@ extension CodexService {
     }
 }
 
-private extension CodexService {
+extension CodexService {
     // Only live threads can satisfy a notification open; archived placeholders mean the server rejected it.
     func hasNotificationRoutingCandidate(threadId: String) -> Bool {
         guard let thread = thread(for: threadId) else {
@@ -539,7 +556,7 @@ private extension CodexService {
         }
     }
 
-    var pushAPNsEnvironment: CodexPushAPNsEnvironment {
+    private var pushAPNsEnvironment: CodexPushAPNsEnvironment {
 #if DEBUG
         .development
 #else
