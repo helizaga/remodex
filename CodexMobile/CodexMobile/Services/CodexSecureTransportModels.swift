@@ -327,7 +327,17 @@ func codexSecureFingerprint(for publicKeyBase64: String) -> String {
     return digest.compactMap { String(format: "%02x", $0) }.joined().prefix(12).uppercased()
 }
 
+private let codexAutomatedTestPhoneIdentityState = CodexPhoneIdentityState(
+    phoneDeviceId: "codex-automated-test-phone",
+    phoneIdentityPrivateKey: "OwDAed4itJbPgqHYZBuQmsEnz7OdXqx7nyJF5AtaaNw=",
+    phoneIdentityPublicKey: "+uu/Z1BrlkFQEDAOFl34oJLoEijqPf4DTb1VfrkoQlg="
+)
+
 func codexEphemeralPhoneIdentityState() -> CodexPhoneIdentityState {
+    if CodexRuntimeEnvironment.isRunningAutomatedTests {
+        return codexAutomatedTestPhoneIdentityState
+    }
+
     let privateKey = Curve25519.Signing.PrivateKey()
     return CodexPhoneIdentityState(
         phoneDeviceId: UUID().uuidString,
