@@ -8,7 +8,7 @@ import SwiftUI
 import UserNotifications
 
 @MainActor
-private final class CodexAppNoopUserNotificationCenter: CodexUserNotificationCentering {
+final class CodexAppNoopUserNotificationCenter: CodexUserNotificationCentering {
     var delegate: UNUserNotificationCenterDelegate?
 
     func requestAuthorization(options: UNAuthorizationOptions) async throws -> Bool {
@@ -23,7 +23,7 @@ private final class CodexAppNoopUserNotificationCenter: CodexUserNotificationCen
 }
 
 @MainActor
-private final class CodexAppNoopRemoteNotificationRegistrar: CodexRemoteNotificationRegistering {
+final class CodexAppNoopRemoteNotificationRegistrar: CodexRemoteNotificationRegistering {
     func registerForRemoteNotifications() {}
 }
 

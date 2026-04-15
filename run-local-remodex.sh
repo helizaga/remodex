@@ -63,7 +63,7 @@ find_repo_launcher_pids() {
   {
     pgrep -f "${ROOT_DIR}/run-local-remodex.sh up" 2>/dev/null || true
     pgrep -f '(^|.*/)run-local-remodex\.sh up($| )' 2>/dev/null || true
-  } | awk 'NF { print $1 }' | sort -u
+  } | awk 'NF' | sort -u
 }
 
 cleanup_repo_launcher_orphans() {
@@ -84,7 +84,7 @@ find_repo_worker_pids() {
     pgrep -f "${ROOT_DIR}/relay/local-server.js" 2>/dev/null || true
     pgrep -f 'node ./bin/remodex\.js up' 2>/dev/null || true
     pgrep -f "ngrok http http://127.0.0.1:${PORT}" 2>/dev/null || true
-  } | awk 'NF { print $1 }' | sort -u
+  } | awk 'NF' | sort -u
 }
 
 cleanup_repo_worker_orphans() {

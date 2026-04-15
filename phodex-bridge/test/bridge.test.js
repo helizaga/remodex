@@ -62,6 +62,12 @@ test("relayCloseDiagnostic classifies saved-session and permanent reconnect fail
     message: "The relay connection closed unexpectedly: relay proxy reset",
     isPermanent: false,
   });
+
+  assert.deepEqual(relayCloseDiagnostic(4010), {
+    code: "relay_temporarily_unavailable",
+    message: "The relay or network is temporarily unavailable.",
+    isPermanent: false,
+  });
 });
 
 test("hasRelayConnectionGoneStale returns true once the relay silence crosses the timeout", () => {

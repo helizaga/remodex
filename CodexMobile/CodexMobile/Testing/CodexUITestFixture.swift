@@ -23,7 +23,11 @@ enum CodexUITestHarness {
         }
         defaults.removePersistentDomain(forName: suiteName)
 
-        let service = CodexService(defaults: defaults)
+        let service = CodexService(
+            defaults: defaults,
+            userNotificationCenter: CodexAppNoopUserNotificationCenter(),
+            remoteNotificationRegistrar: CodexAppNoopRemoteNotificationRegistrar()
+        )
         let subscriptions = SubscriptionService(defaults: defaults)
         let fixture = configureFixture(options: options, service: service)
         return (fixture, service, subscriptions)

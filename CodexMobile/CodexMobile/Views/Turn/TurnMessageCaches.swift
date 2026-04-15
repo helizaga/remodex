@@ -446,7 +446,17 @@ enum FileChangeBlockPresentationBuilder {
 
             let newDiffSections = contribution.diffSections.filter { !updated.diffSections.contains($0) }
             if contribution.hasAuthoritativeTotals {
-                if sourceIndex >= existing.lastTotalsSourceIndex || !existing.totalsAreAuthoritative {
+                let shouldAccumulateDistinctDiffBackedSnapshot =
+                    contribution.hasDiffSection
+                    && !existing.diffSections.isEmpty
+                    && !newDiffSections.isEmpty
+
+                if shouldAccumulateDistinctDiffBackedSnapshot {
+                    updated.additions += contribution.additions
+                    updated.deletions += contribution.deletions
+                    updated.lastTotalsSourceIndex = max(existing.lastTotalsSourceIndex, sourceIndex)
+                    updated.totalsAreAuthoritative = true
+                } else if sourceIndex >= existing.lastTotalsSourceIndex || !existing.totalsAreAuthoritative {
                     updated.additions = contribution.additions
                     updated.deletions = contribution.deletions
                     updated.lastTotalsSourceIndex = sourceIndex
