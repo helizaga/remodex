@@ -5,6 +5,27 @@
 
 import RevenueCat
 import SwiftUI
+import UserNotifications
+
+@MainActor
+private final class CodexAppNoopUserNotificationCenter: CodexUserNotificationCentering {
+    var delegate: UNUserNotificationCenterDelegate?
+
+    func requestAuthorization(options: UNAuthorizationOptions) async throws -> Bool {
+        false
+    }
+
+    func add(_ request: UNNotificationRequest) async throws {}
+
+    func authorizationStatus() async -> UNAuthorizationStatus {
+        .notDetermined
+    }
+}
+
+@MainActor
+private final class CodexAppNoopRemoteNotificationRegistrar: CodexRemoteNotificationRegistering {
+    func registerForRemoteNotifications() {}
+}
 
 @MainActor
 @main
@@ -14,16 +35,26 @@ struct CodexMobileApp: App {
     @State private var codexService: CodexService
     @State private var subscriptionService: SubscriptionService
     @State private var uiTestFixture: CodexUITestLaunchFixture?
+    private let shouldSkipAppBootstrap: Bool
 
     init() {
-        Self.configureRevenueCatIfAvailable()
+        let shouldSkipAppBootstrap = Self.isRunningAutomatedTests
+        self.shouldSkipAppBootstrap = shouldSkipAppBootstrap
+        Self.configureRevenueCatIfAvailable(skip: shouldSkipAppBootstrap)
         if let fixtureContext = CodexUITestHarness.makeIfEnabled(arguments: ProcessInfo.processInfo.arguments) {
             _codexService = State(initialValue: fixtureContext.service)
             _subscriptionService = State(initialValue: fixtureContext.subscriptions)
             _uiTestFixture = State(initialValue: fixtureContext.fixture)
         } else {
-            let service = CodexService()
-            service.configureNotifications()
+            let service = shouldSkipAppBootstrap
+                ? CodexService(
+                    userNotificationCenter: CodexAppNoopUserNotificationCenter(),
+                    remoteNotificationRegistrar: CodexAppNoopRemoteNotificationRegistrar()
+                )
+                : CodexService()
+            if !shouldSkipAppBootstrap {
+                service.configureNotifications()
+            }
             _codexService = State(initialValue: service)
             _subscriptionService = State(initialValue: SubscriptionService())
             _uiTestFixture = State(initialValue: nil)
@@ -64,13 +95,24 @@ struct CodexMobileApp: App {
         } else {
             ContentView()
                 .task {
+                    guard !shouldSkipAppBootstrap else {
+                        return
+                    }
                     await subscriptionService.bootstrap()
                 }
         }
     }
 
     // Configures RevenueCat once at launch using the client-safe public SDK key.
-    private static func configureRevenueCatIfAvailable() {
+    private static var isRunningAutomatedTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    }
+
+    private static func configureRevenueCatIfAvailable(skip: Bool) {
+        guard !skip else {
+            return
+        }
+
         guard AppEnvironment.requiresProSubscription else {
             return
         }
