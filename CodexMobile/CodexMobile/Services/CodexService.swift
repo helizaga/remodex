@@ -338,6 +338,15 @@ final class TurnTimelineStore {
 @MainActor
 @Observable
 final class CodexService {
+    enum SecureStateBootstrap {
+        case restorePersistedState
+        case ephemeral
+
+        static var automatedTestDefault: SecureStateBootstrap {
+            CodexRuntimeEnvironment.isRunningAutomatedTests ? .ephemeral : .restorePersistedState
+        }
+    }
+
     static let minimumSupportedBridgePackageVersion = "1.3.5"
 
     // --- Public state ---------------------------------------------------------
@@ -641,7 +650,8 @@ final class CodexService {
         messagePersistence: CodexMessagePersistence = CodexMessagePersistence(),
         aiChangeSetPersistence: AIChangeSetPersistence = AIChangeSetPersistence(),
         userNotificationCenter: CodexUserNotificationCentering? = nil,
-        remoteNotificationRegistrar: CodexRemoteNotificationRegistering? = nil
+        remoteNotificationRegistrar: CodexRemoteNotificationRegistering? = nil,
+        secureStateBootstrap: SecureStateBootstrap = .automatedTestDefault
     ) {
         self.encoder = encoder
         self.decoder = decoder
@@ -662,9 +672,16 @@ final class CodexService {
         } else {
             self.remoteNotificationRegistrar = CodexApplicationRemoteNotificationRegistrar()
         }
-        self.phoneIdentityState = codexPhoneIdentityStateFromSecureStore()
-        self.trustedMacRegistry = codexTrustedMacRegistryFromSecureStore()
-        self.lastTrustedMacDeviceId = SecureStore.readString(for: CodexSecureKeys.lastTrustedMacDeviceId)
+        switch secureStateBootstrap {
+        case .restorePersistedState:
+            self.phoneIdentityState = codexPhoneIdentityStateFromSecureStore()
+            self.trustedMacRegistry = codexTrustedMacRegistryFromSecureStore()
+            self.lastTrustedMacDeviceId = SecureStore.readString(for: CodexSecureKeys.lastTrustedMacDeviceId)
+        case .ephemeral:
+            self.phoneIdentityState = codexEphemeralPhoneIdentityState()
+            self.trustedMacRegistry = .empty
+            self.lastTrustedMacDeviceId = nil
+        }
         let loadedMessages = messagePersistence.load().mapValues { messages in
             messages.map { message in
                 var value = message
@@ -790,29 +807,40 @@ final class CodexService {
             )
         }
 
-        // Restore relay session from Keychain
-        self.relaySessionId = SecureStore.readString(for: CodexSecureKeys.relaySessionId)
-        self.relayUrl = SecureStore.readString(for: CodexSecureKeys.relayUrl)
-        self.relayMacDeviceId = SecureStore.readString(for: CodexSecureKeys.relayMacDeviceId)
-        self.relayMacIdentityPublicKey = SecureStore.readString(for: CodexSecureKeys.relayMacIdentityPublicKey)
-        if let rawProtocolVersion = SecureStore.readString(for: CodexSecureKeys.relayProtocolVersion),
-           let parsedProtocolVersion = Int(rawProtocolVersion) {
-            self.relayProtocolVersion = parsedProtocolVersion
-        } else {
+        switch secureStateBootstrap {
+        case .restorePersistedState:
+            // Restore relay session from Keychain.
+            self.relaySessionId = SecureStore.readString(for: CodexSecureKeys.relaySessionId)
+            self.relayUrl = SecureStore.readString(for: CodexSecureKeys.relayUrl)
+            self.relayMacDeviceId = SecureStore.readString(for: CodexSecureKeys.relayMacDeviceId)
+            self.relayMacIdentityPublicKey = SecureStore.readString(for: CodexSecureKeys.relayMacIdentityPublicKey)
+            if let rawProtocolVersion = SecureStore.readString(for: CodexSecureKeys.relayProtocolVersion),
+               let parsedProtocolVersion = Int(rawProtocolVersion) {
+                self.relayProtocolVersion = parsedProtocolVersion
+            } else {
+                self.relayProtocolVersion = codexSecureProtocolVersion
+            }
+            if let rawLastAppliedSeq = SecureStore.readString(for: CodexSecureKeys.relayLastAppliedBridgeOutboundSeq),
+               let parsedLastAppliedSeq = Int(rawLastAppliedSeq) {
+                self.lastAppliedBridgeOutboundSeq = parsedLastAppliedSeq
+            }
+            self.remoteNotificationDeviceToken = SecureStore.readString(for: CodexSecureKeys.pushDeviceToken)
+            if let relayMacDeviceId,
+               let trustedMac = trustedMacRegistry.records[relayMacDeviceId] {
+                self.secureConnectionState = .trustedMac
+                self.secureMacFingerprint = codexSecureFingerprint(for: trustedMac.macIdentityPublicKey)
+            } else if let trustedMac = preferredTrustedMacRecord {
+                self.secureConnectionState = .liveSessionUnresolved
+                self.secureMacFingerprint = codexSecureFingerprint(for: trustedMac.macIdentityPublicKey)
+            }
+        case .ephemeral:
+            self.relaySessionId = nil
+            self.relayUrl = nil
+            self.relayMacDeviceId = nil
+            self.relayMacIdentityPublicKey = nil
             self.relayProtocolVersion = codexSecureProtocolVersion
-        }
-        if let rawLastAppliedSeq = SecureStore.readString(for: CodexSecureKeys.relayLastAppliedBridgeOutboundSeq),
-           let parsedLastAppliedSeq = Int(rawLastAppliedSeq) {
-            self.lastAppliedBridgeOutboundSeq = parsedLastAppliedSeq
-        }
-        self.remoteNotificationDeviceToken = SecureStore.readString(for: CodexSecureKeys.pushDeviceToken)
-        if let relayMacDeviceId,
-           let trustedMac = trustedMacRegistry.records[relayMacDeviceId] {
-            self.secureConnectionState = .trustedMac
-            self.secureMacFingerprint = codexSecureFingerprint(for: trustedMac.macIdentityPublicKey)
-        } else if let trustedMac = preferredTrustedMacRecord {
-            self.secureConnectionState = .liveSessionUnresolved
-            self.secureMacFingerprint = codexSecureFingerprint(for: trustedMac.macIdentityPublicKey)
+            self.lastAppliedBridgeOutboundSeq = 0
+            self.remoteNotificationDeviceToken = nil
         }
         rebuildThreadLookupCaches()
     }

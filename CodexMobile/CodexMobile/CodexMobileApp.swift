@@ -34,8 +34,12 @@ struct CodexMobileApp: App {
         } else {
             let service = shouldSkipAppBootstrap
                 ? CodexService(
+                    defaults: UserDefaults(suiteName: "CodexMobile.AutomatedTestHost") ?? .standard,
+                    messagePersistence: .disabled,
+                    aiChangeSetPersistence: .disabled,
                     userNotificationCenter: CodexNoopUserNotificationCenter(),
-                    remoteNotificationRegistrar: CodexNoopRemoteNotificationRegistrar()
+                    remoteNotificationRegistrar: CodexNoopRemoteNotificationRegistrar(),
+                    secureStateBootstrap: .ephemeral
                 )
                 : CodexService()
             if !shouldSkipAppBootstrap {
