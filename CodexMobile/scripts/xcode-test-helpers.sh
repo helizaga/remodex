@@ -54,6 +54,11 @@ print(max(target_pool, key=version_key)["destination"])
 PY
 }
 
+destination_udid() {
+  local destination="$1"
+  sed -n 's/.*id=\([^,]*\).*/\1/p' <<<"$destination"
+}
+
 make_result_bundle_path() {
   local prefix="$1"
   local bundle_dir
