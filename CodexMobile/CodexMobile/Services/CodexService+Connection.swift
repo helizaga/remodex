@@ -699,6 +699,32 @@ extension CodexService {
             session.invalidateAndCancel()
         }
 
+        cancelConnectionWorkForDeinit()
+
+        let pendingRequestContinuations = Array(pendingRequests.values)
+        pendingRequests.removeAll()
+        for continuation in pendingRequestContinuations {
+            continuation.resume(throwing: CodexServiceError.disconnected)
+        }
+
+        let secureControlWaiters = pendingSecureControlContinuations.values.flatMap { $0 }
+        pendingSecureControlContinuations.removeAll()
+        bufferedSecureControlMessages.removeAll()
+        for waiter in secureControlWaiters {
+            waiter.continuation.resume(throwing: CodexServiceError.disconnected)
+        }
+
+        messagePersistence.save(messagesByThread)
+
+        endBackgroundRunGraceTask(reason: "deinit")
+    }
+
+    // Automated tests do not need transport teardown side effects, only prompt task cancellation.
+    func releaseConnectionResourcesForAutomatedTestDeinit() {
+        cancelConnectionWorkForDeinit()
+    }
+
+    private func cancelConnectionWorkForDeinit() {
         threadListSyncTask?.cancel()
         activeThreadSyncTask?.cancel()
         runningThreadWatchSyncTask?.cancel()
@@ -713,22 +739,6 @@ extension CodexService {
         runningThreadCatchupTaskByThreadID.values.forEach { $0.cancel() }
         canonicalHistoryReconcileTaskByThreadID.values.forEach { $0.cancel() }
         canonicalHistoryReconcileRetryTaskByThreadID.values.forEach { $0.cancel() }
-
-        let pendingRequestContinuations = Array(pendingRequests.values)
-        for continuation in pendingRequestContinuations {
-            continuation.resume(throwing: CodexServiceError.disconnected)
-        }
-
-        let secureControlWaiters = pendingSecureControlContinuations.values.flatMap { $0 }
-        for waiter in secureControlWaiters {
-            waiter.continuation.resume(throwing: CodexServiceError.disconnected)
-        }
-
-        messagePersistence.save(messagesByThread)
-
-        if backgroundTurnGraceTaskID != .invalid {
-            UIApplication.shared.endBackgroundTask(backgroundTurnGraceTaskID)
-        }
     }
 
     // Avoids wiping thread/runtime state when reconnecting after a socket that already died.

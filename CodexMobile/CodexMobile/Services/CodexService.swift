@@ -846,7 +846,11 @@ final class CodexService {
     }
 
     isolated deinit {
-        releaseConnectionResourcesForDeinit()
+        if CodexRuntimeEnvironment.isRunningAutomatedTests {
+            releaseConnectionResourcesForAutomatedTestDeinit()
+        } else {
+            releaseConnectionResourcesForDeinit()
+        }
         releaseNotificationResourcesForDeinit()
     }
 
