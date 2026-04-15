@@ -703,6 +703,7 @@ extension CodexService {
         releaseTransportResourcesForTeardown()
         cancelConnectionWorkForDeinit()
         messagePersistence.save(messagesByThread)
+        releaseTimelineResourcesForDeinit()
         endBackgroundRunGraceTask(reason: "deinit")
     }
 
@@ -710,6 +711,7 @@ extension CodexService {
     func releaseConnectionResourcesForAutomatedTestDeinit() {
         releaseTransportResourcesForTeardown()
         cancelConnectionWorkForDeinit()
+        releaseTimelineResourcesForDeinit()
     }
 
     private func cancelConnectionWorkForDeinit() {

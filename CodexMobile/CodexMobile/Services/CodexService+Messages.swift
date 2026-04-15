@@ -146,6 +146,17 @@ extension CodexService {
         cancelAllPerThreadRefreshWork()
     }
 
+    // Shrinks timeline-owned object graphs before CodexService deallocation so teardown
+    // does not have to release the whole store and its snapshots in one final pass.
+    func releaseTimelineResourcesForDeinit() {
+        removeAllThreadTimelineState()
+        timelineRefreshInProgressThreadIDs.removeAll()
+        threadsPendingCompletionHaptic.removeAll()
+        protectedRunningFallbackThreadIDs.removeAll()
+        runningThreadIDs.removeAll()
+        activeTurnIdByThread.removeAll()
+    }
+
     // Refreshes the derived output cache and bumps the thread timeline revision.
     func updateCurrentOutput(for threadId: String) {
         noteMessagesChanged(for: threadId)
