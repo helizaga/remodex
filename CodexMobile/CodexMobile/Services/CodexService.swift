@@ -615,8 +615,8 @@ final class CodexService {
 
     let encoder: JSONEncoder
     let decoder: JSONDecoder
-    let messagePersistence = CodexMessagePersistence()
-    let aiChangeSetPersistence = AIChangeSetPersistence()
+    let messagePersistence: CodexMessagePersistence
+    let aiChangeSetPersistence: AIChangeSetPersistence
     let defaults: UserDefaults
     let userNotificationCenter: CodexUserNotificationCentering
     let remoteNotificationRegistrar: CodexRemoteNotificationRegistering
@@ -638,12 +638,16 @@ final class CodexService {
         encoder: JSONEncoder = JSONEncoder(),
         decoder: JSONDecoder = JSONDecoder(),
         defaults: UserDefaults = .standard,
+        messagePersistence: CodexMessagePersistence = CodexMessagePersistence(),
+        aiChangeSetPersistence: AIChangeSetPersistence = AIChangeSetPersistence(),
         userNotificationCenter: CodexUserNotificationCentering? = nil,
         remoteNotificationRegistrar: CodexRemoteNotificationRegistering? = nil
     ) {
         self.encoder = encoder
         self.decoder = decoder
         self.defaults = defaults
+        self.messagePersistence = messagePersistence
+        self.aiChangeSetPersistence = aiChangeSetPersistence
         if let userNotificationCenter {
             self.userNotificationCenter = userNotificationCenter
         } else if CodexRuntimeEnvironment.isRunningAutomatedTests {
