@@ -942,6 +942,21 @@ extension CodexService {
             }
         }
 
+        if let code = posixErrorCode(from: error) {
+            switch code {
+            case .ECONNREFUSED:
+                return "Connection refused by relay server at \(attemptedURL)."
+            case .EMSGSIZE:
+                return oversizedRelayPayloadMessage
+            case .ENETDOWN, .ENETUNREACH, .EHOSTUNREACH:
+                return "Cannot reach relay server at \(attemptedURL). Check that the iPhone can access the Mac on the local network."
+            case .ETIMEDOUT:
+                return "Connection timed out. Check server/network."
+            default:
+                break
+            }
+        }
+
         if isRecoverableTransientConnectionError(error) {
             return "Connection timed out. Check server/network."
         }
@@ -956,6 +971,20 @@ extension CodexService {
         return error.localizedDescription
     }
 
+    private func posixErrorCode(from error: Error) -> POSIXErrorCode? {
+        if let nwError = error as? NWError,
+           case .posix(let code) = nwError {
+            return code
+        }
+
+        let nsError = error as NSError
+        guard nsError.domain == NSPOSIXErrorDomain else {
+            return nil
+        }
+
+        return POSIXErrorCode(rawValue: Int32(nsError.code))
+    }
+
     // Treats common local relay socket teardowns as transient so foreground return can recover quietly.
     func isBenignBackgroundDisconnect(_ error: Error) -> Bool {
         if let serviceError = error as? CodexServiceError {
@@ -964,12 +993,11 @@ extension CodexService {
             }
         }
 
-        guard let nwError = error as? NWError else {
+        guard let code = posixErrorCode(from: error) else {
             return false
         }
 
-        if case .posix(let code) = nwError,
-           code == .ECONNABORTED
+        if code == .ECONNABORTED
             || code == .ECANCELED
             || code == .ENOTCONN
             || code == .ENODATA
@@ -986,8 +1014,7 @@ extension CodexService {
             return true
         }
 
-        guard let nwError = error as? NWError,
-              case .posix(let code) = nwError else {
+        guard let code = posixErrorCode(from: error) else {
             return false
         }
 
@@ -1001,16 +1028,7 @@ extension CodexService {
             }
         }
 
-        if let nwError = error as? NWError {
-            if case .posix(let code) = nwError,
-               code == .ETIMEDOUT {
-                return true
-            }
-        }
-
-        let nsError = error as NSError
-        return nsError.domain == NSPOSIXErrorDomain
-            && nsError.code == Int(POSIXErrorCode.ETIMEDOUT.rawValue)
+        return posixErrorCode(from: error) == .ETIMEDOUT
     }
 
     // Detects connect-time relay closes that still leave the saved session reusable moments later.
@@ -1080,7 +1098,7 @@ extension CodexService {
         if shouldTreatSendFailureAsDisconnect(error) || isBenignBackgroundDisconnect(error) {
             return "Connection was interrupted. Tap Reconnect to try again."
         }
-        if error is NWError {
+        if posixErrorCode(from: error) != nil || error is NWError {
             return "The relay or network is temporarily unavailable. Check your connection and try again."
         }
         return error.localizedDescription
@@ -1088,15 +1106,7 @@ extension CodexService {
 
     // Distinguishes relay frame-size failures from generic disconnects so reconnect UI can explain them.
     func isOversizedRelayPayloadError(_ error: Error) -> Bool {
-        if let nwError = error as? NWError,
-           case .posix(let code) = nwError,
-           code == .EMSGSIZE {
-            return true
-        }
-
-        let nsError = error as NSError
-        return nsError.domain == NSPOSIXErrorDomain
-            && nsError.code == Int(POSIXErrorCode.EMSGSIZE.rawValue)
+        posixErrorCode(from: error) == .EMSGSIZE
     }
 
     var oversizedRelayPayloadMessage: String {

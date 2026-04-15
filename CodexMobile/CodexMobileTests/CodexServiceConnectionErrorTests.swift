@@ -27,7 +27,7 @@ final class CodexServiceConnectionErrorTests: XCTestCase {
 
     func testBenignBackgroundAbortIsSuppressedFromUserFacingErrors() {
         let service = makeService()
-        let error = NWError.posix(.ECONNABORTED)
+        let error = posixError(.ECONNABORTED)
         service.isAppInForeground = false
 
         XCTAssertTrue(service.isBenignBackgroundDisconnect(error))
@@ -36,7 +36,7 @@ final class CodexServiceConnectionErrorTests: XCTestCase {
 
     func testSendSideNoDataDisconnectIsTreatedAsBenign() {
         let service = makeService()
-        let error = NWError.posix(.ENODATA)
+        let error = posixError(.ENODATA)
         service.isAppInForeground = false
 
         XCTAssertTrue(service.isBenignBackgroundDisconnect(error))
@@ -46,7 +46,7 @@ final class CodexServiceConnectionErrorTests: XCTestCase {
 
     func testConnectionResetIsTreatedAsBenignRelayDisconnect() {
         let service = makeService()
-        let error = NWError.posix(.ECONNRESET)
+        let error = posixError(.ECONNRESET)
         service.isAppInForeground = false
 
         XCTAssertTrue(service.isBenignBackgroundDisconnect(error))
@@ -55,7 +55,7 @@ final class CodexServiceConnectionErrorTests: XCTestCase {
 
     func testInactiveAppStateStillSuppressesBenignDisconnectNoise() {
         let service = makeService()
-        let error = NWError.posix(.ECONNRESET)
+        let error = posixError(.ECONNRESET)
         service.isAppInForeground = true
         service.applicationStateProvider = { .inactive }
 
@@ -64,7 +64,7 @@ final class CodexServiceConnectionErrorTests: XCTestCase {
 
     func testTransientTimeoutStillSurfacesToUser() {
         let service = makeService()
-        let error = NWError.posix(.ETIMEDOUT)
+        let error = posixError(.ETIMEDOUT)
 
         XCTAssertTrue(service.isRecoverableTransientConnectionError(error))
         XCTAssertFalse(service.shouldSuppressUserFacingConnectionError(error))
@@ -72,7 +72,7 @@ final class CodexServiceConnectionErrorTests: XCTestCase {
 
     func testOversizedRelayPayloadGetsFriendlyFailureCopy() {
         let service = makeService()
-        let error = NWError.posix(.EMSGSIZE)
+        let error = posixError(.EMSGSIZE)
 
         XCTAssertTrue(service.isOversizedRelayPayloadError(error))
         XCTAssertEqual(
@@ -83,7 +83,7 @@ final class CodexServiceConnectionErrorTests: XCTestCase {
 
     func testReceiveDispositionUsesFriendlyOversizedPayloadMessage() {
         let service = makeService()
-        let error = NWError.posix(.EMSGSIZE)
+        let error = posixError(.EMSGSIZE)
 
         service.handleReceiveError(error)
 
@@ -118,7 +118,7 @@ final class CodexServiceConnectionErrorTests: XCTestCase {
 
     func testConnectionRefusedStillSurfacesToUser() {
         let service = makeService()
-        let error = NWError.posix(.ECONNREFUSED)
+        let error = posixError(.ECONNREFUSED)
 
         XCTAssertFalse(service.shouldSuppressUserFacingConnectionError(error))
         XCTAssertEqual(
@@ -135,7 +135,7 @@ final class CodexServiceConnectionErrorTests: XCTestCase {
         let service = makeService()
 
         XCTAssertEqual(
-            service.userFacingConnectFailureMessage(NWError.posix(.ECONNABORTED)),
+            service.userFacingConnectFailureMessage(posixError(.ECONNABORTED)),
             "The relay or network is temporarily unavailable. Check your connection and try again."
         )
     }
@@ -144,7 +144,7 @@ final class CodexServiceConnectionErrorTests: XCTestCase {
         let service = makeService()
 
         XCTAssertEqual(
-            service.userFacingConnectFailureMessage(NWError.posix(.EPIPE)),
+            service.userFacingConnectFailureMessage(posixError(.EPIPE)),
             "Connection was interrupted. Tap Reconnect to try again."
         )
     }
@@ -153,14 +153,14 @@ final class CodexServiceConnectionErrorTests: XCTestCase {
         let service = makeService()
 
         XCTAssertEqual(
-            service.userFacingConnectFailureMessage(NWError.posix(.EIO)),
+            service.userFacingConnectFailureMessage(posixError(.EIO)),
             "The relay or network is temporarily unavailable. Check your connection and try again."
         )
     }
 
     func testTurnErrorSuppressesBrokenPipeWhileAutoReconnectIsRunning() {
         let service = makeService()
-        let error = NWError.posix(.EPIPE)
+        let error = posixError(.EPIPE)
         service.isAppInForeground = true
         service.shouldAutoReconnectOnForeground = true
         service.connectionRecoveryState = .retrying(attempt: 1, message: "Reconnecting...")
@@ -393,5 +393,9 @@ final class CodexServiceConnectionErrorTests: XCTestCase {
         XCTAssertEqual(service.activeTurnID(for: threadID), turnID)
         XCTAssertEqual(service.threadRunBadgeState(for: threadID), .running)
         XCTAssertTrue(service.bufferedSecureControlMessages.isEmpty)
+    }
+
+    private func posixError(_ code: POSIXErrorCode) -> NSError {
+        NSError(domain: NSPOSIXErrorDomain, code: Int(code.rawValue))
     }
 }
