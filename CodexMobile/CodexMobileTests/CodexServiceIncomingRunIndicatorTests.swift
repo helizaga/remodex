@@ -5,7 +5,6 @@
 // Depends on: XCTest, CodexMobile
 
 import XCTest
-import Network
 @testable import CodexMobile
 
 @MainActor
@@ -468,7 +467,7 @@ final class CodexServiceIncomingRunIndicatorTests: XCTestCase {
         service.lastErrorMessage = nil
         service.setForegroundState(false)
 
-        service.handleReceiveError(NWError.posix(.ECONNABORTED))
+        service.handleReceiveError(posixError(.ECONNABORTED))
 
         XCTAssertFalse(service.isConnected)
         XCTAssertFalse(service.isInitialized)
@@ -483,7 +482,7 @@ final class CodexServiceIncomingRunIndicatorTests: XCTestCase {
         service.lastErrorMessage = nil
         service.setForegroundState(true)
 
-        service.handleReceiveError(NWError.posix(.ECONNABORTED))
+        service.handleReceiveError(posixError(.ECONNABORTED))
 
         XCTAssertFalse(service.isConnected)
         XCTAssertFalse(service.isInitialized)
@@ -502,7 +501,7 @@ final class CodexServiceIncomingRunIndicatorTests: XCTestCase {
         service.lastErrorMessage = nil
         service.setForegroundState(true)
 
-        service.handleReceiveError(NWError.posix(.ETIMEDOUT))
+        service.handleReceiveError(posixError(.ETIMEDOUT))
 
         XCTAssertFalse(service.isConnected)
         XCTAssertFalse(service.isInitialized)
@@ -631,7 +630,7 @@ final class CodexServiceIncomingRunIndicatorTests: XCTestCase {
         service.isConnected = true
         service.isInitialized = true
 
-        service.handleReceiveError(NWError.posix(.ECONNABORTED))
+        service.handleReceiveError(posixError(.ECONNABORTED))
 
         XCTAssertEqual(service.secureConnectionState, .trustedMac)
         XCTAssertEqual(service.secureMacFingerprint, codexSecureFingerprint(for: macPublicKey))
@@ -656,7 +655,7 @@ final class CodexServiceIncomingRunIndicatorTests: XCTestCase {
 
         for _ in 0..<3 {
             service.secureConnectionState = .reconnecting
-            service.handleReceiveError(NWError.posix(.ECONNABORTED))
+            service.handleReceiveError(posixError(.ECONNABORTED))
         }
 
         XCTAssertEqual(service.trustedReconnectFailureCount, 0)
@@ -719,9 +718,9 @@ final class CodexServiceIncomingRunIndicatorTests: XCTestCase {
     func testRecoverableTimeoutMapsToFriendlyFailureMessage() {
         let service = makeService()
 
-        XCTAssertTrue(service.isRecoverableTransientConnectionError(NWError.posix(.ETIMEDOUT)))
+        XCTAssertTrue(service.isRecoverableTransientConnectionError(posixError(.ETIMEDOUT)))
         XCTAssertEqual(
-            service.userFacingConnectFailureMessage(NWError.posix(.ETIMEDOUT)),
+            service.userFacingConnectFailureMessage(posixError(.ETIMEDOUT)),
             "The relay or network is temporarily unavailable. Check your connection and try again."
         )
     }
@@ -1218,5 +1217,9 @@ final class CodexServiceIncomingRunIndicatorTests: XCTestCase {
         SecureStore.deleteValue(for: CodexSecureKeys.relayLastAppliedBridgeOutboundSeq)
         SecureStore.deleteValue(for: CodexSecureKeys.trustedMacRegistry)
         SecureStore.deleteValue(for: CodexSecureKeys.lastTrustedMacDeviceId)
+    }
+
+    private func posixError(_ code: POSIXErrorCode) -> NSError {
+        NSError(domain: NSPOSIXErrorDomain, code: Int(code.rawValue))
     }
 }
