@@ -457,6 +457,8 @@ final class CodexService {
     var webSocketSession: URLSession?
     var webSocketSessionDelegate: CodexURLSessionWebSocketDelegate?
     var webSocketTask: URLSessionWebSocketTask?
+    // Test hook: lets teardown coverage assert cleanup without constructing live Apple socket objects.
+    @ObservationIgnored var transportTeardownObserver: (() -> Void)?
     // Raw frame buffer used when the relay runs over manual TCP websocket framing.
     var manualWebSocketReadBuffer = Data()
     var usesManualWebSocketTransport = false

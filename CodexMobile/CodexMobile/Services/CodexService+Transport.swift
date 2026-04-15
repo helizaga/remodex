@@ -785,7 +785,9 @@ extension CodexService {
 
     // Preserves relay close semantics on the raw TCP websocket path so `.local` reconnects
     // reuse the same retry / re-pair policy as the higher-level websocket transports.
-    func drainManualWebSocketFrames(on connection: NWConnection) async throws -> Bool {
+    func drainManualWebSocketFrames(
+        pingResponder: @escaping @Sendable (Data) async throws -> Void
+    ) async throws -> Bool {
         while let frame = parseManualWebSocketFrame(from: &manualWebSocketReadBuffer) {
             switch frame.opcode {
             case 0x1:
@@ -800,7 +802,7 @@ extension CodexService {
                 )
                 return true
             case 0x9:
-                try await sendManualWebSocketFrame(opcode: 0xA, payload: frame.payload, on: connection)
+                try await pingResponder(frame.payload)
             case 0xA:
                 break
             default:
@@ -809,6 +811,17 @@ extension CodexService {
         }
 
         return false
+    }
+
+    func drainManualWebSocketFrames() async throws -> Bool {
+        try await drainManualWebSocketFrames { _ in }
+    }
+
+    func drainManualWebSocketFrames(on connection: NWConnection) async throws -> Bool {
+        try await drainManualWebSocketFrames { [weak self] payload in
+            guard let self else { return }
+            try await self.sendManualWebSocketFrame(opcode: 0xA, payload: payload, on: connection)
+        }
     }
 
     func parseManualWebSocketFrame(from buffer: inout Data) -> (opcode: UInt8, payload: Data)? {

@@ -2,10 +2,9 @@
 // Purpose: Verifies background disconnects stay silent while real connection failures still surface.
 // Layer: Unit Test
 // Exports: CodexServiceConnectionErrorTests
-// Depends on: XCTest, Network, UIKit, CodexMobile
+// Depends on: XCTest, UIKit, CodexMobile
 
 import XCTest
-import Network
 import UIKit
 @testable import CodexMobile
 
@@ -223,11 +222,6 @@ final class CodexServiceConnectionErrorTests: XCTestCase {
 
     func testManualWebSocketCloseFrameUsesRetryableRelayRecovery() async throws {
         let service = makeService()
-        let connection = NWConnection(
-            host: NWEndpoint.Host("localhost"),
-            port: NWEndpoint.Port(rawValue: 80)!,
-            using: NWParameters(tls: nil, tcp: NWProtocolTCP.Options())
-        )
         service.relaySessionId = "session-\(UUID().uuidString)"
         service.relayUrl = "ws://mac.local/relay"
         service.isConnected = true
@@ -235,7 +229,7 @@ final class CodexServiceConnectionErrorTests: XCTestCase {
         service.setForegroundState(true)
         service.manualWebSocketReadBuffer = Data([0x88, 0x02, 0x0F, 0xA2])
 
-        let didHandleClose = try await service.drainManualWebSocketFrames(on: connection)
+        let didHandleClose = try await service.drainManualWebSocketFrames()
 
         XCTAssertTrue(didHandleClose)
         XCTAssertFalse(service.isConnected)
@@ -395,30 +389,21 @@ final class CodexServiceConnectionErrorTests: XCTestCase {
         XCTAssertTrue(service.bufferedSecureControlMessages.isEmpty)
     }
 
-    func testAutomatedTestReleaseClearsLiveTransportReferences() {
+    func testAutomatedTestReleaseInvokesTransportTeardownProbeAndClearsBufferedState() {
         let service = makeService()
-        let connection = NWConnection(
-            host: NWEndpoint.Host("localhost"),
-            port: NWEndpoint.Port(rawValue: 80)!,
-            using: NWParameters(tls: nil, tcp: NWProtocolTCP.Options())
-        )
-        let delegate = CodexURLSessionWebSocketDelegate()
-        let session = URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: nil)
-        let task = session.webSocketTask(with: URL(string: "ws://localhost")!)
+        var didInvokeTransportTeardown = false
 
-        service.webSocketConnection = connection
-        service.webSocketSessionDelegate = delegate
-        service.webSocketSession = session
-        service.webSocketTask = task
+        service.transportTeardownObserver = {
+            didInvokeTransportTeardown = true
+        }
+        service.webSocketSessionDelegate = CodexURLSessionWebSocketDelegate()
         service.manualWebSocketReadBuffer = Data([0x88, 0x00])
         service.usesManualWebSocketTransport = true
 
         service.releaseConnectionResourcesForAutomatedTestDeinit()
 
-        XCTAssertNil(service.webSocketConnection)
+        XCTAssertTrue(didInvokeTransportTeardown)
         XCTAssertNil(service.webSocketSessionDelegate)
-        XCTAssertNil(service.webSocketSession)
-        XCTAssertNil(service.webSocketTask)
         XCTAssertTrue(service.manualWebSocketReadBuffer.isEmpty)
         XCTAssertFalse(service.usesManualWebSocketTransport)
     }

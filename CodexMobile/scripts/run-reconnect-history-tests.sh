@@ -10,6 +10,7 @@ SCHEME="${SCHEME:-CodexMobile}"
 DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-/tmp/remodex-codexmobile-ci-derived}"
 CLONED_SOURCE_PACKAGES_DIR="${CLONED_SOURCE_PACKAGES_DIR:-}"
 RESULT_BUNDLE_PATH="${RESULT_BUNDLE_PATH:-}"
+CRASH_ARTIFACTS_DIR="${CRASH_ARTIFACTS_DIR:-}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-0}"
 ITERATIONS="${ITERATIONS:-1}"
 CLEAN_DERIVED_DATA="${CLEAN_DERIVED_DATA:-0}"
@@ -26,6 +27,24 @@ ONLY_TESTING="${ONLY_TESTING:-}"
 HELPERS_PATH="$ROOT_DIR/scripts/xcode-test-helpers.sh"
 
 source "$HELPERS_PATH"
+
+expand_user_path() {
+  local path="$1"
+
+  if [[ -z "$path" ]]; then
+    printf '%s\n' ""
+  elif [[ "$path" == "~" ]]; then
+    printf '%s\n' "$HOME"
+  elif [[ "$path" == "~/"* ]]; then
+    printf '%s\n' "$HOME/${path#~/}"
+  else
+    printf '%s\n' "$path"
+  fi
+}
+
+CLONED_SOURCE_PACKAGES_DIR="$(expand_user_path "$CLONED_SOURCE_PACKAGES_DIR")"
+RESULT_BUNDLE_PATH="$(expand_user_path "$RESULT_BUNDLE_PATH")"
+CRASH_ARTIFACTS_DIR="$(expand_user_path "$CRASH_ARTIFACTS_DIR")"
 
 DESTINATION="${DESTINATION:-$(pick_ios_simulator_destination "$PROJECT_PATH" "$SCHEME" \
   "iPhone 17" \
@@ -73,17 +92,27 @@ fi
 
 echo "[codexmobile-ci] destination: $DESTINATION"
 echo "[codexmobile-ci] scheme: $SCHEME"
+echo "[codexmobile-ci] xcode-select: $(xcode-select -p)"
+echo "[codexmobile-ci] xcodebuild: $(xcodebuild -version | tr '\n' ' ' | sed 's/  */ /g')"
+echo "[codexmobile-ci] macos: $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
 if [[ -n "$ONLY_TESTING" ]]; then
   echo "[codexmobile-ci] only-testing: $ONLY_TESTING"
 else
   echo "[codexmobile-ci] suites: ${TEST_SUITES[*]}"
 fi
 echo "[codexmobile-ci] derived-data: $DERIVED_DATA_PATH"
+if [[ -n "$SIMULATOR_UDID" ]]; then
+  echo "[codexmobile-ci] simulator-udid: $SIMULATOR_UDID"
+  echo "[codexmobile-ci] simulator: $(xcrun simctl list devices available | rg "$SIMULATOR_UDID" -m 1 || true)"
+fi
 if [[ -n "$CLONED_SOURCE_PACKAGES_DIR" ]]; then
   echo "[codexmobile-ci] source-packages: $CLONED_SOURCE_PACKAGES_DIR"
 fi
 if [[ -n "$RESULT_BUNDLE_PATH" ]]; then
   echo "[codexmobile-ci] result-bundle: $RESULT_BUNDLE_PATH"
+fi
+if [[ -n "$CRASH_ARTIFACTS_DIR" ]]; then
+  echo "[codexmobile-ci] crash-artifacts: $CRASH_ARTIFACTS_DIR"
 fi
 if [[ "$TIMEOUT_SECONDS" -gt 0 ]]; then
   echo "[codexmobile-ci] timeout-seconds: $TIMEOUT_SECONDS"
@@ -138,6 +167,40 @@ dump_recent_simulator_crash_logs() {
           done \
         | sort -r \
         | head -n 5
+    )
+  done
+}
+
+collect_failure_artifacts() {
+  local artifacts_dir="$1"
+  local host_reports_dir="$HOME/Library/Logs/DiagnosticReports"
+  local simulator_reports_dir="$HOME/Library/Developer/CoreSimulator/Devices/$SIMULATOR_UDID/data/Library/Logs/CrashReporter"
+  local test_logs_dir="$DERIVED_DATA_PATH/Logs/Test"
+  local report
+
+  [[ -n "$artifacts_dir" ]] || return 0
+  mkdir -p "$artifacts_dir"
+
+  if [[ -d "$test_logs_dir" ]]; then
+    mkdir -p "$artifacts_dir/test-logs"
+    cp -R "$test_logs_dir/." "$artifacts_dir/test-logs/" 2>/dev/null || true
+  fi
+
+  for report_dir in "$host_reports_dir" "$simulator_reports_dir"; do
+    [[ -d "$report_dir" ]] || continue
+    while IFS= read -r report; do
+      cp "$report" "$artifacts_dir/" 2>/dev/null || true
+    done < <(
+      find "$report_dir" -type f \( -name '*.ips' -o -name '*.crash' \) -mmin -30 2>/dev/null |
+        while IFS= read -r candidate; do
+          local candidate_name
+          candidate_name="$(basename "$candidate")"
+          if [[ "$candidate_name" == *CodexMobile* || "$candidate_name" == *xctest* ]]; then
+            printf '%s\n' "$candidate"
+          fi
+        done |
+        sort -r |
+        head -n 20
     )
   done
 }
@@ -208,24 +271,30 @@ run_xcodebuild_once() {
     cmd+=(-enableAddressSanitizer "$ENABLE_ADDRESS_SANITIZER")
   fi
 
+  printf '[codexmobile-ci] command:'
+  printf ' %q' "${cmd[@]}"
+  printf '\n'
+
   local status=0
 
   if [[ "$TIMEOUT_SECONDS" -gt 0 ]]; then
     python3 - "$TIMEOUT_SECONDS" "${cmd[@]}" <<'PY' || status=$?
 import subprocess
 import sys
+import os
+import signal
 
 timeout = int(sys.argv[1])
 command = sys.argv[2:]
-process = subprocess.Popen(command)
+process = subprocess.Popen(command, start_new_session=True)
 try:
     raise SystemExit(process.wait(timeout=timeout))
 except subprocess.TimeoutExpired:
-    process.terminate()
+    os.killpg(process.pid, signal.SIGTERM)
     try:
         process.wait(timeout=15)
     except subprocess.TimeoutExpired:
-        process.kill()
+        os.killpg(process.pid, signal.SIGKILL)
         process.wait()
     raise SystemExit(124)
 PY
@@ -234,6 +303,7 @@ PY
   fi
 
   if [[ "$status" -ne 0 ]]; then
+    collect_failure_artifacts "$CRASH_ARTIFACTS_DIR"
     if [[ "$DUMP_SIMULATOR_CRASH_LOGS_ON_FAILURE" == "1" ]]; then
       dump_recent_simulator_crash_logs
     fi

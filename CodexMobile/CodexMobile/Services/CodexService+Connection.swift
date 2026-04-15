@@ -653,25 +653,22 @@ extension CodexService {
 
     // Removes the current socket reference before reconnect/teardown logic mutates shared state.
     func cancelCurrentSocketConnection() {
-        if let connection = webSocketConnection {
-            connection.stateUpdateHandler = nil
-            webSocketConnection = nil
-            connection.cancel()
-        }
+        let connection = webSocketConnection
+        let task = webSocketTask
+        let session = webSocketSession
 
-        if let task = webSocketTask {
-            webSocketTask = nil
-            task.cancel(with: .goingAway, reason: nil)
-        }
-
-        if let session = webSocketSession {
-            webSocketSession = nil
-            session.invalidateAndCancel()
-        }
-
+        connection?.stateUpdateHandler = nil
+        webSocketConnection = nil
+        webSocketTask = nil
+        webSocketSession = nil
         webSocketSessionDelegate = nil
         manualWebSocketReadBuffer = Data()
         usesManualWebSocketTransport = false
+
+        connection?.cancel()
+        task?.cancel(with: .goingAway, reason: nil)
+        session?.invalidateAndCancel()
+        transportTeardownObserver?()
     }
 
     // Drops sync work tied to the old transport so reconnect starts from a clean baseline.

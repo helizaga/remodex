@@ -11,6 +11,27 @@ on:
     paths:
       - ".github/workflows/mobile-check.yml"
       - "CodexMobile/**"
+  workflow_dispatch:
+    inputs:
+      only_testing:
+        description: Optional test identifier or suite filter (for example CodexMobileTests/CodexServiceConnectionErrorTests)
+        required: false
+        type: string
+      diagnostic_mode:
+        description: Stronger diagnostic mode for manual reruns
+        required: false
+        default: baseline
+        type: choice
+        options:
+          - baseline
+          - asan
+          - scribble
+          - gmalloc
+          - zombie
+      test_iterations:
+        description: Override iteration count for manual diagnostics
+        required: false
+        type: string
 
 jobs:
   reconnect-history-check:
@@ -33,7 +54,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cache/remodex-source-packages
+            ${{ github.workspace }}/.cache/remodex-source-packages
             ~/Library/Caches/org.swift.swiftpm
             ~/.swiftpm/cache
           key: ${{ runner.os }}-mobile-spm-${{ hashFiles('CodexMobile/CodexMobile.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
@@ -42,16 +63,31 @@ jobs:
 
       - name: Run required mobile regression slice
         env:
-          CLONED_SOURCE_PACKAGES_DIR: ~/.cache/remodex-source-packages
+          CLONED_SOURCE_PACKAGES_DIR: ${{ github.workspace }}/.cache/remodex-source-packages
           TIMEOUT_SECONDS: "2400"
           RESULT_BUNDLE_PATH: /tmp/remodex-mobile-ci.xcresult
+          CRASH_ARTIFACTS_DIR: /tmp/remodex-mobile-diagnostics
           COLLECT_TEST_DIAGNOSTICS: on-failure
-        run: ./CodexMobile/scripts/run-reconnect-history-tests.sh
+          PARALLEL_TESTING_ENABLED: "NO"
+          MAX_PARALLEL_TESTING_WORKERS: "1"
+          ONLY_TESTING: ${{ inputs.only_testing }}
+          DIAGNOSTIC_MODE: ${{ inputs.diagnostic_mode }}
+          TEST_ITERATIONS: ${{ inputs.test_iterations }}
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${DIAGNOSTIC_MODE:-baseline}" != "baseline" ]]; then
+            TEST_IDENTIFIER="${ONLY_TESTING:-CodexMobileTests/CodexServiceConnectionErrorTests}" \
+            ./CodexMobile/scripts/run-connection-error-diagnostics.sh
+          else
+            ./CodexMobile/scripts/run-reconnect-history-tests.sh
+          fi
 
       - name: Upload mobile result bundle
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v4
         with:
-          name: remodex-mobile-ci-xcresult
-          path: /tmp/remodex-mobile-ci.xcresult
+          name: remodex-mobile-diagnostics
+          path: |
+            /tmp/remodex-mobile-ci*.xcresult
+            /tmp/remodex-connection-error-diagnostics*.xcresult
+            /tmp/remodex-mobile-diagnostics
           if-no-files-found: ignore
