@@ -7,6 +7,12 @@ import RevenueCat
 import SwiftUI
 import UserNotifications
 
+private struct CodexUnitTestHostView: View {
+    var body: some View {
+        Color.clear
+    }
+}
+
 @MainActor
 @main
 struct CodexMobileApp: App {
@@ -72,6 +78,9 @@ struct CodexMobileApp: App {
     private var rootView: some View {
         if let uiTestFixture {
             CodexUITestFixtureRootView(fixture: uiTestFixture)
+        } else if shouldSkipAppBootstrap {
+            // Keep host-based unit tests out of the real app shell and its scene/lifecycle work.
+            CodexUnitTestHostView()
         } else {
             ContentView()
                 .task {
