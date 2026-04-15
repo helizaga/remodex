@@ -252,13 +252,13 @@ test("relay logs redact live session identifiers", (t) => {
   };
 
   const wss = new FakeWebSocketServer();
-  setupRelay(wss);
   t.after(() => {
     console.log = originalLog;
     console.error = originalError;
     wss.emit("close");
     __resetRelayStateForTests();
   });
+  setupRelay(wss);
 
   const mac = new FakeWebSocket();
   const iphone = new FakeWebSocket();

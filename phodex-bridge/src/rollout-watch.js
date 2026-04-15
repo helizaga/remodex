@@ -282,8 +282,18 @@ function findMostRecentRolloutFileForThread(candidates, threadId) {
     return null;
   }
 
-  const match = candidates.find(({ filePath }) => path.basename(filePath).includes(threadId));
-  return match?.filePath || null;
+  let newestMatch = null;
+  for (const candidate of candidates) {
+    if (!candidate?.filePath || !path.basename(candidate.filePath).includes(threadId)) {
+      continue;
+    }
+
+    if (!newestMatch || candidate.mtimeMs > newestMatch.mtimeMs) {
+      newestMatch = candidate;
+    }
+  }
+
+  return newestMatch?.filePath || null;
 }
 
 // Scans the whole sessions tree only when the recent candidate window missed the
@@ -312,7 +322,16 @@ function findNewestRolloutFileForThread(root, threadId, { fsModule = fs } = {}) 
       }
 
       if (entry.name.includes(threadId) && entry.name.startsWith("rollout-") && entry.name.endsWith(".jsonl")) {
-        const stat = fsModule.statSync(fullPath);
+        let stat;
+        try {
+          stat = fsModule.statSync(fullPath);
+        } catch (error) {
+          if (isRetryableFilesystemError(error)) {
+            continue;
+          }
+          throw error;
+        }
+
         if (!newestMatch || stat.mtimeMs > newestMatch.mtimeMs) {
           newestMatch = {
             filePath: fullPath,

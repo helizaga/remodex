@@ -284,6 +284,34 @@ process.exit(1);
 ' "$NGROK_LOG_FILE"
 }
 
+extract_ngrok_tunnel_session_ids_for_endpoint() {
+  local endpoint_json="$1"
+  local endpoint_url="$2"
+
+  printf '%s' "$endpoint_json" | node -e '
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { input += chunk; });
+process.stdin.on("end", () => {
+  let parsed;
+  try {
+    parsed = JSON.parse(input);
+  } catch {
+    process.exit(1);
+  }
+  const endpoints = Array.isArray(parsed?.endpoints) ? parsed.endpoints : [];
+  const ids = endpoints
+    .filter((endpoint) => endpoint?.url === process.argv[1] || endpoint?.public_url === process.argv[1])
+    .map((endpoint) => endpoint?.tunnel_session?.id)
+    .filter((value) => typeof value === "string" && value.length > 0);
+  if (ids.length === 0) {
+    process.exit(2);
+  }
+  process.stdout.write(ids.join("\n"));
+});
+' "$endpoint_url"
+}
+
 auto_clear_ngrok_collision() {
   local endpoint_url="$1"
   local api_key="${NGROK_API_KEY:-}"
@@ -305,28 +333,7 @@ auto_clear_ngrok_collision() {
   fi
 
   local session_ids
-  session_ids="$(printf '%s' "$endpoint_json" | node -e '
-let input = "";
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => { input += chunk; });
-process.stdin.on("end", () => {
-  let parsed;
-  try {
-    parsed = JSON.parse(input);
-  } catch {
-    process.exit(1);
-  }
-  const endpoints = Array.isArray(parsed?.endpoints) ? parsed.endpoints : [];
-  const ids = endpoints
-    .filter((endpoint) => endpoint?.url === process.argv[1] || endpoint?.public_url === process.argv[1])
-    .map((endpoint) => endpoint?.tunnel_session?.id)
-    .filter((value) => typeof value === "string" && value.length > 0);
-  if (ids.length === 0) {
-    process.exit(2);
-  }
-  process.stdout.write(ids.join("\n"));
-});
-') "$endpoint_url")"
+  session_ids="$(extract_ngrok_tunnel_session_ids_for_endpoint "$endpoint_json" "$endpoint_url")"
 
   local parser_status=$?
   if [[ $parser_status -eq 2 ]]; then

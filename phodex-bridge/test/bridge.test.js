@@ -413,7 +413,7 @@ test("sanitizeThreadHistoryImagesForRelay strips attachment previews once the sa
                 type: "user_message",
                 attachment: {
                   thumbnailBase64JPEG: "A".repeat(10_000),
-                  sourceURL: "https://example.com/image.png",
+                  sourceURL: "http://127.0.0.1/image.png",
                 },
               },
             ],
@@ -432,7 +432,7 @@ test("sanitizeThreadHistoryImagesForRelay strips attachment previews once the sa
 
   assert.deepEqual(attachment, {
     thumbnailBase64JPEG: "",
-    sourceURL: "https://example.com/image.png",
+    sourceURL: "http://127.0.0.1/image.png",
   });
 });
 

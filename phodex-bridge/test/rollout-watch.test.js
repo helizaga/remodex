@@ -14,6 +14,7 @@ const { setTimeout: wait } = require("node:timers/promises");
 const {
   contextUsageFromTokenCountPayload,
   createThreadRolloutActivityWatcher,
+  findRolloutFileForThread,
   readLatestContextWindowUsage,
 } = require("../src/rollout-watch");
 
@@ -282,6 +283,54 @@ test("readLatestContextWindowUsage returns null when no rollout matches the requ
 
   const result = readLatestContextWindowUsage({ threadId: "missing-thread" });
   assert.equal(result, null);
+});
+
+test("findRolloutFileForThread skips retryable stat races during full-tree scan", () => {
+  const file = (name) => ({
+    name,
+    isDirectory: () => false,
+    isFile: () => true,
+  });
+  const directory = (name) => ({
+    name,
+    isDirectory: () => true,
+    isFile: () => false,
+  });
+  const fsModule = {
+    existsSync(root) {
+      return root === "/sessions";
+    },
+    readdirSync(current) {
+      if (current === "/sessions") {
+        return [directory("thread-a")];
+      }
+      if (current === "/sessions/thread-a") {
+        return [
+          file("rollout-older-thread-a.jsonl"),
+          file("rollout-newer-thread-a.jsonl"),
+        ];
+      }
+      throw new Error(`unexpected readdirSync path: ${current}`);
+    },
+    statSync(filePath) {
+      if (filePath.endsWith("rollout-older-thread-a.jsonl")) {
+        const error = new Error("disappeared");
+        error.code = "ENOENT";
+        throw error;
+      }
+
+      if (filePath.endsWith("rollout-newer-thread-a.jsonl")) {
+        return { mtimeMs: 200 };
+      }
+
+      throw new Error(`unexpected statSync path: ${filePath}`);
+    },
+  };
+
+  assert.equal(
+    findRolloutFileForThread("/sessions", "thread-a", { fsModule }),
+    "/sessions/thread-a/rollout-newer-thread-a.jsonl"
+  );
 });
 
 function makeTemporarySessionsHome() {
