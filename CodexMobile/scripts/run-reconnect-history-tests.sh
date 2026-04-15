@@ -13,6 +13,15 @@ TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-0}"
 ITERATIONS="${ITERATIONS:-1}"
 CLEAN_DERIVED_DATA="${CLEAN_DERIVED_DATA:-0}"
 ERASE_SIMULATOR="${ERASE_SIMULATOR:-0}"
+COLLECT_TEST_DIAGNOSTICS="${COLLECT_TEST_DIAGNOSTICS:-}"
+PARALLEL_TESTING_ENABLED="${PARALLEL_TESTING_ENABLED:-}"
+MAX_PARALLEL_TESTING_WORKERS="${MAX_PARALLEL_TESTING_WORKERS:-}"
+XCODEBUILD_TEST_ITERATIONS="${XCODEBUILD_TEST_ITERATIONS:-1}"
+RUN_TESTS_UNTIL_FAILURE="${RUN_TESTS_UNTIL_FAILURE:-0}"
+TEST_REPETITION_RELAUNCH_ENABLED="${TEST_REPETITION_RELAUNCH_ENABLED:-}"
+ENABLE_ADDRESS_SANITIZER="${ENABLE_ADDRESS_SANITIZER:-}"
+DUMP_SIMULATOR_CRASH_LOGS_ON_FAILURE="${DUMP_SIMULATOR_CRASH_LOGS_ON_FAILURE:-1}"
+ONLY_TESTING="${ONLY_TESTING:-}"
 HELPERS_PATH="$ROOT_DIR/scripts/xcode-test-helpers.sh"
 
 source "$HELPERS_PATH"
@@ -47,19 +56,48 @@ TEST_SUITES=(
 )
 
 ONLY_TESTING_ARGS=()
-for suite in "${TEST_SUITES[@]}"; do
-  ONLY_TESTING_ARGS+=("-only-testing:CodexMobileTests/${suite}")
-done
+if [[ -n "$ONLY_TESTING" ]]; then
+  IFS=',' read -r -a requested_specs <<<"$ONLY_TESTING"
+  for spec in "${requested_specs[@]}"; do
+    spec="$(xargs <<<"$spec")"
+    if [[ -n "$spec" ]]; then
+      ONLY_TESTING_ARGS+=("-only-testing:${spec}")
+    fi
+  done
+else
+  for suite in "${TEST_SUITES[@]}"; do
+    ONLY_TESTING_ARGS+=("-only-testing:CodexMobileTests/${suite}")
+  done
+fi
 
 echo "[codexmobile-ci] destination: $DESTINATION"
 echo "[codexmobile-ci] scheme: $SCHEME"
-echo "[codexmobile-ci] suites: ${TEST_SUITES[*]}"
+if [[ -n "$ONLY_TESTING" ]]; then
+  echo "[codexmobile-ci] only-testing: $ONLY_TESTING"
+else
+  echo "[codexmobile-ci] suites: ${TEST_SUITES[*]}"
+fi
 echo "[codexmobile-ci] derived-data: $DERIVED_DATA_PATH"
 if [[ -n "$RESULT_BUNDLE_PATH" ]]; then
   echo "[codexmobile-ci] result-bundle: $RESULT_BUNDLE_PATH"
 fi
 if [[ "$TIMEOUT_SECONDS" -gt 0 ]]; then
   echo "[codexmobile-ci] timeout-seconds: $TIMEOUT_SECONDS"
+fi
+if [[ -n "$COLLECT_TEST_DIAGNOSTICS" ]]; then
+  echo "[codexmobile-ci] collect-test-diagnostics: $COLLECT_TEST_DIAGNOSTICS"
+fi
+if [[ "$XCODEBUILD_TEST_ITERATIONS" -gt 1 ]]; then
+  echo "[codexmobile-ci] xcodebuild-test-iterations: $XCODEBUILD_TEST_ITERATIONS"
+fi
+if [[ "$RUN_TESTS_UNTIL_FAILURE" == "1" ]]; then
+  echo "[codexmobile-ci] run-tests-until-failure: enabled"
+fi
+if [[ -n "$TEST_REPETITION_RELAUNCH_ENABLED" ]]; then
+  echo "[codexmobile-ci] test-repetition-relaunch-enabled: $TEST_REPETITION_RELAUNCH_ENABLED"
+fi
+if [[ -n "$ENABLE_ADDRESS_SANITIZER" ]]; then
+  echo "[codexmobile-ci] address-sanitizer: $ENABLE_ADDRESS_SANITIZER"
 fi
 
 if [[ "$CLEAN_DERIVED_DATA" == "1" ]]; then
@@ -71,6 +109,34 @@ if [[ "$ERASE_SIMULATOR" == "1" && -n "$SIMULATOR_UDID" ]]; then
   xcrun simctl shutdown "$SIMULATOR_UDID" >/dev/null 2>&1 || true
   xcrun simctl erase "$SIMULATOR_UDID"
 fi
+
+dump_recent_simulator_crash_logs() {
+  local host_reports_dir="$HOME/Library/Logs/DiagnosticReports"
+  local simulator_reports_dir="$HOME/Library/Developer/CoreSimulator/Devices/$SIMULATOR_UDID/data/Library/Logs/CrashReporter"
+  local patterns=("CodexMobile" "xctest")
+  local report
+
+  echo "[codexmobile-ci] recent crash reports:"
+  for report_dir in "$host_reports_dir" "$simulator_reports_dir"; do
+    [[ -d "$report_dir" ]] || continue
+    while IFS= read -r report; do
+      echo "[codexmobile-ci] crash-report: $report"
+      sed -n '1,120p' "$report"
+    done < <(
+      find "$report_dir" -type f \( -name '*.ips' -o -name '*.crash' \) -mmin -30 2>/dev/null \
+        | while IFS= read -r candidate; do
+            for pattern in "${patterns[@]}"; do
+              if [[ "$(basename "$candidate")" == *"$pattern"* ]]; then
+                printf '%s\n' "$candidate"
+                break
+              fi
+            done
+          done \
+        | sort -r \
+        | head -n 5
+    )
+  done
+}
 
 run_xcodebuild_once() {
   local iteration="$1"
@@ -98,14 +164,45 @@ run_xcodebuild_once() {
   fi
 
   cmd+=(
+    -destination-timeout 60
     test
     CODE_SIGNING_ALLOWED=NO
     CODE_SIGNING_REQUIRED=NO
     "${ONLY_TESTING_ARGS[@]}"
   )
 
+  if [[ -n "$COLLECT_TEST_DIAGNOSTICS" ]]; then
+    cmd+=(-collect-test-diagnostics "$COLLECT_TEST_DIAGNOSTICS")
+  fi
+
+  if [[ -n "$PARALLEL_TESTING_ENABLED" ]]; then
+    cmd+=(-parallel-testing-enabled "$PARALLEL_TESTING_ENABLED")
+  fi
+
+  if [[ -n "$MAX_PARALLEL_TESTING_WORKERS" ]]; then
+    cmd+=(-maximum-parallel-testing-workers "$MAX_PARALLEL_TESTING_WORKERS")
+  fi
+
+  if [[ "$XCODEBUILD_TEST_ITERATIONS" -gt 1 ]]; then
+    cmd+=(-test-iterations "$XCODEBUILD_TEST_ITERATIONS")
+  fi
+
+  if [[ "$RUN_TESTS_UNTIL_FAILURE" == "1" ]]; then
+    cmd+=(-run-tests-until-failure)
+  fi
+
+  if [[ -n "$TEST_REPETITION_RELAUNCH_ENABLED" ]]; then
+    cmd+=(-test-repetition-relaunch-enabled "$TEST_REPETITION_RELAUNCH_ENABLED")
+  fi
+
+  if [[ -n "$ENABLE_ADDRESS_SANITIZER" ]]; then
+    cmd+=(-enableAddressSanitizer "$ENABLE_ADDRESS_SANITIZER")
+  fi
+
+  local status=0
+
   if [[ "$TIMEOUT_SECONDS" -gt 0 ]]; then
-    python3 - "$TIMEOUT_SECONDS" "${cmd[@]}" <<'PY'
+    python3 - "$TIMEOUT_SECONDS" "${cmd[@]}" <<'PY' || status=$?
 import subprocess
 import sys
 
@@ -124,7 +221,14 @@ except subprocess.TimeoutExpired:
     raise SystemExit(124)
 PY
   else
-    "${cmd[@]}"
+    "${cmd[@]}" || status=$?
+  fi
+
+  if [[ "$status" -ne 0 ]]; then
+    if [[ "$DUMP_SIMULATOR_CRASH_LOGS_ON_FAILURE" == "1" ]]; then
+      dump_recent_simulator_crash_logs
+    fi
+    return "$status"
   fi
 }
 

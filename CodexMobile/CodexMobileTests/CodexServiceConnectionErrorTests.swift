@@ -395,6 +395,34 @@ final class CodexServiceConnectionErrorTests: XCTestCase {
         XCTAssertTrue(service.bufferedSecureControlMessages.isEmpty)
     }
 
+    func testAutomatedTestReleaseClearsLiveTransportReferences() {
+        let service = makeService()
+        let connection = NWConnection(
+            host: NWEndpoint.Host("localhost"),
+            port: NWEndpoint.Port(rawValue: 80)!,
+            using: NWParameters(tls: nil, tcp: NWProtocolTCP.Options())
+        )
+        let delegate = CodexURLSessionWebSocketDelegate()
+        let session = URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: nil)
+        let task = session.webSocketTask(with: URL(string: "ws://localhost")!)
+
+        service.webSocketConnection = connection
+        service.webSocketSessionDelegate = delegate
+        service.webSocketSession = session
+        service.webSocketTask = task
+        service.manualWebSocketReadBuffer = Data([0x88, 0x00])
+        service.usesManualWebSocketTransport = true
+
+        service.releaseConnectionResourcesForAutomatedTestDeinit()
+
+        XCTAssertNil(service.webSocketConnection)
+        XCTAssertNil(service.webSocketSessionDelegate)
+        XCTAssertNil(service.webSocketSession)
+        XCTAssertNil(service.webSocketTask)
+        XCTAssertTrue(service.manualWebSocketReadBuffer.isEmpty)
+        XCTAssertFalse(service.usesManualWebSocketTransport)
+    }
+
     private func posixError(_ code: POSIXErrorCode) -> NSError {
         NSError(domain: NSPOSIXErrorDomain, code: Int(code.rawValue))
     }

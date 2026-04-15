@@ -684,22 +684,8 @@ extension CodexService {
         cancelAllPerThreadRefreshWork()
     }
 
-    // Releases transport/session resources synchronously so unit-test teardown does not depend on async disconnect.
-    func releaseConnectionResourcesForDeinit() {
-        if let connection = webSocketConnection {
-            connection.stateUpdateHandler = nil
-            connection.cancel()
-        }
-
-        if let task = webSocketTask {
-            task.cancel(with: .goingAway, reason: nil)
-        }
-
-        if let session = webSocketSession {
-            session.invalidateAndCancel()
-        }
-
-        cancelConnectionWorkForDeinit()
+    private func releaseTransportResourcesForTeardown() {
+        cancelCurrentSocketConnection()
 
         let pendingRequestContinuations = Array(pendingRequests.values)
         pendingRequests.removeAll()
@@ -713,14 +699,19 @@ extension CodexService {
         for waiter in secureControlWaiters {
             waiter.continuation.resume(throwing: CodexServiceError.disconnected)
         }
+    }
 
+    // Releases transport/session resources synchronously so unit-test teardown does not depend on async disconnect.
+    func releaseConnectionResourcesForDeinit() {
+        releaseTransportResourcesForTeardown()
+        cancelConnectionWorkForDeinit()
         messagePersistence.save(messagesByThread)
-
         endBackgroundRunGraceTask(reason: "deinit")
     }
 
-    // Automated tests do not need transport teardown side effects, only prompt task cancellation.
+    // Automated tests still need live Network.framework state torn down to avoid cross-test crashes.
     func releaseConnectionResourcesForAutomatedTestDeinit() {
+        releaseTransportResourcesForTeardown()
         cancelConnectionWorkForDeinit()
     }
 
