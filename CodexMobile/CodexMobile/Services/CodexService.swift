@@ -341,10 +341,6 @@ final class CodexService {
     enum SecureStateBootstrap {
         case restorePersistedState
         case ephemeral
-
-        static var automatedTestDefault: SecureStateBootstrap {
-            CodexRuntimeEnvironment.isRunningAutomatedTests ? .ephemeral : .restorePersistedState
-        }
     }
 
     static let minimumSupportedBridgePackageVersion = "1.3.5"
@@ -647,17 +643,19 @@ final class CodexService {
         encoder: JSONEncoder = JSONEncoder(),
         decoder: JSONDecoder = JSONDecoder(),
         defaults: UserDefaults = .standard,
-        messagePersistence: CodexMessagePersistence = CodexMessagePersistence(),
-        aiChangeSetPersistence: AIChangeSetPersistence = AIChangeSetPersistence(),
+        messagePersistence: CodexMessagePersistence? = nil,
+        aiChangeSetPersistence: AIChangeSetPersistence? = nil,
         userNotificationCenter: CodexUserNotificationCentering? = nil,
         remoteNotificationRegistrar: CodexRemoteNotificationRegistering? = nil,
-        secureStateBootstrap: SecureStateBootstrap = .automatedTestDefault
+        secureStateBootstrap: SecureStateBootstrap? = nil
     ) {
+        let resolvedSecureStateBootstrap = secureStateBootstrap
+            ?? (CodexRuntimeEnvironment.isRunningAutomatedTests ? .ephemeral : .restorePersistedState)
         self.encoder = encoder
         self.decoder = decoder
         self.defaults = defaults
-        self.messagePersistence = messagePersistence
-        self.aiChangeSetPersistence = aiChangeSetPersistence
+        self.messagePersistence = messagePersistence ?? CodexMessagePersistence()
+        self.aiChangeSetPersistence = aiChangeSetPersistence ?? AIChangeSetPersistence()
         if let userNotificationCenter {
             self.userNotificationCenter = userNotificationCenter
         } else if CodexRuntimeEnvironment.isRunningAutomatedTests {
@@ -672,7 +670,7 @@ final class CodexService {
         } else {
             self.remoteNotificationRegistrar = CodexApplicationRemoteNotificationRegistrar()
         }
-        switch secureStateBootstrap {
+        switch resolvedSecureStateBootstrap {
         case .restorePersistedState:
             self.phoneIdentityState = codexPhoneIdentityStateFromSecureStore()
             self.trustedMacRegistry = codexTrustedMacRegistryFromSecureStore()
@@ -682,7 +680,7 @@ final class CodexService {
             self.trustedMacRegistry = .empty
             self.lastTrustedMacDeviceId = nil
         }
-        let loadedMessages = messagePersistence.load().mapValues { messages in
+        let loadedMessages = self.messagePersistence.load().mapValues { messages in
             messages.map { message in
                 var value = message
                 // Streaming cannot survive app relaunch; clear stale flags loaded from disk.
@@ -694,7 +692,7 @@ final class CodexService {
         self.messagesByThread = loadedMessages
         rebuildSubagentIdentityDirectory()
 
-        let loadedChangeSets = aiChangeSetPersistence.load()
+        let loadedChangeSets = self.aiChangeSetPersistence.load()
         self.aiChangeSetsByID = loadedChangeSets.reduce(into: [:]) { partialResult, changeSet in
             partialResult[changeSet.id] = changeSet
         }
@@ -807,7 +805,7 @@ final class CodexService {
             )
         }
 
-        switch secureStateBootstrap {
+        switch resolvedSecureStateBootstrap {
         case .restorePersistedState:
             // Restore relay session from Keychain.
             self.relaySessionId = SecureStore.readString(for: CodexSecureKeys.relaySessionId)

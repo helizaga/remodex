@@ -11,16 +11,6 @@ struct CodexMessagePersistence {
     nonisolated(unsafe) private let loadImpl: () -> [String: [CodexMessage]]
     nonisolated(unsafe) private let saveImpl: ([String: [CodexMessage]]) -> Void
 
-    // v6 encrypts the on-device message cache while keeping backward-compatible legacy fallbacks.
-    private static let fileName = "codex-message-history-v6.bin"
-    private static let legacyFileNames = [
-        "codex-message-history-v5.json",
-        "codex-message-history-v4.json",
-        "codex-message-history-v3.json",
-        "codex-message-history-v2.json",
-        "codex-message-history.json",
-    ]
-
     init() {
         self.loadImpl = { Self.liveLoad() }
         self.saveImpl = { value in Self.liveSave(value) }
@@ -50,13 +40,14 @@ struct CodexMessagePersistence {
 
     private nonisolated static func liveLoad() -> [String: [CodexMessage]] {
         let decoder = JSONDecoder()
+        let encryptedFileName = "codex-message-history-v6.bin"
 
         for fileURL in storeURLs {
             guard let data = try? Data(contentsOf: fileURL) else {
                 continue
             }
 
-            if fileURL.lastPathComponent == Self.fileName,
+            if fileURL.lastPathComponent == encryptedFileName,
                let decrypted = Self.decryptPersistedPayload(data),
                let value = try? decoder.decode([String: [CodexMessage]].self, from: decrypted) {
                 return Self.sanitizedForPersistence(value)
@@ -88,12 +79,20 @@ struct CodexMessagePersistence {
     }
 
     private nonisolated static var storeURLs: [URL] {
+        let fileName = "codex-message-history-v6.bin"
+        let legacyFileNames = [
+            "codex-message-history-v5.json",
+            "codex-message-history-v4.json",
+            "codex-message-history-v3.json",
+            "codex-message-history-v2.json",
+            "codex-message-history.json",
+        ]
         let fm = FileManager.default
         let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fm.temporaryDirectory
         let bundleID = Bundle.main.bundleIdentifier ?? "com.codexmobile.app"
         let directory = base.appendingPathComponent(bundleID, isDirectory: true)
-        let names = [Self.fileName] + Self.legacyFileNames
+        let names = [fileName] + legacyFileNames
         return names.map { directory.appendingPathComponent($0, isDirectory: false) }
     }
 

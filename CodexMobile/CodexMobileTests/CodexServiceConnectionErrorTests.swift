@@ -20,7 +20,8 @@ final class CodexServiceConnectionErrorTests: XCTestCase {
             messagePersistence: .disabled,
             aiChangeSetPersistence: .disabled,
             userNotificationCenter: CodexNoopUserNotificationCenter(),
-            remoteNotificationRegistrar: CodexNoopRemoteNotificationRegistrar()
+            remoteNotificationRegistrar: CodexNoopRemoteNotificationRegistrar(),
+            secureStateBootstrap: .ephemeral
         )
     }
 
