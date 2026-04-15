@@ -17,6 +17,9 @@ on:
 jobs:
   bridge-check:
     runs-on: ubuntu-latest
+    concurrency:
+      group: bridge-check-${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
+      cancel-in-progress: true
 
     steps:
       - name: Checkout repository

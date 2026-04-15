@@ -15,7 +15,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 30
     concurrency:
-      group: mobile-check-${{ github.workflow }}-${{ github.ref }}
+      group: mobile-check-${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
       cancel-in-progress: true
 
     steps:
