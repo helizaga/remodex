@@ -638,14 +638,26 @@ final class CodexService {
         encoder: JSONEncoder = JSONEncoder(),
         decoder: JSONDecoder = JSONDecoder(),
         defaults: UserDefaults = .standard,
-        userNotificationCenter: CodexUserNotificationCentering = UNUserNotificationCenter.current(),
+        userNotificationCenter: CodexUserNotificationCentering? = nil,
         remoteNotificationRegistrar: CodexRemoteNotificationRegistering? = nil
     ) {
         self.encoder = encoder
         self.decoder = decoder
         self.defaults = defaults
-        self.userNotificationCenter = userNotificationCenter
-        self.remoteNotificationRegistrar = remoteNotificationRegistrar ?? CodexApplicationRemoteNotificationRegistrar()
+        if let userNotificationCenter {
+            self.userNotificationCenter = userNotificationCenter
+        } else if CodexRuntimeEnvironment.isRunningAutomatedTests {
+            self.userNotificationCenter = CodexNoopUserNotificationCenter()
+        } else {
+            self.userNotificationCenter = UNUserNotificationCenter.current()
+        }
+        if let remoteNotificationRegistrar {
+            self.remoteNotificationRegistrar = remoteNotificationRegistrar
+        } else if CodexRuntimeEnvironment.isRunningAutomatedTests {
+            self.remoteNotificationRegistrar = CodexNoopRemoteNotificationRegistrar()
+        } else {
+            self.remoteNotificationRegistrar = CodexApplicationRemoteNotificationRegistrar()
+        }
         self.phoneIdentityState = codexPhoneIdentityStateFromSecureStore()
         self.trustedMacRegistry = codexTrustedMacRegistryFromSecureStore()
         self.lastTrustedMacDeviceId = SecureStore.readString(for: CodexSecureKeys.lastTrustedMacDeviceId)

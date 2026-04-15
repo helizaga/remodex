@@ -8,6 +8,12 @@ import Foundation
 import UIKit
 import UserNotifications
 
+enum CodexRuntimeEnvironment {
+    static var isRunningAutomatedTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    }
+}
+
 private enum CodexNotificationSource {
     static let runCompletion = "codex.runCompletion"
     static let structuredUserInput = "codex.structuredUserInput"
@@ -16,6 +22,11 @@ private enum CodexNotificationSource {
 @MainActor
 protocol CodexRemoteNotificationRegistering: AnyObject {
     func registerForRemoteNotifications()
+}
+
+@MainActor
+final class CodexNoopRemoteNotificationRegistrar: CodexRemoteNotificationRegistering {
+    func registerForRemoteNotifications() {}
 }
 
 @MainActor
@@ -40,6 +51,21 @@ protocol CodexUserNotificationCentering: AnyObject {
     func requestAuthorization(options: UNAuthorizationOptions) async throws -> Bool
     func add(_ request: UNNotificationRequest) async throws
     func authorizationStatus() async -> UNAuthorizationStatus
+}
+
+@MainActor
+final class CodexNoopUserNotificationCenter: CodexUserNotificationCentering {
+    var delegate: UNUserNotificationCenterDelegate?
+
+    func requestAuthorization(options: UNAuthorizationOptions) async throws -> Bool {
+        false
+    }
+
+    func add(_ request: UNNotificationRequest) async throws {}
+
+    func authorizationStatus() async -> UNAuthorizationStatus {
+        .notDetermined
+    }
 }
 
 extension UNUserNotificationCenter: CodexUserNotificationCentering {

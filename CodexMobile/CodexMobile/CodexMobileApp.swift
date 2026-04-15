@@ -8,26 +8,6 @@ import SwiftUI
 import UserNotifications
 
 @MainActor
-final class CodexAppNoopUserNotificationCenter: CodexUserNotificationCentering {
-    var delegate: UNUserNotificationCenterDelegate?
-
-    func requestAuthorization(options: UNAuthorizationOptions) async throws -> Bool {
-        false
-    }
-
-    func add(_ request: UNNotificationRequest) async throws {}
-
-    func authorizationStatus() async -> UNAuthorizationStatus {
-        .notDetermined
-    }
-}
-
-@MainActor
-final class CodexAppNoopRemoteNotificationRegistrar: CodexRemoteNotificationRegistering {
-    func registerForRemoteNotifications() {}
-}
-
-@MainActor
 @main
 struct CodexMobileApp: App {
     @Environment(\.scenePhase) private var scenePhase
@@ -38,7 +18,7 @@ struct CodexMobileApp: App {
     private let shouldSkipAppBootstrap: Bool
 
     init() {
-        let shouldSkipAppBootstrap = Self.isRunningAutomatedTests
+        let shouldSkipAppBootstrap = CodexRuntimeEnvironment.isRunningAutomatedTests
         self.shouldSkipAppBootstrap = shouldSkipAppBootstrap
         Self.configureRevenueCatIfAvailable(skip: shouldSkipAppBootstrap)
         if let fixtureContext = CodexUITestHarness.makeIfEnabled(arguments: ProcessInfo.processInfo.arguments) {
@@ -48,8 +28,8 @@ struct CodexMobileApp: App {
         } else {
             let service = shouldSkipAppBootstrap
                 ? CodexService(
-                    userNotificationCenter: CodexAppNoopUserNotificationCenter(),
-                    remoteNotificationRegistrar: CodexAppNoopRemoteNotificationRegistrar()
+                    userNotificationCenter: CodexNoopUserNotificationCenter(),
+                    remoteNotificationRegistrar: CodexNoopRemoteNotificationRegistrar()
                 )
                 : CodexService()
             if !shouldSkipAppBootstrap {
@@ -102,12 +82,6 @@ struct CodexMobileApp: App {
                 }
         }
     }
-
-    // Configures RevenueCat once at launch using the client-safe public SDK key.
-    private static var isRunningAutomatedTests: Bool {
-        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
-    }
-
     private static func configureRevenueCatIfAvailable(skip: Bool) {
         guard !skip else {
             return
