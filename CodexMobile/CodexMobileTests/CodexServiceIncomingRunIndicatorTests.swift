@@ -10,6 +10,15 @@ import Network
 
 @MainActor
 final class CodexServiceIncomingRunIndicatorTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        clearStoredSecureRelayState()
+    }
+
+    override func tearDown() {
+        clearStoredSecureRelayState()
+        super.tearDown()
+    }
 
     func testTurnStartedMarksThreadAsRunning() {
         let service = makeService()
@@ -1166,7 +1175,14 @@ final class CodexServiceIncomingRunIndicatorTests: XCTestCase {
         let suiteName = "CodexServiceIncomingRunIndicatorTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard
         defaults.removePersistentDomain(forName: suiteName)
-        let service = CodexService(defaults: defaults)
+        let service = CodexService(
+            defaults: defaults,
+            messagePersistence: .disabled,
+            aiChangeSetPersistence: .disabled,
+            userNotificationCenter: CodexNoopUserNotificationCenter(),
+            remoteNotificationRegistrar: CodexNoopRemoteNotificationRegistrar(),
+            secureStateBootstrap: .ephemeral
+        )
         service.messagesByThread = [:]
         return service
     }
@@ -1190,5 +1206,17 @@ final class CodexServiceIncomingRunIndicatorTests: XCTestCase {
     private func flushAsyncSideEffects() async {
         await Task.yield()
         try? await Task.sleep(nanoseconds: 30_000_000)
+    }
+
+    // Clears persisted relay keys so incoming-indicator tests do not inherit shared secure state.
+    private func clearStoredSecureRelayState() {
+        SecureStore.deleteValue(for: CodexSecureKeys.relaySessionId)
+        SecureStore.deleteValue(for: CodexSecureKeys.relayUrl)
+        SecureStore.deleteValue(for: CodexSecureKeys.relayMacDeviceId)
+        SecureStore.deleteValue(for: CodexSecureKeys.relayMacIdentityPublicKey)
+        SecureStore.deleteValue(for: CodexSecureKeys.relayProtocolVersion)
+        SecureStore.deleteValue(for: CodexSecureKeys.relayLastAppliedBridgeOutboundSeq)
+        SecureStore.deleteValue(for: CodexSecureKeys.trustedMacRegistry)
+        SecureStore.deleteValue(for: CodexSecureKeys.lastTrustedMacDeviceId)
     }
 }
