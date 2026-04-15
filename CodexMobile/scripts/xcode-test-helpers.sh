@@ -2,47 +2,39 @@
 set -euo pipefail
 
 pick_ios_simulator_destination() {
-  local project_path="$1"
-  local scheme="$2"
   shift 2
   local preferred_names=("$@")
-  local destinations
-  destinations="$(xcodebuild -project "$project_path" -scheme "$scheme" -showdestinations)"
+  local devices_json
+  devices_json="$(xcrun simctl list devices available --json)"
 
-  DESTINATIONS="$destinations" python3 - "${preferred_names[@]}" <<'PY'
+  DEVICES_JSON="$devices_json" python3 - "${preferred_names[@]}" <<'PY'
+import json
 import os
-import re
 import sys
 
-raw = os.environ.get("DESTINATIONS", "")
+raw = os.environ.get("DEVICES_JSON", "")
 preferred_names = sys.argv[1:]
+payload = json.loads(raw)
 entries = []
-pattern = re.compile(r"\{ (?P<body>.+) \}|\{(?P<body_compact>.+)\}")
 
-for line in raw.splitlines():
-    if "platform:iOS Simulator" not in line:
+for runtime_identifier, devices in payload.get("devices", {}).items():
+    if "iOS" not in runtime_identifier:
         continue
-    match = pattern.search(line.strip())
-    if not match:
-        continue
-    body = match.group("body") or match.group("body_compact") or ""
-    fields = {}
-    for part in body.split(", "):
-        if ":" not in part:
+    os_version = runtime_identifier.rsplit("iOS-", 1)[-1].replace("-", ".")
+    for device in devices:
+        if not device.get("isAvailable", True):
             continue
-        key, value = part.split(":", 1)
-        fields[key.strip()] = value.strip()
-    name = fields.get("name", "")
-    os_version = fields.get("OS", "")
-    if not name or not os_version:
-        continue
-    entries.append(
-        {
-            "name": name,
-            "os": os_version,
-            "destination": f"platform=iOS Simulator,OS={os_version},name={name}",
-        }
-    )
+        name = device.get("name", "")
+        udid = device.get("udid", "")
+        if not name or not udid:
+            continue
+        entries.append(
+            {
+                "name": name,
+                "os": os_version,
+                "destination": f"platform=iOS Simulator,id={udid}",
+            }
+        )
 
 if not entries:
     sys.exit(1)
