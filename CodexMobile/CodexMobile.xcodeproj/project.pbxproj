@@ -41,6 +41,7 @@
 		C0DED3362F5E39DC0021A8E8 /* Textual in Frameworks */ = {isa = PBXBuildFile; productRef = C0DED3352F5E39DC0021A8E8 /* Textual */; };
 		D27B9CA5F0B60ECA8AF38016 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9A37794F4B32C1952A3770E0 /* Foundation.framework */; };
 		D4F56781234567890ABCDE01 /* CodexServiceIncomingRunIndicatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4F56781234567890ABCDE02 /* CodexServiceIncomingRunIndicatorTests.swift */; };
+		D4F56781234567890ABCDE03 /* CodexServiceAssistantMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4F56781234567890ABCDE04 /* CodexServiceAssistantMessageTests.swift */; };
 		DAAD0C0C717F9415C3E9D21A /* RemodexMenuBarApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0B9CCCCC45E47616AB452FA /* RemodexMenuBarApp.swift */; };
 		DC6E023DD6E4FA68DF3D7FDE /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E5E1FA12CF5120C8C8A64111 /* Cocoa.framework */; };
 		E1A2B3C4D5E6F708192A3B4C /* QRScannerPairingValidatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1A2B3C4D5E6F708192A3B4D /* QRScannerPairingValidatorTests.swift */; };
@@ -100,6 +101,7 @@
 		C1D2E3F40516273849A5B6C7 /* CodexServiceIncomingCommandExecutionTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CodexServiceIncomingCommandExecutionTests.swift; sourceTree = "<group>"; };
 		C9CD1EA13B728103A5654EEA /* BridgeControlModels.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BridgeControlModels.swift; sourceTree = "<group>"; };
 		D4F56781234567890ABCDE02 /* CodexServiceIncomingRunIndicatorTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CodexServiceIncomingRunIndicatorTests.swift; sourceTree = "<group>"; };
+		D4F56781234567890ABCDE04 /* CodexServiceAssistantMessageTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CodexServiceAssistantMessageTests.swift; sourceTree = "<group>"; };
 		D523A0A98D6540D0E2EE6131 /* CodexMobileUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CodexMobileUITests.swift; sourceTree = "<group>"; };
 		E1A2B3C4D5E6F708192A3B4D /* QRScannerPairingValidatorTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = QRScannerPairingValidatorTests.swift; sourceTree = "<group>"; };
 		E5E1FA12CF5120C8C8A64111 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
@@ -162,6 +164,7 @@
 				8D1F2A3B4C5D6E7F8091A2B4 /* CodexServiceConnectionErrorTests.swift */,
 				8F1A2B3C4D5E6F708192A3B5 /* CodexPushNotificationRegistrationTests.swift */,
 				D4F56781234567890ABCDE02 /* CodexServiceIncomingRunIndicatorTests.swift */,
+				D4F56781234567890ABCDE04 /* CodexServiceAssistantMessageTests.swift */,
 				A2B3C4D5E6F708192A3B4C7 /* CodexServiceThreadListTests.swift */,
 				E1A2B3C4D5E6F708192A3B4D /* QRScannerPairingValidatorTests.swift */,
 				2A6D4B8C1E3F507192A4B6C9 /* CodexStatusTests.swift */,
@@ -468,6 +471,7 @@
 				8D1F2A3B4C5D6E7F8091A2B3 /* CodexServiceConnectionErrorTests.swift in Sources */,
 				8F1A2B3C4D5E6F708192A3B4 /* CodexPushNotificationRegistrationTests.swift in Sources */,
 				D4F56781234567890ABCDE01 /* CodexServiceIncomingRunIndicatorTests.swift in Sources */,
+				D4F56781234567890ABCDE03 /* CodexServiceAssistantMessageTests.swift in Sources */,
 				A2B3C4D5E6F708192A3B4C6 /* CodexServiceThreadListTests.swift in Sources */,
 				E1A2B3C4D5E6F708192A3B4C /* QRScannerPairingValidatorTests.swift in Sources */,
 				2A6D4B8C1E3F507192A4B6C8 /* CodexStatusTests.swift in Sources */,

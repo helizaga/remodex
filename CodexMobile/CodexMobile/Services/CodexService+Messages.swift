@@ -114,6 +114,9 @@ extension CodexService {
     // Returns the service-owned timeline state for a single thread.
     func timelineState(for threadId: String) -> ThreadTimelineState {
         let state = timelineStore.timelineState(for: threadId)
+        guard !timelineRefreshInProgressThreadIDs.contains(threadId) else {
+            return state
+        }
         refreshThreadTimelineState(for: threadId)
         return state
     }
@@ -3017,6 +3020,13 @@ extension CodexService {
 
     // Rebuilds one thread's render snapshot from service-owned caches after any timeline mutation.
     func refreshThreadTimelineState(for threadId: String) {
+        guard timelineRefreshInProgressThreadIDs.insert(threadId).inserted else {
+            return
+        }
+        defer {
+            timelineRefreshInProgressThreadIDs.remove(threadId)
+        }
+
         let state = timelineStore.timelineState(for: threadId)
         let messages = messagesByThread[threadId] ?? []
         let revision = messageRevisionByThread[threadId] ?? 0

@@ -609,6 +609,7 @@ final class CodexService {
         get { timelineStore.assistantRevertStateRevision }
         set { timelineStore.assistantRevertStateRevision = newValue }
     }
+    @ObservationIgnored var timelineRefreshInProgressThreadIDs: Set<String> = []
     @ObservationIgnored var busyRepoRoots: Set<String> {
         get { timelineStore.busyRepoRoots }
         set { timelineStore.busyRepoRoots = newValue }
