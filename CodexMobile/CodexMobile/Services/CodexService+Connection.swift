@@ -686,14 +686,49 @@ extension CodexService {
 
     // Releases transport/session resources synchronously so unit-test teardown does not depend on async disconnect.
     func releaseConnectionResourcesForDeinit() {
-        cancelCurrentSocketConnection()
-        clearConnectionSyncState()
+        if let connection = webSocketConnection {
+            connection.stateUpdateHandler = nil
+            connection.cancel()
+        }
+
+        if let task = webSocketTask {
+            task.cancel(with: .goingAway, reason: nil)
+        }
+
+        if let session = webSocketSession {
+            session.invalidateAndCancel()
+        }
+
+        threadListSyncTask?.cancel()
+        activeThreadSyncTask?.cancel()
+        runningThreadWatchSyncTask?.cancel()
+        postConnectSyncTask?.cancel()
+        gptAccountLoginSyncTask?.cancel()
         messagePersistenceDebounceTask?.cancel()
-        messagePersistenceDebounceTask = nil
+        coalescedRevertRefreshTask?.cancel()
+        trustedSessionResolveTask?.cancel()
+        threadHistoryLoadTaskByThreadID.values.forEach { $0.cancel() }
+        threadResumeTaskByThreadID.values.forEach { $0.cancel() }
+        turnStateRefreshTaskByThreadID.values.forEach { $0.cancel() }
+        runningThreadCatchupTaskByThreadID.values.forEach { $0.cancel() }
+        canonicalHistoryReconcileTaskByThreadID.values.forEach { $0.cancel() }
+        canonicalHistoryReconcileRetryTaskByThreadID.values.forEach { $0.cancel() }
+
+        let pendingRequestContinuations = Array(pendingRequests.values)
+        for continuation in pendingRequestContinuations {
+            continuation.resume(throwing: CodexServiceError.disconnected)
+        }
+
+        let secureControlWaiters = pendingSecureControlContinuations.values.flatMap { $0 }
+        for waiter in secureControlWaiters {
+            waiter.continuation.resume(throwing: CodexServiceError.disconnected)
+        }
+
         messagePersistence.save(messagesByThread)
-        shouldAutoReconnectOnForeground = false
-        connectionRecoveryState = .idle
-        endBackgroundRunGraceTask(reason: "deinit")
+
+        if backgroundTurnGraceTaskID != .invalid {
+            UIApplication.shared.endBackgroundTask(backgroundTurnGraceTaskID)
+        }
     }
 
     // Avoids wiping thread/runtime state when reconnecting after a socket that already died.

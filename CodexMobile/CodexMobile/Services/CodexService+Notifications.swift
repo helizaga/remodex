@@ -98,6 +98,18 @@ private struct CodexThreadNotificationPayload {
 }
 
 extension CodexService {
+    // Releases delegate/observer hooks without mutating observable service state during deallocation.
+    func releaseNotificationResourcesForDeinit() {
+        let delegateProxy = notificationCenterDelegateProxy
+        if userNotificationCenter.delegate === delegateProxy {
+            userNotificationCenter.delegate = nil
+        }
+
+        for token in notificationObserverTokens {
+            NotificationCenter.default.removeObserver(token)
+        }
+    }
+
     // Removes notification observers/delegate wiring when the service is torn down in tests.
     func tearDownNotifications() {
         let delegateProxy = notificationCenterDelegateProxy

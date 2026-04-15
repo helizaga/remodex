@@ -803,19 +803,7 @@ final class CodexService {
 
     isolated deinit {
         releaseConnectionResourcesForDeinit()
-        trustedSessionResolveTask?.cancel()
-        trustedSessionResolveTask = nil
-        trustedSessionResolveTaskID = nil
-        gptAccountLoginSyncTask?.cancel()
-        gptAccountLoginSyncTask = nil
-        messagePersistenceDebounceTask?.cancel()
-        messagePersistenceDebounceTask = nil
-        coalescedRevertRefreshTask?.cancel()
-        coalescedRevertRefreshTask = nil
-        failAllPendingRequests(with: CodexServiceError.disconnected)
-        resetSecureTransportState()
-        removeAllThreadTimelineState()
-        tearDownNotifications()
+        releaseNotificationResourcesForDeinit()
     }
 
     // Persists per-thread plan-mode provenance so reconnect/relaunch keeps native vs fallback behavior stable.
