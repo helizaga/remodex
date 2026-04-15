@@ -15,7 +15,7 @@ on:
 jobs:
   reconnect-history-check:
     runs-on: macos-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     concurrency:
       group: mobile-check-${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
       cancel-in-progress: true
@@ -27,7 +27,31 @@ jobs:
       - name: Select latest stable Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: latest-stable
+          xcode-version: '26.4'
+
+      - name: Cache Swift package checkouts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/remodex-source-packages
+            ~/Library/Caches/org.swift.swiftpm
+            ~/.swiftpm/cache
+          key: ${{ runner.os }}-mobile-spm-${{ hashFiles('CodexMobile/CodexMobile.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-mobile-spm-
 
       - name: Run required mobile regression slice
+        env:
+          CLONED_SOURCE_PACKAGES_DIR: ~/.cache/remodex-source-packages
+          TIMEOUT_SECONDS: "2400"
+          RESULT_BUNDLE_PATH: /tmp/remodex-mobile-ci.xcresult
+          COLLECT_TEST_DIAGNOSTICS: on-failure
         run: ./CodexMobile/scripts/run-reconnect-history-tests.sh
+
+      - name: Upload mobile result bundle
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: remodex-mobile-ci-xcresult
+          path: /tmp/remodex-mobile-ci.xcresult
+          if-no-files-found: ignore

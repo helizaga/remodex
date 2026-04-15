@@ -8,6 +8,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT_PATH="$ROOT_DIR/CodexMobile.xcodeproj"
 SCHEME="${SCHEME:-CodexMobile}"
 DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-/tmp/remodex-codexmobile-ci-derived}"
+CLONED_SOURCE_PACKAGES_DIR="${CLONED_SOURCE_PACKAGES_DIR:-}"
 RESULT_BUNDLE_PATH="${RESULT_BUNDLE_PATH:-}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-0}"
 ITERATIONS="${ITERATIONS:-1}"
@@ -78,6 +79,9 @@ else
   echo "[codexmobile-ci] suites: ${TEST_SUITES[*]}"
 fi
 echo "[codexmobile-ci] derived-data: $DERIVED_DATA_PATH"
+if [[ -n "$CLONED_SOURCE_PACKAGES_DIR" ]]; then
+  echo "[codexmobile-ci] source-packages: $CLONED_SOURCE_PACKAGES_DIR"
+fi
 if [[ -n "$RESULT_BUNDLE_PATH" ]]; then
   echo "[codexmobile-ci] result-bundle: $RESULT_BUNDLE_PATH"
 fi
@@ -147,6 +151,11 @@ run_xcodebuild_once() {
     -destination "$DESTINATION"
     -derivedDataPath "$DERIVED_DATA_PATH"
   )
+
+  if [[ -n "$CLONED_SOURCE_PACKAGES_DIR" ]]; then
+    mkdir -p "$CLONED_SOURCE_PACKAGES_DIR"
+    cmd+=(-clonedSourcePackagesDirPath "$CLONED_SOURCE_PACKAGES_DIR")
+  fi
 
   if [[ -n "$RESULT_BUNDLE_PATH" ]]; then
     local result_bundle_path="$RESULT_BUNDLE_PATH"
