@@ -854,13 +854,15 @@ final class CodexService {
         rebuildThreadLookupCaches()
     }
 
-    isolated deinit {
-        if CodexRuntimeEnvironment.isRunningAutomatedTests {
-            releaseConnectionResourcesForAutomatedTestDeinit()
-        } else {
-            releaseConnectionResourcesForDeinit()
+    deinit {
+        MainActor.assumeIsolated {
+            if CodexRuntimeEnvironment.isRunningAutomatedTests {
+                releaseConnectionResourcesForAutomatedTestDeinit()
+            } else {
+                releaseConnectionResourcesForDeinit()
+            }
+            releaseNotificationResourcesForDeinit()
         }
-        releaseNotificationResourcesForDeinit()
     }
 
     // Persists per-thread plan-mode provenance so reconnect/relaunch keeps native vs fallback behavior stable.

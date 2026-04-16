@@ -253,11 +253,13 @@ final class TurnViewModel {
 
     init() {}
 
-    isolated deinit {
-        cancelTransientTasks()
-        pendingGitBranchOperation = nil
-        pendingGitWorktreeOpenHandler = nil
-        pendingManagedGitWorktreeOpenHandler = nil
+    deinit {
+        MainActor.assumeIsolated {
+            cancelTransientTasks()
+            pendingGitBranchOperation = nil
+            pendingGitWorktreeOpenHandler = nil
+            pendingManagedGitWorktreeOpenHandler = nil
+        }
     }
 
     // MARK: - Cached Timeline Projection
