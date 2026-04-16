@@ -33,8 +33,8 @@ test("nextRelayReconnectDelayMs backs off exponentially and caps the delay", () 
 
 test("shouldShutdownOnRelayCloseCode only fails closed for invalid relay sessions", () => {
   assert.equal(shouldShutdownOnRelayCloseCode(4000), true);
+  assert.equal(shouldShutdownOnRelayCloseCode(4001), true);
   assert.equal(shouldShutdownOnRelayCloseCode(4005), true);
-  assert.equal(shouldShutdownOnRelayCloseCode(4001), false);
   assert.equal(shouldShutdownOnRelayCloseCode(4002), false);
   assert.equal(shouldShutdownOnRelayCloseCode(1006), false);
 });

@@ -1502,7 +1502,7 @@ function relayCloseDiagnostic(closeCode, reasonText = "") {
 }
 
 function shouldShutdownOnRelayCloseCode(closeCode) {
-  return closeCode === 4000 || closeCode === 4005;
+  return relayCloseDiagnostic(closeCode)?.isPermanent === true;
 }
 
 function nextRelayReconnectDelayMs(reconnectAttempt) {
