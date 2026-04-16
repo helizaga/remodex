@@ -24,9 +24,8 @@ function createPushSessionService({
     stateFilePath: resolvePushStateFilePath(process.env),
   }),
 } = {}) {
-  const resolvedCanNotifyCompletion = typeof canNotifyCompletion === "function"
-    ? canNotifyCompletion
-    : canRegisterSession;
+  const resolvedCanNotifyCompletion =
+    typeof canNotifyCompletion === "function" ? canNotifyCompletion : canRegisterSession;
   const persistedState = stateStore.read();
   const sessions = new Map(persistedState.sessions || []);
   const deliveredDedupeKeys = new Map(persistedState.deliveredDedupeKeys || []);
@@ -51,10 +50,12 @@ function createPushSessionService({
       );
     }
 
-    if (!await canRegisterSession({
-      sessionId: normalizedSessionId,
-      notificationSecret: normalizedSecret,
-    })) {
+    if (
+      !(await canRegisterSession({
+        sessionId: normalizedSessionId,
+        notificationSecret: normalizedSecret,
+      }))
+    ) {
       throw pushServiceError(
         "session_unavailable",
         "Push registration requires an active relay session.",
@@ -102,10 +103,12 @@ function createPushSessionService({
       );
     }
 
-    if (!await resolvedCanNotifyCompletion({
-      sessionId: normalizedSessionId,
-      notificationSecret: normalizedSecret,
-    })) {
+    if (
+      !(await resolvedCanNotifyCompletion({
+        sessionId: normalizedSessionId,
+        notificationSecret: normalizedSecret,
+      }))
+    ) {
       throw pushServiceError(
         "session_unavailable",
         "Push completion requires an active relay session.",
@@ -206,9 +209,8 @@ function createPushSessionService({
 }
 
 function createFileBackedPushStateStore({ stateFilePath } = {}) {
-  const resolvedPath = typeof stateFilePath === "string" && stateFilePath.trim()
-    ? stateFilePath.trim()
-    : "";
+  const resolvedPath =
+    typeof stateFilePath === "string" && stateFilePath.trim() ? stateFilePath.trim() : "";
 
   return {
     read() {
@@ -261,7 +263,10 @@ function apnsConfigFromEnv(env) {
 }
 
 function readAPNsPrivateKey(env) {
-  const rawValue = readFirstDefinedEnv(["REMODEX_APNS_PRIVATE_KEY", "PHODEX_APNS_PRIVATE_KEY"], env);
+  const rawValue = readFirstDefinedEnv(
+    ["REMODEX_APNS_PRIVATE_KEY", "PHODEX_APNS_PRIVATE_KEY"],
+    env
+  );
   if (rawValue) {
     return rawValue;
   }

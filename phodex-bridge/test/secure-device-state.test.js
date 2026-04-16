@@ -37,12 +37,9 @@ test("resolveBridgeRelaySession always creates a fresh relay session", () => {
 test("rememberTrustedPhone stores the trusted phone identity", () => {
   const state = makeDeviceState();
 
-  const nextState = rememberTrustedPhone(
-    state,
-    "phone-3",
-    "phone-public-key-3",
-    { persist: false }
-  );
+  const nextState = rememberTrustedPhone(state, "phone-3", "phone-public-key-3", {
+    persist: false,
+  });
 
   assert.deepEqual(nextState.trustedPhones, {
     "phone-3": "phone-public-key-3",
@@ -52,11 +49,7 @@ test("rememberTrustedPhone stores the trusted phone identity", () => {
 test("rememberLastSeenPhoneAppVersion stores the latest App Store version", () => {
   const state = makeDeviceState();
 
-  const nextState = rememberLastSeenPhoneAppVersion(
-    state,
-    "1.0",
-    { persist: false }
-  );
+  const nextState = rememberLastSeenPhoneAppVersion(state, "1.0", { persist: false });
 
   assert.equal(nextState.lastSeenPhoneAppVersion, "1.0");
 });
@@ -138,12 +131,9 @@ test("loadOrCreateBridgeDeviceState throws when the canonical file is corrupted 
 
 test("resolveBridgeRelaySession does not persist the fresh launch session id", () => {
   withTempDeviceStateEnv(() => {
-    const trustedState = rememberTrustedPhone(
-      makeDeviceState(),
-      "phone-5",
-      "phone-public-key-5",
-      { persist: true }
-    );
+    const trustedState = rememberTrustedPhone(makeDeviceState(), "phone-5", "phone-public-key-5", {
+      persist: true,
+    });
 
     const resolved = resolveBridgeRelaySession(trustedState);
     const reloaded = loadOrCreateBridgeDeviceState();
@@ -158,11 +148,7 @@ test("resolveBridgeRelaySession does not persist the fresh launch session id", (
 
 test("rememberLastSeenPhoneAppVersion persists across reloads", () => {
   withTempDeviceStateEnv(() => {
-    rememberLastSeenPhoneAppVersion(
-      makeDeviceState(),
-      "1.1",
-      { persist: true }
-    );
+    rememberLastSeenPhoneAppVersion(makeDeviceState(), "1.1", { persist: true });
 
     const reloaded = loadOrCreateBridgeDeviceState();
     assert.equal(reloaded.lastSeenPhoneAppVersion, "1.1");

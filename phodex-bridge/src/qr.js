@@ -15,7 +15,8 @@ function createShortPairingCode({
   length = SHORT_PAIRING_CODE_LENGTH,
   randomBytesImpl = randomBytes,
 } = {}) {
-  const resolvedLength = Number.isInteger(length) && length > 0 ? length : SHORT_PAIRING_CODE_LENGTH;
+  const resolvedLength =
+    Number.isInteger(length) && length > 0 ? length : SHORT_PAIRING_CODE_LENGTH;
   const bytes = randomBytesImpl(resolvedLength);
   let code = "";
   for (let index = 0; index < resolvedLength; index += 1) {
@@ -28,9 +29,10 @@ function normalizePairingSession(pairingSessionOrPayload) {
   if (pairingSessionOrPayload?.pairingPayload) {
     return {
       pairingPayload: pairingSessionOrPayload.pairingPayload,
-      pairingCode: typeof pairingSessionOrPayload.pairingCode === "string"
-        ? pairingSessionOrPayload.pairingCode.trim()
-        : "",
+      pairingCode:
+        typeof pairingSessionOrPayload.pairingCode === "string"
+          ? pairingSessionOrPayload.pairingCode.trim()
+          : "",
     };
   }
 

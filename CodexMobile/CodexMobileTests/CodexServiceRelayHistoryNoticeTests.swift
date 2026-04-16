@@ -10,7 +10,6 @@ import Network
 
 @MainActor
 final class CodexServiceRelayHistoryNoticeTests: XCTestCase {
-    private static var retainedServices: [CodexService] = []
 
     func testOversizedHistoryFallbackAppendsRelayHistoryNotice() async throws {
         let service = makeService()
@@ -110,8 +109,14 @@ final class CodexServiceRelayHistoryNoticeTests: XCTestCase {
         let suiteName = "CodexServiceRelayHistoryNoticeTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard
         defaults.removePersistentDomain(forName: suiteName)
-        let service = CodexService(defaults: defaults)
-        Self.retainedServices.append(service)
+        let service = CodexService(
+            defaults: defaults,
+            messagePersistence: .disabled,
+            aiChangeSetPersistence: .disabled,
+            userNotificationCenter: CodexNoopUserNotificationCenter(),
+            remoteNotificationRegistrar: CodexNoopRemoteNotificationRegistrar(),
+            secureStateBootstrap: .ephemeral
+        )
         return service
     }
 

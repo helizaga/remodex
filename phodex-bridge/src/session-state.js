@@ -47,21 +47,24 @@ function readLastActiveThread({ stateDir = STATE_DIR } = {}) {
 
 function readPersistedRelaySessionId({ stateDir = STATE_DIR } = {}) {
   const state = readStateFile(relaySessionStateFilePath(stateDir));
-  const sessionId = typeof state?.sessionId === "string"
-    ? state.sessionId.trim()
-    : "";
+  const sessionId = typeof state?.sessionId === "string" ? state.sessionId.trim() : "";
   return sessionId || null;
 }
 
 function rememberRelaySessionId(sessionId, { stateDir = STATE_DIR } = {}) {
-  if (!sessionId || typeof sessionId !== "string") {
+  const normalizedSessionId = typeof sessionId === "string" ? sessionId.trim() : "";
+  if (!normalizedSessionId) {
     return false;
   }
 
-  writeStateFile(relaySessionStateFilePath(stateDir), {
-    sessionId,
-    updatedAt: new Date().toISOString(),
-  }, stateDir);
+  writeStateFile(
+    relaySessionStateFilePath(stateDir),
+    {
+      sessionId: normalizedSessionId,
+      updatedAt: new Date().toISOString(),
+    },
+    stateDir
+  );
   return true;
 }
 
@@ -90,7 +93,26 @@ function readStateFile(filePath) {
 
 function writeStateFile(filePath, payload, stateDir) {
   fs.mkdirSync(stateDir, { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(payload, null, 2));
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  let fileDescriptor;
+  try {
+    fileDescriptor = fs.openSync(tempPath, "w", 0o600);
+    fs.writeFileSync(fileDescriptor, JSON.stringify(payload, null, 2));
+    fs.fsyncSync(fileDescriptor);
+    fs.closeSync(fileDescriptor);
+    fileDescriptor = undefined;
+    fs.renameSync(tempPath, filePath);
+  } catch (error) {
+    if (fileDescriptor !== undefined) {
+      try {
+        fs.closeSync(fileDescriptor);
+      } catch {}
+    }
+    try {
+      fs.rmSync(tempPath, { force: true });
+    } catch {}
+    throw error;
+  }
 }
 
 function lastThreadStateFilePath(stateDir) {

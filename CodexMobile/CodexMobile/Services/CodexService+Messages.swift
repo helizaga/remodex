@@ -113,24 +113,24 @@ extension CodexService {
 
     // Returns the service-owned timeline state for a single thread.
     func timelineState(for threadId: String) -> ThreadTimelineState {
-        if let existing = threadTimelineStateByThread[threadId] {
-            return existing
+        let state = timelineStore.timelineState(for: threadId)
+        guard !timelineRefreshInProgressThreadIDs.contains(threadId) else {
+            return state
         }
-
-        let state = ThreadTimelineState(threadID: threadId)
-        threadTimelineStateByThread[threadId] = state
         refreshThreadTimelineState(for: threadId)
         return state
     }
 
+    // Returns the observed render snapshot for a thread while keeping the backing cache lazy.
+    func renderSnapshot(for threadId: String) -> TurnTimelineRenderSnapshot {
+        let state = timelineState(for: threadId)
+        return timelineRenderSnapshotsByThread[threadId] ?? state.renderSnapshot
+    }
+
     // Prunes service-owned render caches so removed/archived threads do not keep stale snapshots alive.
     func removeThreadTimelineState(for threadId: String) {
-        threadTimelineStateByThread.removeValue(forKey: threadId)
-        stoppedTurnIDsByThread.removeValue(forKey: threadId)
-        messageIndexCacheByThread.removeValue(forKey: threadId)
-        latestAssistantOutputByThread.removeValue(forKey: threadId)
-        latestRepoAffectingMessageSignalByThread.removeValue(forKey: threadId)
-        assistantRevertStateCacheByThread.removeValue(forKey: threadId)
+        timelineStore.removeTimelineState(for: threadId)
+        timelineRenderSnapshotsByThread.removeValue(forKey: threadId)
         threadsPendingCompletionHaptic.remove(threadId)
         threadsNeedingCanonicalHistoryReconcile.remove(threadId)
         threadsWithSatisfiedDeferredHistoryHydration.remove(threadId)
@@ -143,12 +143,8 @@ extension CodexService {
 
     // Clears every service-owned timeline cache during global teardown.
     func removeAllThreadTimelineState() {
-        threadTimelineStateByThread.removeAll()
-        stoppedTurnIDsByThread.removeAll()
-        messageIndexCacheByThread.removeAll()
-        latestAssistantOutputByThread.removeAll()
-        latestRepoAffectingMessageSignalByThread.removeAll()
-        assistantRevertStateCacheByThread.removeAll()
+        timelineStore.removeAllTimelineState()
+        timelineRenderSnapshotsByThread.removeAll()
         threadsNeedingCanonicalHistoryReconcile.removeAll()
         threadsWithSatisfiedDeferredHistoryHydration.removeAll()
         canonicalHistoryReconcileTaskByThreadID.values.forEach { $0.cancel() }
@@ -156,6 +152,36 @@ extension CodexService {
         canonicalHistoryReconcileRetryTaskByThreadID.values.forEach { $0.cancel() }
         canonicalHistoryReconcileRetryTaskByThreadID.removeAll()
         cancelAllPerThreadRefreshWork()
+    }
+
+    private func drainTimelineStore(_ store: TurnTimelineStore) {
+        store.removeAllTimelineState()
+    }
+
+    private func swapOutTimelineStore() -> TurnTimelineStore {
+        let retiringStore = timelineStore
+        timelineStore = TurnTimelineStore()
+        return retiringStore
+    }
+
+    // Shrinks timeline-owned object graphs before CodexService deallocation so teardown
+    // does not have to release the whole store and its snapshots in one final pass.
+    func releaseTimelineResourcesForDeinit() {
+        let retiringStore = swapOutTimelineStore()
+        timelineRenderSnapshotsByThread.removeAll()
+        threadsNeedingCanonicalHistoryReconcile.removeAll()
+        threadsWithSatisfiedDeferredHistoryHydration.removeAll()
+        canonicalHistoryReconcileTaskByThreadID.values.forEach { $0.cancel() }
+        canonicalHistoryReconcileTaskByThreadID.removeAll()
+        canonicalHistoryReconcileRetryTaskByThreadID.values.forEach { $0.cancel() }
+        canonicalHistoryReconcileRetryTaskByThreadID.removeAll()
+        cancelAllPerThreadRefreshWork()
+        timelineRefreshInProgressThreadIDs.removeAll()
+        threadsPendingCompletionHaptic.removeAll()
+        protectedRunningFallbackThreadIDs.removeAll()
+        runningThreadIDs.removeAll()
+        activeTurnIdByThread.removeAll()
+        drainTimelineStore(retiringStore)
     }
 
     // Refreshes the derived output cache and bumps the thread timeline revision.
@@ -219,6 +245,7 @@ extension CodexService {
             assistantRevertStatesByMessageID: state.renderSnapshot.assistantRevertStatesByMessageID,
             repoRefreshSignal: state.renderSnapshot.repoRefreshSignal
         )
+        timelineRenderSnapshotsByThread[threadId] = state.renderSnapshot
     }
 
     // Returns the currently running turn id for a specific thread, if any.
@@ -3032,7 +3059,14 @@ extension CodexService {
 
     // Rebuilds one thread's render snapshot from service-owned caches after any timeline mutation.
     func refreshThreadTimelineState(for threadId: String) {
-        let state = timelineState(for: threadId)
+        guard timelineRefreshInProgressThreadIDs.insert(threadId).inserted else {
+            return
+        }
+        defer {
+            timelineRefreshInProgressThreadIDs.remove(threadId)
+        }
+
+        let state = timelineStore.timelineState(for: threadId)
         let messages = messagesByThread[threadId] ?? []
         let revision = messageRevisionByThread[threadId] ?? 0
         let activeTurnID = activeTurnIdByThread[threadId]
@@ -3082,6 +3116,7 @@ extension CodexService {
             assistantRevertStatesByMessageID: assistantRevertStates,
             repoRefreshSignal: repoRefreshSignal
         )
+        timelineRenderSnapshotsByThread[threadId] = state.renderSnapshot
     }
 
     // Bounds expensive render-only projection work to the recent transcript tail.
@@ -3131,7 +3166,7 @@ extension CodexService {
             uniqueKeysWithValues: threads.map { ($0.id, $0.gitWorkingDirectory) }
         )
         for threadId in threadTimelineStateByThread.keys {
-            let workingDir = workingDirByThread[threadId] ?? nil
+            let workingDir = workingDirByThread[threadId].flatMap { $0 }
             let repoId = canonicalRepoIdentifier(for: workingDir) ?? workingDir
             guard let repoId, changedRoots.contains(repoId) else { continue }
             refreshThreadTimelineState(for: threadId)

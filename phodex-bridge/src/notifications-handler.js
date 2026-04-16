@@ -27,16 +27,18 @@ function createNotificationsHandler({ pushServiceClient, logPrefix = "[remodex]"
       })
       .catch((error) => {
         console.error(`${logPrefix} push registration failed: ${error.message}`);
-        sendResponse(JSON.stringify({
-          id,
-          error: {
-            code: -32000,
-            message: error.userMessage || error.message || "Push registration failed.",
-            data: {
-              errorCode: error.errorCode || "push_registration_failed",
+        sendResponse(
+          JSON.stringify({
+            id,
+            error: {
+              code: -32000,
+              message: error.userMessage || error.message || "Push registration failed.",
+              data: {
+                errorCode: error.errorCode || "push_registration_failed",
+              },
             },
-          },
-        }));
+          })
+        );
       });
 
     return true;

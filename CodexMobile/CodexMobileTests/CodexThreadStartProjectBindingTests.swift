@@ -144,6 +144,7 @@ final class CodexThreadStartProjectBindingTests: XCTestCase {
         XCTAssertEqual(thread.modelDisplayLabel, "gpt-5.4-mini")
     }
 
+    @MainActor
     func testAgentDisplayLabelIgnoresCollabToolItemTypeNoise() throws {
         let payload = """
         {

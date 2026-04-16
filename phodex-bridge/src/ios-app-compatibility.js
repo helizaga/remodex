@@ -10,10 +10,7 @@ const LEGACY_BRIDGE_VERSION_FOR_IOS_1_0 = "1.3.7";
 const LEGACY_BRIDGE_DOWNGRADE_COMMAND = `npm install -g remodex@${LEGACY_BRIDGE_VERSION_FOR_IOS_1_0}`;
 const NOTICE_BOX_WIDTH = 74;
 
-function buildIOSAppCompatibilitySnapshot({
-  bridgeVersion,
-  iosAppVersion,
-} = {}) {
+function buildIOSAppCompatibilitySnapshot({ bridgeVersion, iosAppVersion } = {}) {
   const normalizedBridgeVersion = normalizeVersionString(bridgeVersion);
   const normalizedIOSAppVersion = normalizeVersionString(iosAppVersion);
   const enforcesMinimumIOSAppVersion = shouldEnforceIOSAppCompatibility(normalizedBridgeVersion);
@@ -42,10 +39,8 @@ function buildIOSAppCompatibilitySnapshot({
     });
   }
 
-  const isCompatible = compareNumericVersions(
-    normalizedIOSAppVersion,
-    MINIMUM_SUPPORTED_IOS_APP_VERSION
-  ) >= 0;
+  const isCompatible =
+    compareNumericVersions(normalizedIOSAppVersion, MINIMUM_SUPPORTED_IOS_APP_VERSION) >= 0;
 
   return buildSnapshot({
     bridgeVersion: normalizedBridgeVersion,
@@ -57,9 +52,9 @@ function buildIOSAppCompatibilitySnapshot({
     message: isCompatible
       ? ""
       : buildLegacyIOSAppCompatibilityMessage({
-        bridgeVersion: normalizedBridgeVersion,
-        iosAppVersion: normalizedIOSAppVersion,
-      }),
+          bridgeVersion: normalizedBridgeVersion,
+          iosAppVersion: normalizedIOSAppVersion,
+        }),
   });
 }
 
@@ -92,29 +87,24 @@ function shouldEnforceIOSAppCompatibility(bridgeVersion) {
     return false;
   }
 
-  return compareNumericVersions(
-    normalizedBridgeVersion,
-    IOS_APP_COMPATIBILITY_GATE_BRIDGE_VERSION
-  ) >= 0;
+  return (
+    compareNumericVersions(normalizedBridgeVersion, IOS_APP_COMPATIBILITY_GATE_BRIDGE_VERSION) >= 0
+  );
 }
 
-function buildLegacyIOSAppCompatibilityMessage({
-  bridgeVersion,
-  iosAppVersion,
-} = {}) {
+function buildLegacyIOSAppCompatibilityMessage({ bridgeVersion, iosAppVersion } = {}) {
   const normalizedBridgeVersion = normalizeVersionString(bridgeVersion) || "this bridge";
   const normalizedIOSAppVersion = normalizeVersionString(iosAppVersion) || "an older version";
 
-  return `Remodex bridge ${normalizedBridgeVersion} requires Remodex iPhone `
-    + `${MINIMUM_SUPPORTED_IOS_APP_VERSION} or later. `
-    + `Update the iPhone app from the App Store first, or install Remodex bridge `
-    + `${LEGACY_BRIDGE_VERSION_FOR_IOS_1_0} to keep using iPhone ${normalizedIOSAppVersion}.`;
+  return (
+    `Remodex bridge ${normalizedBridgeVersion} requires Remodex iPhone ` +
+    `${MINIMUM_SUPPORTED_IOS_APP_VERSION} or later. ` +
+    `Update the iPhone app from the App Store first, or install Remodex bridge ` +
+    `${LEGACY_BRIDGE_VERSION_FOR_IOS_1_0} to keep using iPhone ${normalizedIOSAppVersion}.`
+  );
 }
 
-function buildCachedIOSAppCompatibilityWarning({
-  bridgeVersion,
-  iosAppVersion,
-} = {}) {
+function buildCachedIOSAppCompatibilityWarning({ bridgeVersion, iosAppVersion } = {}) {
   const snapshot = buildIOSAppCompatibilitySnapshot({
     bridgeVersion,
     iosAppVersion,

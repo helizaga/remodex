@@ -18,9 +18,9 @@ enum TurnDiffLineKind: Equatable, Sendable {
     // Detects whether a code snippet should be treated as a diff patch.
     nonisolated static func detect(in code: String) -> Bool {
         let lines = code.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        let additionCount = lines.filter { classify($0) == .addition }.count
-        let deletionCount = lines.filter { classify($0) == .deletion }.count
-        let hasHunk = lines.contains { classify($0) == .hunk }
+        let additionCount = lines.filter { isAddition(classify($0)) }.count
+        let deletionCount = lines.filter { isDeletion(classify($0)) }.count
+        let hasHunk = lines.contains { isHunk(classify($0)) }
         return hasHunk || (additionCount > 0 && deletionCount > 0)
     }
 
@@ -93,16 +93,30 @@ enum TurnDiffLineKind: Equatable, Sendable {
         return .neutral
     }
 
-    nonisolated static func == (lhs: TurnDiffLineKind, rhs: TurnDiffLineKind) -> Bool {
-        switch (lhs, rhs) {
-        case (.addition, .addition),
-             (.deletion, .deletion),
-             (.hunk, .hunk),
-             (.meta, .meta),
-             (.neutral, .neutral):
-            return true
+    nonisolated private static func isAddition(_ kind: TurnDiffLineKind) -> Bool {
+        switch kind {
+        case .addition:
+            true
         default:
-            return false
+            false
+        }
+    }
+
+    nonisolated private static func isDeletion(_ kind: TurnDiffLineKind) -> Bool {
+        switch kind {
+        case .deletion:
+            true
+        default:
+            false
+        }
+    }
+
+    nonisolated private static func isHunk(_ kind: TurnDiffLineKind) -> Bool {
+        switch kind {
+        case .hunk:
+            true
+        default:
+            false
         }
     }
 

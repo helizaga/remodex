@@ -1,6 +1,6 @@
 # Remodex — Data Protection Notice
 
-**Last updated:** March 25, 2026
+**Last updated:** April 14, 2026
 
 This Data Protection Notice explains how the Remodex mobile application ("App"), developed by Emanuele Di Pietro ("Developer", "we", "us", or "our"), handles your information. Remodex is designed to let you control a Codex runtime on your Mac from your iPhone. Most conversation and workspace activity is processed on your paired Mac, but the App Store version can also use developer-operated relay infrastructure to connect your devices.
 

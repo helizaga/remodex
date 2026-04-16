@@ -17,10 +17,20 @@ enum CodexUITestHarness {
         }
 
         let suiteName = "CodexUITests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            assertionFailure("Could not create isolated UI test defaults suite: \(suiteName)")
+            return nil
+        }
         defaults.removePersistentDomain(forName: suiteName)
 
-        let service = CodexService(defaults: defaults)
+        let service = CodexService(
+            defaults: defaults,
+            messagePersistence: .disabled,
+            aiChangeSetPersistence: .disabled,
+            userNotificationCenter: CodexNoopUserNotificationCenter(),
+            remoteNotificationRegistrar: CodexNoopRemoteNotificationRegistrar(),
+            secureStateBootstrap: .ephemeral
+        )
         let subscriptions = SubscriptionService(defaults: defaults)
         let fixture = configureFixture(options: options, service: service)
         return (fixture, service, subscriptions)
@@ -218,9 +228,22 @@ struct CodexUITestLaunchFixture {
         try? await Task.sleep(nanoseconds: 300_000_000)
         guard !Task.isCancelled else { return }
 
+        var didStartTurn = false
+        var didCompleteTurn = false
+        defer {
+            if didStartTurn {
+                if !didCompleteTurn {
+                    service.recordTurnTerminalState(threadId: threadID, turnId: turnID, state: .stopped)
+                }
+                service.setActiveTurnID(nil, for: threadID)
+                service.clearRunningState(for: threadID)
+            }
+        }
+
         service.markThreadAsRunning(threadID)
         service.setActiveTurnID(turnID, for: threadID)
         service.beginAssistantMessage(threadId: threadID, turnId: turnID, itemId: itemID)
+        didStartTurn = true
 
         for chunk in chunks {
             try? await Task.sleep(nanoseconds: 220_000_000)
@@ -235,8 +258,7 @@ struct CodexUITestLaunchFixture {
             text: chunks.joined()
         )
         service.recordTurnTerminalState(threadId: threadID, turnId: turnID, state: .completed)
-        service.setActiveTurnID(nil, for: threadID)
-        service.clearRunningState(for: threadID)
+        didCompleteTurn = true
     }
 }
 

@@ -1,0 +1,5 @@
+--swiftversion 5.0
+--disable all
+--enable consecutiveBlankLines
+--enable linebreakAtEndOfFile
+--enable trailingSpace

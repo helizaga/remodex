@@ -2,11 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 
-const {
-  setupRelay,
-  getRelayStats,
-  __resetRelayStateForTests,
-} = require("./relay");
+const { setupRelay, getRelayStats, __resetRelayStateForTests } = require("./relay");
 
 const WS_CONNECTING = 0;
 const WS_OPEN = 1;
@@ -68,11 +64,14 @@ test("getRelayStats counts only live sockets", (t) => {
 
   const mac = new FakeWebSocket();
   const iphone = new FakeWebSocket();
-  wss.connect(mac, relayRequest("session-a", "mac", {
-    "x-notification-secret": "secret-a",
-    "x-mac-device-id": "mac-a",
-    "x-mac-identity-public-key": "mac-key-a",
-  }));
+  wss.connect(
+    mac,
+    relayRequest("session-a", "mac", {
+      "x-notification-secret": "secret-a",
+      "x-mac-device-id": "mac-a",
+      "x-mac-identity-public-key": "mac-key-a",
+    })
+  );
   wss.connect(iphone, relayRequest("session-a", "iphone"));
 
   assert.deepEqual(getRelayStats(), {
@@ -114,11 +113,14 @@ test("replacing an iPhone client removes stale client sockets from stats", (t) =
   staleIphone.readyState = WS_CONNECTING;
   const nextIphone = new FakeWebSocket();
 
-  wss.connect(mac, relayRequest("session-b", "mac", {
-    "x-notification-secret": "secret-b",
-    "x-mac-device-id": "mac-b",
-    "x-mac-identity-public-key": "mac-key-b",
-  }));
+  wss.connect(
+    mac,
+    relayRequest("session-b", "mac", {
+      "x-notification-secret": "secret-b",
+      "x-mac-device-id": "mac-b",
+      "x-mac-identity-public-key": "mac-key-b",
+    })
+  );
   wss.connect(staleIphone, relayRequest("session-b", "iphone"));
   wss.connect(nextIphone, relayRequest("session-b", "iphone"));
 
@@ -144,11 +146,14 @@ test("a newer session for the same Mac retires the older session across the rela
   const firstMac = new FakeWebSocket();
   const secondMac = new FakeWebSocket();
 
-  wss.connect(firstMac, relayRequest("session-c", "mac", {
-    "x-notification-secret": "secret-c",
-    "x-mac-device-id": "mac-shared",
-    "x-mac-identity-public-key": "mac-key-shared",
-  }));
+  wss.connect(
+    firstMac,
+    relayRequest("session-c", "mac", {
+      "x-notification-secret": "secret-c",
+      "x-mac-device-id": "mac-shared",
+      "x-mac-identity-public-key": "mac-key-shared",
+    })
+  );
   assert.deepEqual(getRelayStats(), {
     activeSessions: 1,
     pairingCodes: 0,
@@ -156,11 +161,14 @@ test("a newer session for the same Mac retires the older session across the rela
     totalClients: 0,
   });
 
-  wss.connect(secondMac, relayRequest("session-d", "mac", {
-    "x-notification-secret": "secret-d",
-    "x-mac-device-id": "mac-shared",
-    "x-mac-identity-public-key": "mac-key-shared",
-  }));
+  wss.connect(
+    secondMac,
+    relayRequest("session-d", "mac", {
+      "x-notification-secret": "secret-d",
+      "x-mac-device-id": "mac-shared",
+      "x-mac-identity-public-key": "mac-key-shared",
+    })
+  );
   assert.equal(firstMac.readyState, WS_CLOSED);
   assert.deepEqual(getRelayStats(), {
     activeSessions: 1,
@@ -183,16 +191,22 @@ test("a different Mac device cannot retire unrelated live sessions", (t) => {
   const firstMac = new FakeWebSocket();
   const secondMac = new FakeWebSocket();
 
-  wss.connect(firstMac, relayRequest("session-e", "mac", {
-    "x-notification-secret": "secret-e",
-    "x-mac-device-id": "mac-e",
-    "x-mac-identity-public-key": "mac-key-e",
-  }));
-  wss.connect(secondMac, relayRequest("session-f", "mac", {
-    "x-notification-secret": "secret-f",
-    "x-mac-device-id": "mac-f",
-    "x-mac-identity-public-key": "mac-key-f",
-  }));
+  wss.connect(
+    firstMac,
+    relayRequest("session-e", "mac", {
+      "x-notification-secret": "secret-e",
+      "x-mac-device-id": "mac-e",
+      "x-mac-identity-public-key": "mac-key-e",
+    })
+  );
+  wss.connect(
+    secondMac,
+    relayRequest("session-f", "mac", {
+      "x-notification-secret": "secret-f",
+      "x-mac-device-id": "mac-f",
+      "x-mac-identity-public-key": "mac-key-f",
+    })
+  );
 
   assert.equal(firstMac.readyState, WS_OPEN);
   assert.equal(secondMac.readyState, WS_OPEN);
@@ -217,16 +231,22 @@ test("replacing a live Mac socket requires the existing session secret", (t) => 
   const originalMac = new FakeWebSocket();
   const attackerMac = new FakeWebSocket();
 
-  wss.connect(originalMac, relayRequest("session-g", "mac", {
-    "x-notification-secret": "secret-g",
-    "x-mac-device-id": "mac-g",
-    "x-mac-identity-public-key": "mac-key-g",
-  }));
-  wss.connect(attackerMac, relayRequest("session-g", "mac", {
-    "x-notification-secret": "wrong-secret",
-    "x-mac-device-id": "mac-g",
-    "x-mac-identity-public-key": "mac-key-g",
-  }));
+  wss.connect(
+    originalMac,
+    relayRequest("session-g", "mac", {
+      "x-notification-secret": "secret-g",
+      "x-mac-device-id": "mac-g",
+      "x-mac-identity-public-key": "mac-key-g",
+    })
+  );
+  wss.connect(
+    attackerMac,
+    relayRequest("session-g", "mac", {
+      "x-notification-secret": "wrong-secret",
+      "x-mac-device-id": "mac-g",
+      "x-mac-identity-public-key": "mac-key-g",
+    })
+  );
 
   assert.equal(originalMac.readyState, WS_OPEN);
   assert.equal(attackerMac.readyState, WS_CLOSED);
@@ -252,21 +272,24 @@ test("relay logs redact live session identifiers", (t) => {
   };
 
   const wss = new FakeWebSocketServer();
-  setupRelay(wss);
   t.after(() => {
     console.log = originalLog;
     console.error = originalError;
     wss.emit("close");
     __resetRelayStateForTests();
   });
+  setupRelay(wss);
 
   const mac = new FakeWebSocket();
   const iphone = new FakeWebSocket();
-  wss.connect(mac, relayRequest("session-sensitive", "mac", {
-    "x-notification-secret": "secret-sensitive",
-    "x-mac-device-id": "mac-sensitive",
-    "x-mac-identity-public-key": "mac-key-sensitive",
-  }));
+  wss.connect(
+    mac,
+    relayRequest("session-sensitive", "mac", {
+      "x-notification-secret": "secret-sensitive",
+      "x-mac-device-id": "mac-sensitive",
+      "x-mac-identity-public-key": "mac-key-sensitive",
+    })
+  );
   wss.connect(iphone, relayRequest("session-sensitive", "iphone"));
   mac.emit("message", "hello");
   iphone.close();
@@ -274,4 +297,5 @@ test("relay logs redact live session identifiers", (t) => {
 
   assert.ok(capturedLogs.some((line) => line.includes("session#")));
   assert.ok(capturedLogs.every((line) => !line.includes("session-sensitive")));
+  assert.ok(capturedLogs.every((line) => !line.includes("secret-sensitive")));
 });

@@ -1,0 +1,11 @@
+pre-commit:
+  parallel: true
+  commands:
+    format-check:
+      run: npm run format:check
+    js-lint:
+      run: npm run lint:js
+    shell-lint:
+      run: npm run lint:sh
+    swift-lint:
+      run: ./scripts/lint-swift.sh

@@ -8,6 +8,12 @@ import Foundation
 import UIKit
 import UserNotifications
 
+enum CodexRuntimeEnvironment {
+    static var isRunningAutomatedTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    }
+}
+
 private enum CodexNotificationSource {
     static let runCompletion = "codex.runCompletion"
     static let structuredUserInput = "codex.structuredUserInput"
@@ -16,6 +22,13 @@ private enum CodexNotificationSource {
 @MainActor
 protocol CodexRemoteNotificationRegistering: AnyObject {
     func registerForRemoteNotifications()
+}
+
+@MainActor
+final class CodexNoopRemoteNotificationRegistrar: CodexRemoteNotificationRegistering {
+    func registerForRemoteNotifications() {}
+
+    nonisolated deinit {}
 }
 
 @MainActor
@@ -40,6 +53,23 @@ protocol CodexUserNotificationCentering: AnyObject {
     func requestAuthorization(options: UNAuthorizationOptions) async throws -> Bool
     func add(_ request: UNNotificationRequest) async throws
     func authorizationStatus() async -> UNAuthorizationStatus
+}
+
+@MainActor
+final class CodexNoopUserNotificationCenter: CodexUserNotificationCentering {
+    var delegate: UNUserNotificationCenterDelegate?
+
+    func requestAuthorization(options: UNAuthorizationOptions) async throws -> Bool {
+        false
+    }
+
+    func add(_ request: UNNotificationRequest) async throws {}
+
+    func authorizationStatus() async -> UNAuthorizationStatus {
+        .notDetermined
+    }
+
+    nonisolated deinit {}
 }
 
 extension UNUserNotificationCenter: CodexUserNotificationCentering {
@@ -94,6 +124,35 @@ private struct CodexThreadNotificationPayload {
 
         self.threadId = threadId
         self.turnId = userInfo[CodexNotificationPayloadKeys.turnId] as? String
+    }
+}
+
+extension CodexService {
+    // Releases delegate/observer hooks without mutating observable service state during deallocation.
+    func releaseNotificationResourcesForDeinit() {
+        let delegateProxy = notificationCenterDelegateProxy
+        if userNotificationCenter.delegate === delegateProxy {
+            userNotificationCenter.delegate = nil
+        }
+
+        for token in notificationObserverTokens {
+            NotificationCenter.default.removeObserver(token)
+        }
+    }
+
+    // Removes notification observers/delegate wiring when the service is torn down in tests.
+    func tearDownNotifications() {
+        let delegateProxy = notificationCenterDelegateProxy
+        if userNotificationCenter.delegate === delegateProxy {
+            userNotificationCenter.delegate = nil
+        }
+
+        for token in notificationObserverTokens {
+            NotificationCenter.default.removeObserver(token)
+        }
+        notificationObserverTokens.removeAll()
+        notificationCenterDelegateProxy = nil
+        hasConfiguredNotifications = false
     }
 }
 
@@ -338,7 +397,7 @@ extension CodexService {
     }
 }
 
-private extension CodexService {
+extension CodexService {
     // Only live threads can satisfy a notification open; archived placeholders mean the server rejected it.
     func hasNotificationRoutingCandidate(threadId: String) -> Bool {
         guard let thread = thread(for: threadId) else {
@@ -539,7 +598,7 @@ private extension CodexService {
         }
     }
 
-    var pushAPNsEnvironment: CodexPushAPNsEnvironment {
+    private var pushAPNsEnvironment: CodexPushAPNsEnvironment {
 #if DEBUG
         .development
 #else

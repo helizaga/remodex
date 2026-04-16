@@ -15,11 +15,16 @@ test("push service client aborts stalled requests with a timeout error", async (
     sessionId: "session-timeout",
     notificationSecret: "secret-timeout",
     requestTimeoutMs: 20,
-    fetchImpl: async (_url, options) => new Promise((_, reject) => {
-      options.signal.addEventListener("abort", () => {
-        reject(options.signal.reason);
-      }, { once: true });
-    }),
+    fetchImpl: async (_url, options) =>
+      new Promise((_, reject) => {
+        options.signal.addEventListener(
+          "abort",
+          () => {
+            reject(options.signal.reason);
+          },
+          { once: true }
+        );
+      }),
   });
 
   await assert.rejects(

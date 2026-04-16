@@ -175,7 +175,8 @@ async function main({
             currentVersion: version,
             platform: "darwin",
           },
-          message: "[remodex] Stopped the macOS bridge service and cleared the saved pairing state. Run `remodex up` to pair again.",
+          message:
+            "[remodex] Stopped the macOS bridge service and cleared the saved pairing state. Run `remodex up` to pair again.",
           jsonOutput,
           consoleImpl,
         });
@@ -193,7 +194,9 @@ async function main({
         });
       }
     } catch (error) {
-      consoleImpl.error(`[remodex] ${(error && error.message) || "Failed to clear the saved pairing state."}`);
+      consoleImpl.error(
+        `[remodex] ${(error && error.message) || "Failed to clear the saved pairing state."}`
+      );
       exitImpl(1);
     }
     return;
@@ -214,7 +217,9 @@ async function main({
         consoleImpl,
       });
     } catch (error) {
-      consoleImpl.error(`[remodex] ${(error && error.message) || "Failed to reopen the last thread."}`);
+      consoleImpl.error(
+        `[remodex] ${(error && error.message) || "Failed to reopen the last thread."}`
+      );
       exitImpl(1);
     }
     return;
@@ -224,7 +229,9 @@ async function main({
     try {
       deps.watchThreadRollout(watchThreadId);
     } catch (error) {
-      consoleImpl.error(`[remodex] ${(error && error.message) || "Failed to watch the thread rollout."}`);
+      consoleImpl.error(
+        `[remodex] ${(error && error.message) || "Failed to watch the thread rollout."}`
+      );
       exitImpl(1);
     }
     return;
@@ -232,9 +239,9 @@ async function main({
 
   consoleImpl.error(`Unknown command: ${command}`);
   consoleImpl.error(
-    "Usage: remodex up | remodex run | remodex start | remodex restart | remodex stop | remodex status | "
-    + "remodex reset-pairing | remodex resume | remodex watch [threadId] | remodex --version | "
-    + "append --json to start/restart/stop/status/reset-pairing/resume for machine-readable output"
+    "Usage: remodex up | remodex run | remodex start | remodex restart | remodex stop | remodex status | " +
+      "remodex reset-pairing | remodex resume | remodex watch [threadId] | remodex --version | " +
+      "append --json to start/restart/stop/status/reset-pairing/resume for machine-readable output"
   );
   exitImpl(1);
 }
@@ -259,10 +266,7 @@ function parseCliArgs(rawArgs) {
   };
 }
 
-function emitVersion({
-  jsonOutput = false,
-  consoleImpl = console,
-} = {}) {
+function emitVersion({ jsonOutput = false, consoleImpl = console } = {}) {
   if (jsonOutput) {
     emitJson({
       currentVersion: version,
@@ -273,12 +277,7 @@ function emitVersion({
   consoleImpl.log(version);
 }
 
-function emitResult({
-  payload,
-  message,
-  jsonOutput = false,
-  consoleImpl = console,
-} = {}) {
+function emitResult({ payload, message, jsonOutput = false, consoleImpl = console } = {}) {
   if (jsonOutput) {
     emitJson(payload);
     return;
@@ -291,21 +290,28 @@ function emitJson(payload) {
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
 }
 
-function assertMacOSCommand(name, {
-  platform = process.platform,
-  consoleImpl = console,
-  exitImpl = process.exit,
-} = {}) {
+function assertMacOSCommand(
+  name,
+  { platform = process.platform, consoleImpl = console, exitImpl = process.exit } = {}
+) {
   if (platform === "darwin") {
     return;
   }
 
-  consoleImpl.error(`[remodex] \`${name}\` is only available on macOS. Use \`remodex up\` or \`remodex run\` for the foreground bridge on this OS.`);
+  consoleImpl.error(
+    `[remodex] \`${name}\` is only available on macOS. Use \`remodex up\` or \`remodex run\` for the foreground bridge on this OS.`
+  );
   exitImpl(1);
 }
 
 function isVersionCommand(value) {
-  return value === "-v" || value === "--v" || value === "-V" || value === "--version" || value === "version";
+  return (
+    value === "-v" ||
+    value === "--v" ||
+    value === "-V" ||
+    value === "--version" ||
+    value === "version"
+  );
 }
 
 module.exports = {

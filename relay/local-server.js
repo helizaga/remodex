@@ -11,14 +11,8 @@ process.env.NODE_PATH = process.env.NODE_PATH
 Module._initPaths();
 
 const { WebSocketServer } = require("ws");
-const {
-  setupRelay,
-  getRelayStats,
-  resolveTrustedMacSession,
-} = require("./relay");
-const {
-  readBridgeStatus,
-} = require("../phodex-bridge/src/daemon-state");
+const { setupRelay, getRelayStats, resolveTrustedMacSession } = require("./relay");
+const { readBridgeStatus } = require("../phodex-bridge/src/daemon-state");
 
 function createHealthPayload(relayStats = getRelayStats()) {
   return {
@@ -37,20 +31,21 @@ function createStatusPayload({
     hasLiveMac: relayStats.sessionsWithMac > 0,
     bridge: bridgeStatus
       ? {
-        state: readString(bridgeStatus.state) || "unknown",
-        connectionStatus: readString(bridgeStatus.connectionStatus) || "unknown",
-        updatedAt: readString(bridgeStatus.updatedAt) || null,
-        lastPermanentReconnectReason: sanitizeReconnectReason(bridgeStatus.lastPermanentReconnectReason),
-        latestReconnectDiagnostic: sanitizeReconnectDiagnostic(bridgeStatus.latestReconnectDiagnostic),
-      }
+          state: readString(bridgeStatus.state) || "unknown",
+          connectionStatus: readString(bridgeStatus.connectionStatus) || "unknown",
+          updatedAt: readString(bridgeStatus.updatedAt) || null,
+          lastPermanentReconnectReason: sanitizeReconnectReason(
+            bridgeStatus.lastPermanentReconnectReason
+          ),
+          latestReconnectDiagnostic: sanitizeReconnectDiagnostic(
+            bridgeStatus.latestReconnectDiagnostic
+          ),
+        }
       : null,
   };
 }
 
-function createLocalRelayServer({
-  host = "127.0.0.1",
-  port = "9000",
-} = {}) {
+function createLocalRelayServer({ host = "127.0.0.1", port = "9000" } = {}) {
   const server = http.createServer((req, res) => {
     if (req.url === "/health") {
       return writeJSON(res, 200, createHealthPayload());
@@ -140,21 +135,33 @@ function readJSONBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let totalSize = 0;
+    let didReject = false;
 
     req.on("data", (chunk) => {
+      if (didReject) {
+        return;
+      }
+
       totalSize += chunk.length;
       if (totalSize > 64 * 1024) {
-        reject(Object.assign(new Error("Request body too large"), {
-          status: 413,
-          code: "body_too_large",
-        }));
-        req.destroy();
+        didReject = true;
+        req.removeAllListeners("data");
+        req.resume();
+        reject(
+          Object.assign(new Error("Request body too large"), {
+            status: 413,
+            code: "body_too_large",
+          })
+        );
         return;
       }
       chunks.push(chunk);
     });
 
     req.on("end", () => {
+      if (didReject) {
+        return;
+      }
       const rawBody = Buffer.concat(chunks).toString("utf8");
       if (!rawBody.trim()) {
         resolve({});
@@ -164,10 +171,12 @@ function readJSONBody(req) {
       try {
         resolve(JSON.parse(rawBody));
       } catch {
-        reject(Object.assign(new Error("Invalid JSON body"), {
-          status: 400,
-          code: "invalid_json",
-        }));
+        reject(
+          Object.assign(new Error("Invalid JSON body"), {
+            status: 400,
+            code: "invalid_json",
+          })
+        );
       }
     });
 

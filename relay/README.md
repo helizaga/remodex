@@ -46,7 +46,7 @@ flowchart TD
     D --> E2[Relay records macDeviceId plus trusted phone metadata for live-session resolve]
 
     C --> F[iPhone scans QR]
-    F --> G[iPhone opens WebSocket to /relay/{sessionId}<br/>x-role: iphone]
+    F --> G[iPhone opens WebSocket to /relay/{sessionId}<br/>x-role: iphone (+ trusted phone identity headers on reconnect)]
     G --> H{Mac session live?}
     H -- No --> I[Relay closes iPhone socket<br/>4002 session unavailable]
     H -- Yes --> J[Relay binds iPhone to that session]
@@ -73,7 +73,7 @@ flowchart TD
     D --> W{Mac reconnects?}
     W -- Yes --> X[Relay verifies session secret and only replaces the same Mac device<br/>4001 to old connection]
     G --> Y{iPhone reconnects?}
-    Y -- Yes --> Z[Relay replaces older iPhone socket<br/>4003 to old connection]
+    Y -- Yes --> Z[Relay only replaces the older iPhone socket after trusted identity headers match<br/>4003 to old connection]
 
     X --> E
     Z --> J
@@ -94,6 +94,7 @@ flowchart TD
 - WebSocket path: `/relay/{sessionId}`
 - required header: `x-role: mac` or `x-role: iphone`
 - additional required Mac header: `x-notification-secret`
+- trusted reconnect iPhone headers: `x-phone-device-id` and `x-phone-identity-public-key`
 - close code `4000`: invalid session or role
 - close code `4001`: previous Mac connection replaced
 - close code `4002`: session unavailable / Mac disconnected

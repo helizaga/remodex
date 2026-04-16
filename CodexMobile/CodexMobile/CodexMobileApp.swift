@@ -5,6 +5,13 @@
 
 import RevenueCat
 import SwiftUI
+import UserNotifications
+
+private struct CodexUnitTestHostView: View {
+    var body: some View {
+        Color.clear
+    }
+}
 
 @MainActor
 @main
@@ -14,16 +21,30 @@ struct CodexMobileApp: App {
     @State private var codexService: CodexService
     @State private var subscriptionService: SubscriptionService
     @State private var uiTestFixture: CodexUITestLaunchFixture?
+    private let shouldSkipAppBootstrap: Bool
 
     init() {
-        Self.configureRevenueCatIfAvailable()
+        let shouldSkipAppBootstrap = CodexRuntimeEnvironment.isRunningAutomatedTests
+        self.shouldSkipAppBootstrap = shouldSkipAppBootstrap
+        Self.configureRevenueCatIfAvailable(skip: shouldSkipAppBootstrap)
         if let fixtureContext = CodexUITestHarness.makeIfEnabled(arguments: ProcessInfo.processInfo.arguments) {
             _codexService = State(initialValue: fixtureContext.service)
             _subscriptionService = State(initialValue: fixtureContext.subscriptions)
             _uiTestFixture = State(initialValue: fixtureContext.fixture)
         } else {
-            let service = CodexService()
-            service.configureNotifications()
+            let service = shouldSkipAppBootstrap
+                ? CodexService(
+                    defaults: UserDefaults(suiteName: "CodexMobile.AutomatedTestHost") ?? .standard,
+                    messagePersistence: .disabled,
+                    aiChangeSetPersistence: .disabled,
+                    userNotificationCenter: CodexNoopUserNotificationCenter(),
+                    remoteNotificationRegistrar: CodexNoopRemoteNotificationRegistrar(),
+                    secureStateBootstrap: .ephemeral
+                )
+                : CodexService()
+            if !shouldSkipAppBootstrap {
+                service.configureNotifications()
+            }
             _codexService = State(initialValue: service)
             _subscriptionService = State(initialValue: SubscriptionService())
             _uiTestFixture = State(initialValue: nil)
@@ -61,6 +82,9 @@ struct CodexMobileApp: App {
     private var rootView: some View {
         if let uiTestFixture {
             CodexUITestFixtureRootView(fixture: uiTestFixture)
+        } else if shouldSkipAppBootstrap {
+            // Keep host-based unit tests out of the real app shell and its scene/lifecycle work.
+            CodexUnitTestHostView()
         } else {
             ContentView()
                 .task {
@@ -68,9 +92,11 @@ struct CodexMobileApp: App {
                 }
         }
     }
+    private static func configureRevenueCatIfAvailable(skip: Bool) {
+        guard !skip else {
+            return
+        }
 
-    // Configures RevenueCat once at launch using the client-safe public SDK key.
-    private static func configureRevenueCatIfAvailable() {
         guard AppEnvironment.requiresProSubscription else {
             return
         }

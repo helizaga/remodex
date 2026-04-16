@@ -291,6 +291,99 @@ final class TurnMessageCachesTests: XCTestCase {
         XCTAssertEqual(summary?.entries.first?.deletions, 3)
     }
 
+    func testFileChangeBlockPresentationBuilderFallbackPathResetsActionWhenKindIsMissing() {
+        let presentation = FileChangeBlockPresentationBuilder.build(from: [
+            fileChangeMessage(
+                id: "fallback-action-reset",
+                text: """
+                Status: completed
+
+                **Path:** Sources/Added.swift
+                Kind: add
+                Totals: +1 -0
+
+                **Path:** Sources/Unknown.swift
+                Totals: +2 -0
+                """
+            )
+        ])
+
+        XCTAssertEqual(presentation?.entries.count, 2)
+        XCTAssertEqual(presentation?.entries[0].action, .added)
+        XCTAssertNil(presentation?.entries[1].action)
+    }
+
+    func testFileChangeBlockPresentationBuilderReplacesTotalsWithoutNewDiffEvidence() {
+        let presentation = FileChangeBlockPresentationBuilder.build(from: [
+            fileChangeMessage(
+                id: "authoritative-totals-replace-earlier",
+                text: """
+                Status: completed
+
+                Path: Sources/App.swift
+                Kind: update
+                Totals: +1 -0
+                """
+            ),
+            fileChangeMessage(
+                id: "authoritative-totals-replace-later",
+                text: """
+                Status: completed
+
+                Path: Sources/App.swift
+                Kind: update
+                Totals: +2 -0
+                """
+            ),
+        ])
+
+        XCTAssertEqual(presentation?.entries.count, 1)
+        XCTAssertEqual(presentation?.entries.first?.additions, 2)
+        XCTAssertEqual(presentation?.entries.first?.deletions, 0)
+    }
+
+    func testFileChangeBlockPresentationBuilderAccumulatesDistinctDiffBackedSnapshots() {
+        let presentation = FileChangeBlockPresentationBuilder.build(from: [
+            fileChangeMessage(
+                id: "distinct-snapshot-first",
+                text: """
+                Status: completed
+
+                Path: Sources/App.swift
+                Kind: update
+                Totals: +1 -0
+
+                ```diff
+                @@ -1,0 +1,1 @@
+                +first change
+                ```
+                """
+            ),
+            fileChangeMessage(
+                id: "distinct-snapshot-second",
+                text: """
+                Status: completed
+
+                Path: Sources/App.swift
+                Kind: update
+                Totals: +2 -0
+
+                ```diff
+                @@ -5,0 +5,2 @@
+                +second change
+                +third change
+                ```
+                """
+            ),
+        ])
+
+        XCTAssertEqual(presentation?.entries.count, 1)
+        XCTAssertEqual(presentation?.entries.first?.additions, 3)
+        XCTAssertEqual(presentation?.entries.first?.deletions, 0)
+        XCTAssertTrue(presentation?.bodyText.contains("+first change") == true)
+        XCTAssertTrue(presentation?.bodyText.contains("+third change") == true)
+    }
+
     private func fileChangeText(path: String) -> String {
         """
         Status: completed
@@ -299,5 +392,15 @@ final class TurnMessageCachesTests: XCTestCase {
         Kind: update
         Totals: +1 -0
         """
+    }
+
+    private func fileChangeMessage(id: String, text: String) -> CodexMessage {
+        CodexMessage(
+            id: id,
+            threadId: "thread-1",
+            role: .assistant,
+            kind: .fileChange,
+            text: text
+        )
     }
 }

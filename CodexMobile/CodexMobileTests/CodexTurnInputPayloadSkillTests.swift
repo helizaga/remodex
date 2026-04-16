@@ -9,7 +9,6 @@ import XCTest
 
 @MainActor
 final class CodexTurnInputPayloadSkillTests: XCTestCase {
-    private static var retainedServices: [CodexService] = []
 
     func testMakeTurnInputPayloadIncludesStructuredSkillItemsWhenEnabled() {
         let service = makeService()
@@ -61,8 +60,6 @@ final class CodexTurnInputPayloadSkillTests: XCTestCase {
         defaults.removePersistentDomain(forName: suiteName)
         let service = CodexService(defaults: defaults)
         service.messagesByThread = [:]
-
-        Self.retainedServices.append(service)
         return service
     }
 }

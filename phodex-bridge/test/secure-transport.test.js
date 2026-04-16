@@ -79,9 +79,30 @@ test("secure transport uses a longer configurable QR pairing ttl", () => {
   const pairingPayload = secureTransport.createPairingPayload();
   const ttlMs = pairingPayload.expiresAt - startedAt;
 
+  assert.ok(ttlMs >= 45 * 60 * 1000 - 2_000, `expected ttl near 45 minutes, got ${ttlMs}ms`);
+});
+
+test("secure transport clamps too-small QR pairing ttls to the minimum window", () => {
+  const macIdentity = createOkpKeyPair("ed25519");
+  const secureTransport = createBridgeSecureTransport({
+    sessionId: "session-ttl-min",
+    relayUrl: "wss://relay.example/relay",
+    pairingTtlMs: 0,
+    deviceState: {
+      macDeviceId: "mac-ttl-min",
+      macIdentityPrivateKey: macIdentity.privateKey,
+      macIdentityPublicKey: macIdentity.publicKey,
+      trustedPhones: {},
+    },
+  });
+
+  const startedAt = Date.now();
+  const pairingPayload = secureTransport.createPairingPayload();
+  const ttlMs = pairingPayload.expiresAt - startedAt;
+
   assert.ok(
-    ttlMs >= (45 * 60 * 1000) - 2_000,
-    `expected ttl near 45 minutes, got ${ttlMs}ms`
+    ttlMs >= 60_000 - 2_000 && ttlMs <= 60_000 + 2_000,
+    `expected ttl near 60 seconds, got ${ttlMs}ms`
   );
 });
 
@@ -244,7 +265,10 @@ test("secure transport round-trips encrypted payloads after a trusted reconnect 
   const outboundEnvelope = JSON.parse(wireMessages[0]);
   const outboundPayload = decryptEnvelope(outboundEnvelope, macToPhoneKey);
   assert.equal(outboundPayload.bridgeOutboundSeq, 1);
-  assert.equal(outboundPayload.payloadText, JSON.stringify({ id: "response-1", result: { ok: true } }));
+  assert.equal(
+    outboundPayload.payloadText,
+    JSON.stringify({ id: "response-1", result: { ok: true } })
+  );
 
   const inboundEnvelope = encryptEnvelope(
     {
@@ -256,17 +280,14 @@ test("secure transport round-trips encrypted payloads after a trusted reconnect 
     "session-2",
     serverHello.keyEpoch
   );
-  secureTransport.handleIncomingWireMessage(
-    JSON.stringify(inboundEnvelope),
-    {
-      sendControlMessage(message) {
-        controlMessages.push(message);
-      },
-      onApplicationMessage(message) {
-        applicationMessages.push(message);
-      },
-    }
-  );
+  secureTransport.handleIncomingWireMessage(JSON.stringify(inboundEnvelope), {
+    sendControlMessage(message) {
+      controlMessages.push(message);
+    },
+    onApplicationMessage(message) {
+      applicationMessages.push(message);
+    },
+  });
 
   assert.deepEqual(applicationMessages, [
     JSON.stringify({ id: "request-1", method: "thread/list", params: {} }),
@@ -438,7 +459,10 @@ test("rebinding the relay socket replays bridge output from the last phone ack",
   const outboundEnvelope = JSON.parse(firstRecoveryWireMessages[0]);
   const outboundPayload = decryptEnvelope(outboundEnvelope, macToPhoneKey);
   assert.equal(outboundPayload.bridgeOutboundSeq, 1);
-  assert.equal(outboundPayload.payloadText, JSON.stringify({ id: "response-5", result: { ok: true } }));
+  assert.equal(
+    outboundPayload.payloadText,
+    JSON.stringify({ id: "response-5", result: { ok: true } })
+  );
 
   const liveWireMessages = [];
   secureTransport.queueOutboundApplicationMessage(
@@ -555,7 +579,10 @@ test("resume replay does not advance the replay watermark before a phone ack", (
   const reboundEnvelope = JSON.parse(reboundWireMessages[0]);
   const reboundPayload = decryptEnvelope(reboundEnvelope, macToPhoneKey);
   assert.equal(reboundPayload.bridgeOutboundSeq, 1);
-  assert.equal(reboundPayload.payloadText, JSON.stringify({ id: "response-6", result: { ok: true } }));
+  assert.equal(
+    reboundPayload.payloadText,
+    JSON.stringify({ id: "response-6", result: { ok: true } })
+  );
 });
 
 function finishHandshake({

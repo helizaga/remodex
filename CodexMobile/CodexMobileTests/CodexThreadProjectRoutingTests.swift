@@ -9,7 +9,6 @@ import XCTest
 
 @MainActor
 final class CodexThreadProjectRoutingTests: XCTestCase {
-    private static var retainedServices: [CodexService] = []
 
     func testMoveThreadToProjectPathKeepsRebindWhenResumeFailsOnlyBecauseRolloutIsMissing() async throws {
         let service = makeService()
@@ -182,7 +181,6 @@ final class CodexThreadProjectRoutingTests: XCTestCase {
         }
 
         let service = CodexService(defaults: resolvedDefaults)
-        Self.retainedServices.append(service)
         return service
     }
 }

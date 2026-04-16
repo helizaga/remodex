@@ -1,0 +1,38 @@
+name: Swift Hygiene Check
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".swift-version"
+      - ".swiftformat"
+      - ".swiftlint.yml"
+      - ".github/workflows/swift-hygiene-check.yml"
+      - "CodexMobile/**/*.swift"
+      - "scripts/lint-swift.sh"
+  pull_request:
+    paths:
+      - ".swift-version"
+      - ".swiftformat"
+      - ".swiftlint.yml"
+      - ".github/workflows/swift-hygiene-check.yml"
+      - "CodexMobile/**/*.swift"
+      - "scripts/lint-swift.sh"
+
+jobs:
+  swift-hygiene-check:
+    runs-on: macos-latest
+    concurrency:
+      group: swift-hygiene-check-${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Swift hygiene tools
+        run: brew install swiftlint swiftformat
+
+      - name: Run Swift hygiene checks
+        run: ./scripts/lint-swift.sh

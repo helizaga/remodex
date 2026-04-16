@@ -112,12 +112,14 @@ function createSpawnTransport({ env, appPath, spawnImpl = spawn }) {
 
       if (!didRequestShutdown && !didReportError && code !== 0) {
         didReportError = true;
-        listeners.emitError(createCodexCloseError({
-          code,
-          signal,
-          stderrBuffer,
-          launchDescription: launch.description,
-        }));
+        listeners.emitError(
+          createCodexCloseError({
+            code,
+            signal,
+            stderrBuffer,
+            launchDescription: launch.description,
+          })
+        );
         return;
       }
 
@@ -182,23 +184,27 @@ function createCodexLaunchPlans({
   };
 
   if (platform === "win32") {
-    return [{
-      command: env.ComSpec || "cmd.exe",
-      args: ["/d", "/c", "codex app-server"],
-      options: {
-        ...sharedOptions,
-        windowsHide: true,
+    return [
+      {
+        command: env.ComSpec || "cmd.exe",
+        args: ["/d", "/c", "codex app-server"],
+        options: {
+          ...sharedOptions,
+          windowsHide: true,
+        },
+        description: "`cmd.exe /d /c codex app-server`",
       },
-      description: "`cmd.exe /d /c codex app-server`",
-    }];
+    ];
   }
 
-  const launches = [{
-    command: "codex",
-    args: ["app-server"],
-    options: sharedOptions,
-    description: "`codex app-server`",
-  }];
+  const launches = [
+    {
+      command: "codex",
+      args: ["app-server"],
+      options: sharedOptions,
+      description: "`codex app-server`",
+    },
+  ];
 
   const bundledCommand = buildBundledCodexPath(appPath, { fsImpl, pathImpl });
   if (bundledCommand) {
@@ -253,7 +259,8 @@ function shutdownCodexProcess(codex) {
 
 function createCodexCloseError({ code, signal, stderrBuffer, launchDescription }) {
   const details = stderrBuffer.trim();
-  const reason = details || `Process exited with code ${code}${signal ? ` (signal: ${signal})` : ""}.`;
+  const reason =
+    details || `Process exited with code ${code}${signal ? ` (signal: ${signal})` : ""}.`;
   return new Error(`Codex launcher ${launchDescription} failed: ${reason}`);
 }
 

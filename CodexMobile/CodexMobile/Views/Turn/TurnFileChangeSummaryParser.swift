@@ -570,24 +570,25 @@ enum TurnFileChangeSummaryParser {
     }
 
     private nonisolated static func consolidate(entries: [TurnFileChangeSummaryEntry]) -> [TurnFileChangeSummaryEntry] {
-        var orderedPaths: [String] = []
-        var entriesByPath: [String: TurnFileChangeSummaryEntry] = [:]
+        var aggregates: [TurnFileChangeSummaryEntry] = []
 
         for entry in entries {
-            if var existing = entriesByPath[entry.path] {
-                existing.additions += entry.additions
-                existing.deletions += entry.deletions
-                if existing.action == nil {
-                    existing.action = entry.action
-                }
-                entriesByPath[entry.path] = existing
+            if let existingIndex = aggregates.firstIndex(where: {
+                FileChangePathIdentity.representsSameFile($0.path, entry.path)
+            }) {
+                let existing = aggregates[existingIndex]
+                aggregates[existingIndex] = TurnFileChangeSummaryEntry(
+                    path: FileChangePathIdentity.preferredDisplayPath(existing.path, entry.path),
+                    additions: existing.additions + entry.additions,
+                    deletions: existing.deletions + entry.deletions,
+                    action: existing.action ?? entry.action
+                )
                 continue
             }
 
-            orderedPaths.append(entry.path)
-            entriesByPath[entry.path] = entry
+            aggregates.append(entry)
         }
 
-        return orderedPaths.compactMap { entriesByPath[$0] }
+        return aggregates
     }
 }

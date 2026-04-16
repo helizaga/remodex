@@ -9,7 +9,6 @@ import XCTest
 
 @MainActor
 final class CodexThreadRuntimeOverrideTests: XCTestCase {
-    private static var retainedServices: [CodexService] = []
 
     func testTurnStartUsesThreadRuntimeOverridesInsteadOfAppDefaults() async throws {
         let service = makeService()
@@ -45,7 +44,6 @@ final class CodexThreadRuntimeOverrideTests: XCTestCase {
         defaults.removePersistentDomain(forName: suiteName)
 
         let firstService = CodexService(defaults: defaults)
-        Self.retainedServices.append(firstService)
         firstService.setSelectedServiceTier(.fast)
         firstService.setThreadServiceTierOverride(nil, for: "thread-normal")
 
@@ -53,7 +51,6 @@ final class CodexThreadRuntimeOverrideTests: XCTestCase {
         XCTAssertNil(firstService.effectiveServiceTier(for: "thread-normal"))
 
         let secondService = CodexService(defaults: defaults)
-        Self.retainedServices.append(secondService)
 
         XCTAssertTrue(secondService.isThreadServiceTierOverridden("thread-normal"))
         XCTAssertNil(secondService.effectiveServiceTier(for: "thread-normal"))
@@ -126,7 +123,6 @@ final class CodexThreadRuntimeOverrideTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard
         defaults.removePersistentDomain(forName: suiteName)
         let service = CodexService(defaults: defaults)
-        Self.retainedServices.append(service)
         return service
     }
 

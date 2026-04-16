@@ -10,6 +10,20 @@ import XCTest
 
 @MainActor
 final class CodexSecurePairingStateTests: XCTestCase {
+    private func makeService() -> CodexService {
+        let suiteName = "CodexSecurePairingStateTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        defaults.removePersistentDomain(forName: suiteName)
+        return CodexService(
+            defaults: defaults,
+            messagePersistence: .disabled,
+            aiChangeSetPersistence: .disabled,
+            userNotificationCenter: CodexNoopUserNotificationCenter(),
+            remoteNotificationRegistrar: CodexNoopRemoteNotificationRegistrar(),
+            secureStateBootstrap: .ephemeral
+        )
+    }
+
     override func setUp() {
         super.setUp()
         clearStoredSecureRelayState()
@@ -21,7 +35,7 @@ final class CodexSecurePairingStateTests: XCTestCase {
     }
 
     func testRememberRelayPairingForcesFreshQRBootstrapEvenForTrustedMac() {
-        let service = CodexService()
+        let service = makeService()
         let macDeviceID = "mac-\(UUID().uuidString)"
         let originalPublicKey = Data(repeating: 1, count: 32).base64EncodedString()
         let freshQRPublicKey = Data(repeating: 2, count: 32).base64EncodedString()
@@ -50,7 +64,7 @@ final class CodexSecurePairingStateTests: XCTestCase {
     }
 
     func testRememberRelayPairingShowsHandshakeStateForBrandNewMac() {
-        let service = CodexService()
+        let service = makeService()
         let freshQRPublicKey = Data(repeating: 4, count: 32).base64EncodedString()
 
         service.rememberRelayPairing(
@@ -70,7 +84,7 @@ final class CodexSecurePairingStateTests: XCTestCase {
     }
 
     func testResetSecureTransportStatePreservesRePairRequiredState() {
-        let service = CodexService()
+        let service = makeService()
         service.relaySessionId = "session-\(UUID().uuidString)"
         service.relayUrl = "ws://relay.local/relay"
         service.secureConnectionState = .rePairRequired
@@ -83,7 +97,7 @@ final class CodexSecurePairingStateTests: XCTestCase {
     }
 
     func testApplyingResolvedTrustedSessionResetsReplayCursorWhenLiveSessionChanges() {
-        let service = CodexService()
+        let service = makeService()
         let macDeviceID = "mac-\(UUID().uuidString)"
 
         service.relaySessionId = "stale-session"
@@ -111,7 +125,7 @@ final class CodexSecurePairingStateTests: XCTestCase {
     }
 
     func testApplyingResolvedTrustedSessionKeepsReplayCursorWhenLiveSessionIsUnchanged() {
-        let service = CodexService()
+        let service = makeService()
         let macDeviceID = "mac-\(UUID().uuidString)"
 
         service.relaySessionId = "same-session"

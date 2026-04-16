@@ -5,15 +5,14 @@
 // Exports: none
 // Depends on: ./codex-cli-bootstrap
 
-const {
-  ensureCodexCLI,
-  shouldSkipCodexBootstrap,
-} = require("./codex-cli-bootstrap");
+const { ensureCodexCLI, shouldSkipCodexBootstrap } = require("./codex-cli-bootstrap");
 const { version: bridgePackageVersion = "" } = require("../package.json");
 const { readBridgeDeviceState } = require("./secure-device-state");
 const { buildCachedIOSAppCompatibilityWarning } = require("./ios-app-compatibility");
 
-const installLocation = String(process.env.npm_config_location || "").trim().toLowerCase();
+const installLocation = String(process.env.npm_config_location || "")
+  .trim()
+  .toLowerCase();
 const isGlobalInstall = process.env.npm_config_global === "true" || installLocation === "global";
 
 if (shouldSkipCodexBootstrap(process.env)) {

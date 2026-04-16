@@ -8,33 +8,53 @@ import CryptoKit
 import Foundation
 
 struct CodexMessagePersistence {
-    // v6 encrypts the on-device message cache while keeping backward-compatible legacy fallbacks.
-    private let fileName = "codex-message-history-v6.bin"
-    private let legacyFileNames = [
-        "codex-message-history-v5.json",
-        "codex-message-history-v4.json",
-        "codex-message-history-v3.json",
-        "codex-message-history-v2.json",
-        "codex-message-history.json",
-    ]
+    nonisolated(unsafe) private let loadImpl: () -> [String: [CodexMessage]]
+    nonisolated(unsafe) private let saveImpl: ([String: [CodexMessage]]) -> Void
+
+    init() {
+        self.loadImpl = { Self.liveLoad() }
+        self.saveImpl = { value in Self.liveSave(value) }
+    }
+
+    private init(
+        load: @escaping () -> [String: [CodexMessage]],
+        save: @escaping ([String: [CodexMessage]]) -> Void
+    ) {
+        self.loadImpl = load
+        self.saveImpl = save
+    }
+
+    static var disabled: CodexMessagePersistence {
+        CodexMessagePersistence(load: { [:] }, save: { _ in })
+    }
 
     // Loads the saved message map from disk. Returns an empty store on failure.
     nonisolated func load() -> [String: [CodexMessage]] {
+        loadImpl()
+    }
+
+    // Persists all thread timelines atomically to avoid corrupt partial writes.
+    nonisolated func save(_ value: [String: [CodexMessage]]) {
+        saveImpl(value)
+    }
+
+    private nonisolated static func liveLoad() -> [String: [CodexMessage]] {
         let decoder = JSONDecoder()
+        let encryptedFileName = "codex-message-history-v6.bin"
 
         for fileURL in storeURLs {
             guard let data = try? Data(contentsOf: fileURL) else {
                 continue
             }
 
-            if fileURL.lastPathComponent == fileName,
-               let decrypted = decryptPersistedPayload(data),
+            if fileURL.lastPathComponent == encryptedFileName,
+               let decrypted = Self.decryptPersistedPayload(data),
                let value = try? decoder.decode([String: [CodexMessage]].self, from: decrypted) {
-                return sanitizedForPersistence(value)
+                return Self.sanitizedForPersistence(value)
             }
 
             if let value = try? decoder.decode([String: [CodexMessage]].self, from: data) {
-                return sanitizedForPersistence(value)
+                return Self.sanitizedForPersistence(value)
             }
         }
 
@@ -42,23 +62,31 @@ struct CodexMessagePersistence {
     }
 
     // Persists all thread timelines atomically to avoid corrupt partial writes.
-    nonisolated func save(_ value: [String: [CodexMessage]]) {
+    private nonisolated static func liveSave(_ value: [String: [CodexMessage]]) {
         let encoder = JSONEncoder()
         guard let plaintext = try? encoder.encode(sanitizedForPersistence(value)),
               let data = encryptPersistedPayload(plaintext) else {
             return
         }
 
-        let fileURL = storeURL
-        ensureParentDirectoryExists(for: fileURL)
+        let fileURL = Self.storeURL
+        Self.ensureParentDirectoryExists(for: fileURL)
         try? data.write(to: fileURL, options: [.atomic])
     }
 
-    private nonisolated var storeURL: URL {
-        storeURLs[0]
+    private nonisolated static var storeURL: URL {
+        Self.storeURLs[0]
     }
 
-    private nonisolated var storeURLs: [URL] {
+    private nonisolated static var storeURLs: [URL] {
+        let fileName = "codex-message-history-v6.bin"
+        let legacyFileNames = [
+            "codex-message-history-v5.json",
+            "codex-message-history-v4.json",
+            "codex-message-history-v3.json",
+            "codex-message-history-v2.json",
+            "codex-message-history.json",
+        ]
         let fm = FileManager.default
         let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fm.temporaryDirectory
@@ -68,20 +96,20 @@ struct CodexMessagePersistence {
         return names.map { directory.appendingPathComponent($0, isDirectory: false) }
     }
 
-    private nonisolated func ensureParentDirectoryExists(for fileURL: URL) {
+    private nonisolated static func ensureParentDirectoryExists(for fileURL: URL) {
         let directory = fileURL.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
     // Uses a Keychain-backed AES key so chat history remains private if the app data is copied out.
-    private nonisolated func encryptPersistedPayload(_ plaintext: Data) -> Data? {
+    private nonisolated static func encryptPersistedPayload(_ plaintext: Data) -> Data? {
         let key = messageHistoryKey()
         let sealedBox = try? AES.GCM.seal(plaintext, using: key)
         return sealedBox?.combined
     }
 
     // Opens the encrypted chat cache while still allowing plaintext fallbacks from older app versions.
-    private nonisolated func decryptPersistedPayload(_ encryptedData: Data) -> Data? {
+    private nonisolated static func decryptPersistedPayload(_ encryptedData: Data) -> Data? {
         let key = messageHistoryKey()
         guard let sealedBox = try? AES.GCM.SealedBox(combined: encryptedData) else {
             return nil
@@ -89,7 +117,7 @@ struct CodexMessagePersistence {
         return try? AES.GCM.open(sealedBox, using: key)
     }
 
-    private nonisolated func messageHistoryKey() -> SymmetricKey {
+    private nonisolated static func messageHistoryKey() -> SymmetricKey {
         if let storedKey = SecureStore.readData(for: CodexSecureKeys.messageHistoryKey) {
             return SymmetricKey(data: storedKey)
         }
@@ -102,7 +130,7 @@ struct CodexMessagePersistence {
 
     // Keep pending structured prompts on disk so reconnects and relaunches can still surface
     // a request the server is waiting on; lifecycle cleanup removes them once the request resolves.
-    private nonisolated func sanitizedForPersistence(_ value: [String: [CodexMessage]]) -> [String: [CodexMessage]] {
+    private nonisolated static func sanitizedForPersistence(_ value: [String: [CodexMessage]]) -> [String: [CodexMessage]] {
         value.mapValues { messages in
             messages.map { message in
                 guard !message.attachments.isEmpty else {

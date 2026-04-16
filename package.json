@@ -1,0 +1,21 @@
+{
+  "name": "remodex-tooling",
+  "private": true,
+  "scripts": {
+    "format": "prettier --write \"**/*.{cjs,js,json,yaml,yml}\" --ignore-path .prettierignore",
+    "format:check": "prettier --check \"**/*.{cjs,js,json,yaml,yml}\" --ignore-path .prettierignore",
+    "lint": "npm run format:check && npm run lint:js && npm run lint:sh && npm run lint:workflows",
+    "lint:js": "eslint phodex-bridge relay",
+    "lint:sh": "./scripts/lint-shell.sh",
+    "lint:swift": "./scripts/lint-swift.sh",
+    "lint:workflows": "./scripts/lint-workflows.sh",
+    "prepare": "lefthook install"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.25.1",
+    "eslint": "^9.25.1",
+    "globals": "^16.0.0",
+    "lefthook": "^1.11.12",
+    "prettier": "^3.5.3"
+  }
+}

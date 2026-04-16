@@ -9,7 +9,6 @@ import XCTest
 
 @MainActor
 final class TurnComposerReviewModeTests: XCTestCase {
-    private static var retainedViewModels: [TurnViewModel] = []
 
     func testTrailingSlashCommandDoesNotCountAsReviewConflict() {
         let viewModel = makeViewModel()
@@ -250,9 +249,6 @@ final class TurnComposerReviewModeTests: XCTestCase {
 
     private func makeViewModel() -> TurnViewModel {
         let viewModel = TurnViewModel()
-        // TurnViewModel currently crashes while deallocating in the unit-test host.
-        // Keep instances alive for process lifetime so this suite remains deterministic.
-        Self.retainedViewModels.append(viewModel)
         return viewModel
     }
 }

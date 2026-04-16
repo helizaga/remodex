@@ -9,7 +9,6 @@ import XCTest
 
 @MainActor
 final class CodexServiceIncomingCommandExecutionTests: XCTestCase {
-    private static var retainedServices: [CodexService] = []
 
     func testLegacyBeginAndModernItemStartedMergeIntoSingleRunRow() {
         let service = makeService()
@@ -1434,9 +1433,6 @@ final class CodexServiceIncomingCommandExecutionTests: XCTestCase {
         defaults.removePersistentDomain(forName: suiteName)
         let service = CodexService(defaults: defaults)
         service.messagesByThread = [:]
-        // CodexService currently crashes while deallocating in unit-test environment.
-        // Keep instances alive for the process lifetime so assertions can run deterministically.
-        Self.retainedServices.append(service)
         return service
     }
 }

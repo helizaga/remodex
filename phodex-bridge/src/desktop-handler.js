@@ -4,7 +4,7 @@
 // Exports: handleDesktopRequest
 // Depends on: child_process, fs, os, path, ./rollout-watch
 
-const { execFile } = require("child_process");
+const { execFile, spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const { promisify } = require("util");
@@ -44,14 +44,16 @@ function handleDesktopRequest(rawMessage, sendResponse, options = {}) {
     .catch((err) => {
       const errorCode = err.errorCode || "desktop_error";
       const message = err.userMessage || err.message || "Unknown desktop handoff error";
-      sendResponse(JSON.stringify({
-        id,
-        error: {
-          code: -32000,
-          message,
-          data: { errorCode },
-        },
-      }));
+      sendResponse(
+        JSON.stringify({
+          id,
+          error: {
+            code: -32000,
+            message,
+            data: { errorCode },
+          },
+        })
+      );
     });
 
   return true;
@@ -62,14 +64,17 @@ async function handleDesktopMethod(method, params, options = {}) {
   const bundleId = options.bundleId || DEFAULT_BUNDLE_ID;
   const appPath = options.appPath || DEFAULT_APP_PATH;
   const executor = options.executor || execFileAsync;
+  const wakeSpawner = options.wakeSpawner || spawn;
   const env = options.env || process.env;
   const fsModule = options.fsModule || fs;
   const isAppRunning = options.isAppRunning || null;
   const sleepFn = options.sleepFn || sleep;
   const appBootWaitMs = options.appBootWaitMs ?? DEFAULT_APP_BOOT_WAIT_MS;
   const relaunchWaitMs = options.relaunchWaitMs ?? DEFAULT_RELAUNCH_WAIT_MS;
-  const threadMaterializeWaitMs = options.threadMaterializeWaitMs ?? DEFAULT_THREAD_MATERIALIZE_WAIT_MS;
-  const threadMaterializePollMs = options.threadMaterializePollMs ?? DEFAULT_THREAD_MATERIALIZE_POLL_MS;
+  const threadMaterializeWaitMs =
+    options.threadMaterializeWaitMs ?? DEFAULT_THREAD_MATERIALIZE_WAIT_MS;
+  const threadMaterializePollMs =
+    options.threadMaterializePollMs ?? DEFAULT_THREAD_MATERIALIZE_POLL_MS;
 
   if (platform !== "darwin") {
     throw desktopError(
@@ -95,7 +100,7 @@ async function handleDesktopMethod(method, params, options = {}) {
       });
     case "desktop/wakeDisplay":
       return wakeDisplay({
-        executor,
+        spawnImpl: wakeSpawner,
       });
     case "desktop/preferences/read":
       return readBridgePreferences(options);
@@ -130,9 +135,10 @@ async function continueOnMac(
 
   const targetUrl = `codex://threads/${threadId}`;
   const desktopKnown = isThreadLikelyKnownOnDesktop(threadId, { env, fsModule });
-  const appRunning = typeof isAppRunning === "function"
-    ? await isAppRunning(appPath)
-    : await detectRunningCodexApp(appPath, executor);
+  const appRunning =
+    typeof isAppRunning === "function"
+      ? await isAppRunning(appPath)
+      : await detectRunningCodexApp(appPath, executor);
 
   // If Codex.app is already open, explicit handoff should still feel like a
   // real device switch: close, reopen, then focus the requested thread.
@@ -154,11 +160,7 @@ async function continueOnMac(
         pollMs: threadMaterializePollMs,
       });
     } catch (error) {
-      throw desktopError(
-        "handoff_failed",
-        "Could not open Codex.app on this Mac.",
-        error
-      );
+      throw desktopError("handoff_failed", "Could not open Codex.app on this Mac.", error);
     }
 
     return {
@@ -187,11 +189,7 @@ async function continueOnMac(
         pollMs: threadMaterializePollMs,
       });
     } catch (error) {
-      throw desktopError(
-        "handoff_failed",
-        "Could not open Codex.app on this Mac.",
-        error
-      );
+      throw desktopError("handoff_failed", "Could not open Codex.app on this Mac.", error);
     }
 
     return {
@@ -242,23 +240,54 @@ async function continueOnMac(
 
 // Sends a stronger display wake pulse: mark user activity and hold the display awake briefly
 // so a sleeping panel has time to relight before the Mac drifts back into idle display sleep.
-async function wakeDisplay({ executor }) {
-  try {
-    await executor("/usr/bin/caffeinate", ["-d", "-u", "-t", String(DEFAULT_WAKE_DISPLAY_DURATION_SECONDS)], {
-      timeout: HANDOFF_TIMEOUT_MS,
-    });
-  } catch (error) {
-    throw desktopError(
-      "wake_display_failed",
-      "Could not wake your Mac display right now.",
-      error
-    );
-  }
+async function wakeDisplay({ spawnImpl }) {
+  return new Promise((resolve, reject) => {
+    let child;
+    try {
+      child = spawnImpl(
+        "/usr/bin/caffeinate",
+        ["-d", "-u", "-t", String(DEFAULT_WAKE_DISPLAY_DURATION_SECONDS)],
+        {
+          stdio: "ignore",
+        }
+      );
+    } catch (error) {
+      reject(
+        desktopError("wake_display_failed", "Could not wake your Mac display right now.", error)
+      );
+      return;
+    }
 
-  return {
-    success: true,
-    durationSeconds: DEFAULT_WAKE_DISPLAY_DURATION_SECONDS,
-  };
+    let settled = false;
+    const fail = (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reject(
+        desktopError("wake_display_failed", "Could not wake your Mac display right now.", error)
+      );
+    };
+    const succeed = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      child.unref?.();
+      resolve({
+        success: true,
+        durationSeconds: DEFAULT_WAKE_DISPLAY_DURATION_SECONDS,
+      });
+    };
+
+    child.once?.("error", fail);
+    child.once?.("spawn", succeed);
+
+    // Test doubles may not emit real process lifecycle events.
+    if (typeof child.once !== "function") {
+      succeed();
+    }
+  });
 }
 
 function readBridgePreferences(options = {}) {
@@ -281,10 +310,7 @@ async function updateBridgePreferences(params, options = {}) {
   }
 
   if (!params || typeof params !== "object" || typeof params.keepMacAwake !== "boolean") {
-    throw desktopError(
-      "invalid_bridge_preferences",
-      "The bridge preference payload is invalid."
-    );
+    throw desktopError("invalid_bridge_preferences", "The bridge preference payload is invalid.");
   }
 
   return options.updateBridgePreferences({
@@ -297,10 +323,7 @@ function resolveThreadId(params) {
     return "";
   }
 
-  const candidates = [
-    params.threadId,
-    params.thread_id,
-  ];
+  const candidates = [params.threadId, params.thread_id];
 
   for (const candidate of candidates) {
     if (typeof candidate === "string" && candidate.trim()) {
@@ -419,9 +442,10 @@ async function waitForAppExit(appPath, executor, isAppRunning) {
   const deadline = Date.now() + HANDOFF_TIMEOUT_MS;
 
   while (Date.now() < deadline) {
-    const isRunning = typeof isAppRunning === "function"
-      ? await isAppRunning(appPath)
-      : await detectRunningCodexApp(appPath, executor);
+    const isRunning =
+      typeof isAppRunning === "function"
+        ? await isAppRunning(appPath)
+        : await detectRunningCodexApp(appPath, executor);
     if (!isRunning) {
       return;
     }

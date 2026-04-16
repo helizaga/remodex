@@ -8,6 +8,7 @@ const {
   isActiveRelaySocket,
   nextRelayReconnectDelayMs,
   persistBridgePreferences,
+  redactedRelayCloseReason,
   relayCloseDiagnostic,
   shouldShutdownOnRelayCloseCode,
   sanitizeThreadHistoryImagesForRelay,
@@ -32,7 +33,8 @@ test("nextRelayReconnectDelayMs backs off exponentially and caps the delay", () 
 
 test("shouldShutdownOnRelayCloseCode only fails closed for invalid relay sessions", () => {
   assert.equal(shouldShutdownOnRelayCloseCode(4000), true);
-  assert.equal(shouldShutdownOnRelayCloseCode(4001), false);
+  assert.equal(shouldShutdownOnRelayCloseCode(4001), true);
+  assert.equal(shouldShutdownOnRelayCloseCode(4005), true);
   assert.equal(shouldShutdownOnRelayCloseCode(4002), false);
   assert.equal(shouldShutdownOnRelayCloseCode(1006), false);
 });
@@ -50,11 +52,32 @@ test("relayCloseDiagnostic classifies saved-session and permanent reconnect fail
     isPermanent: true,
   });
 
+  assert.deepEqual(relayCloseDiagnostic(4005), {
+    code: "re_pair_required",
+    message:
+      "This saved relay session is no longer trusted by the Mac. Scan a new QR code to reconnect.",
+    isPermanent: true,
+  });
+
   assert.deepEqual(relayCloseDiagnostic(4010, "relay proxy reset"), {
     code: "relay_temporarily_unavailable",
-    message: "The relay connection closed unexpectedly: relay proxy reset",
+    message: "The relay connection closed unexpectedly: [redacted]",
     isPermanent: false,
   });
+
+  assert.deepEqual(relayCloseDiagnostic(4010), {
+    code: "relay_temporarily_unavailable",
+    message: "The relay or network is temporarily unavailable.",
+    isPermanent: false,
+  });
+});
+
+test("redactedRelayCloseReason hides non-empty relay close reasons from logs", () => {
+  assert.equal(redactedRelayCloseReason("sessionId=abc123"), "[redacted]");
+  assert.equal(redactedRelayCloseReason("   relay rejected   "), "[redacted]");
+  assert.equal(redactedRelayCloseReason(""), "");
+  assert.equal(redactedRelayCloseReason("   "), "");
+  assert.equal(redactedRelayCloseReason(null), "");
 });
 
 test("hasRelayConnectionGoneStale returns true once the relay silence crosses the timeout", () => {
@@ -158,9 +181,7 @@ test("sanitizeThreadHistoryImagesForRelay replaces inline history images with li
     },
   });
 
-  const sanitized = JSON.parse(
-    sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/read")
-  );
+  const sanitized = JSON.parse(sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/read"));
   const content = sanitized.result.thread.turns[0].items[0].content;
 
   assert.deepEqual(content[0], {
@@ -181,10 +202,7 @@ test("sanitizeThreadHistoryImagesForRelay leaves unrelated RPC payloads unchange
     },
   });
 
-  assert.equal(
-    sanitizeThreadHistoryImagesForRelay(rawMessage, "turn/start"),
-    rawMessage
-  );
+  assert.equal(sanitizeThreadHistoryImagesForRelay(rawMessage, "turn/start"), rawMessage);
 });
 
 test("createMacOSBridgeWakeAssertion spawns a macOS caffeinate idle-sleep assertion tied to the bridge pid", () => {
@@ -208,11 +226,13 @@ test("createMacOSBridgeWakeAssertion spawns a macOS caffeinate idle-sleep assert
   });
 
   assert.equal(assertion.active, true);
-  assert.deepEqual(spawnCalls, [{
-    command: "/usr/bin/caffeinate",
-    args: ["-i", "-w", "4242"],
-    options: { stdio: "ignore" },
-  }]);
+  assert.deepEqual(spawnCalls, [
+    {
+      command: "/usr/bin/caffeinate",
+      args: ["-i", "-w", "4242"],
+      options: { stdio: "ignore" },
+    },
+  ]);
 
   assertion.stop();
   assert.equal(fakeChild.killed, true);
@@ -289,11 +309,13 @@ test("persistBridgePreferences only saves the daemon preference field", () => {
     }
   );
 
-  assert.deepEqual(writes, [{
-    relayUrl: "ws://127.0.0.1:9000/relay",
-    refreshEnabled: true,
-    keepMacAwakeEnabled: false,
-  }]);
+  assert.deepEqual(writes, [
+    {
+      relayUrl: "ws://127.0.0.1:9000/relay",
+      refreshEnabled: true,
+      keepMacAwakeEnabled: false,
+    },
+  ]);
 });
 
 test("sanitizeThreadHistoryImagesForRelay strips bulky compaction replacement history", () => {
@@ -338,9 +360,7 @@ test("sanitizeThreadHistoryImagesForRelay strips bulky compaction replacement hi
     },
   });
 
-  const sanitized = JSON.parse(
-    sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/resume")
-  );
+  const sanitized = JSON.parse(sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/resume"));
   const items = sanitized.result.thread.turns[0].items;
 
   assert.deepEqual(items[0], {
@@ -381,9 +401,7 @@ test("sanitizeThreadHistoryImagesForRelay recursively elides inline image payloa
     },
   });
 
-  const sanitized = JSON.parse(
-    sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/read")
-  );
+  const sanitized = JSON.parse(sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/read"));
   const attachment = sanitized.result.thread.turns[0].items[0].attachment;
 
   assert.deepEqual(attachment, {
@@ -406,7 +424,7 @@ test("sanitizeThreadHistoryImagesForRelay strips attachment previews once the sa
                 type: "user_message",
                 attachment: {
                   thumbnailBase64JPEG: "A".repeat(10_000),
-                  sourceURL: "https://example.com/image.png",
+                  sourceURL: "http://127.0.0.1/image.png",
                 },
               },
             ],
@@ -425,7 +443,7 @@ test("sanitizeThreadHistoryImagesForRelay strips attachment previews once the sa
 
   assert.deepEqual(attachment, {
     thumbnailBase64JPEG: "",
-    sourceURL: "https://example.com/image.png",
+    sourceURL: "http://127.0.0.1/image.png",
   });
 });
 

@@ -15,6 +15,7 @@ TUNNEL_PID_FILE="${STATE_DIR}/tunnel.pid"
 NGROK_LOG_FILE="${STATE_DIR}/ngrok.log"
 BRIDGE_LOG_FILE="${STATE_DIR}/bridge.log"
 RELAY_LOG_FILE="${STATE_DIR}/relay.log"
+NGROK_BIN="${NGROK_BIN:-$(command -v ngrok 2>/dev/null || printf 'ngrok')}"
 LOCAL_RELAY_URL="ws://127.0.0.1:${PORT}/relay"
 RELAY_URL=""
 
@@ -63,7 +64,7 @@ find_repo_launcher_pids() {
   {
     pgrep -f "${ROOT_DIR}/run-local-remodex.sh up" 2>/dev/null || true
     pgrep -f '(^|.*/)run-local-remodex\.sh up($| )' 2>/dev/null || true
-  } | awk 'NF { print $1 }' | sort -u
+  } | awk 'NF' | sort -u
 }
 
 cleanup_repo_launcher_orphans() {
@@ -82,9 +83,9 @@ cleanup_repo_launcher_orphans() {
 find_repo_worker_pids() {
   {
     pgrep -f "${ROOT_DIR}/relay/local-server.js" 2>/dev/null || true
-    pgrep -f 'node ./bin/remodex\.js up' 2>/dev/null || true
-    pgrep -f "ngrok http http://127.0.0.1:${PORT}" 2>/dev/null || true
-  } | awk 'NF { print $1 }' | sort -u
+    pgrep -f "node ${BRIDGE_DIR}/bin/remodex\\.js up" 2>/dev/null || true
+    pgrep -f "${NGROK_BIN} http http://$(ngrok_upstream_host):${PORT}" 2>/dev/null || true
+  } | awk 'NF' | sort -u
 }
 
 cleanup_repo_worker_orphans() {
@@ -181,6 +182,17 @@ should_use_ngrok_tunnel() {
   [[ -z "$explicit_relay_url" && "$tunnel_mode" == "ngrok" ]]
 }
 
+ngrok_upstream_host() {
+  case "${BIND_HOST:-127.0.0.1}" in
+    ""|"0.0.0.0"|"::")
+      printf '127.0.0.1\n'
+      ;;
+    *)
+      printf '%s\n' "$BIND_HOST"
+      ;;
+  esac
+}
+
 preflight_up() {
   require_command "node" "Install Node.js and make sure 'node' is in your PATH."
   if should_use_ngrok_tunnel "$EXPLICIT_RELAY_URL" "$TUNNEL_MODE"; then
@@ -197,7 +209,7 @@ wait_for_relay() {
   local delay_s=0.25
 
   for ((i=1; i<=attempts; i++)); do
-    if curl -fsS "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
+    if curl -fsS "http://${BIND_HOST}:${PORT}/health" >/dev/null 2>&1; then
       return 0
     fi
     sleep "$delay_s"
@@ -224,6 +236,7 @@ wait_for_ngrok() {
 }
 
 discover_ngrok_relay_url() {
+  # shellcheck disable=SC2016
   node -e '
 const fs = require("fs");
 const logPath = process.argv[1];
@@ -284,6 +297,34 @@ process.exit(1);
 ' "$NGROK_LOG_FILE"
 }
 
+extract_ngrok_tunnel_session_ids_for_endpoint() {
+  local endpoint_json="$1"
+  local endpoint_url="$2"
+
+  printf '%s' "$endpoint_json" | node -e '
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { input += chunk; });
+process.stdin.on("end", () => {
+  let parsed;
+  try {
+    parsed = JSON.parse(input);
+  } catch {
+    process.exit(1);
+  }
+  const endpoints = Array.isArray(parsed?.endpoints) ? parsed.endpoints : [];
+  const ids = endpoints
+    .filter((endpoint) => endpoint?.url === process.argv[1] || endpoint?.public_url === process.argv[1])
+    .map((endpoint) => endpoint?.tunnel_session?.id)
+    .filter((value) => typeof value === "string" && value.length > 0);
+  if (ids.length === 0) {
+    process.exit(2);
+  }
+  process.stdout.write(ids.join("\n"));
+});
+' "$endpoint_url"
+}
+
 auto_clear_ngrok_collision() {
   local endpoint_url="$1"
   local api_key="${NGROK_API_KEY:-}"
@@ -305,30 +346,12 @@ auto_clear_ngrok_collision() {
   fi
 
   local session_ids
-  session_ids="$(printf '%s' "$endpoint_json" | node -e '
-let input = "";
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => { input += chunk; });
-process.stdin.on("end", () => {
-  let parsed;
-  try {
-    parsed = JSON.parse(input);
-  } catch {
-    process.exit(1);
-  }
-  const endpoints = Array.isArray(parsed?.endpoints) ? parsed.endpoints : [];
-  const ids = endpoints
-    .filter((endpoint) => endpoint?.url === process.argv[1] || endpoint?.public_url === process.argv[1])
-    .map((endpoint) => endpoint?.tunnel_session?.id)
-    .filter((value) => typeof value === "string" && value.length > 0);
-  if (ids.length === 0) {
-    process.exit(2);
-  }
-  process.stdout.write(ids.join("\n"));
-});
-') "$endpoint_url")"
-
-  local parser_status=$?
+  local parser_status=0
+  if session_ids="$(extract_ngrok_tunnel_session_ids_for_endpoint "$endpoint_json" "$endpoint_url")"; then
+    parser_status=0
+  else
+    parser_status=$?
+  fi
   if [[ $parser_status -eq 2 ]]; then
     echo "[remodex-local] ngrok API does not currently report an active tunnel session for that endpoint; waiting for release" >&2
     sleep 2
@@ -399,7 +422,7 @@ recover_ngrok_collision() {
 start_ngrok_tunnel() {
   cleanup_ngrok_state
   tunnel_pid="$(spawn_detached "$TUNNEL_PID_FILE" "$NGROK_LOG_FILE" \
-    ngrok http "http://127.0.0.1:${PORT}" --log=stdout --log-format=json)"
+    "$NGROK_BIN" http "http://$(ngrok_upstream_host):${PORT}" --log=stdout --log-format=json)"
   started_tunnel=1
 }
 
@@ -425,7 +448,7 @@ report_ngrok_failure() {
 }
 
 ensure_local_relay() {
-  if curl -fsS "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
+  if curl -fsS "http://${BIND_HOST}:${PORT}/health" >/dev/null 2>&1; then
     echo "[remodex-local] reusing existing local relay on :$PORT"
     return 0
   fi
@@ -515,11 +538,6 @@ main() {
     exit 1
   fi
 
-  if [[ ! -d "$BRIDGE_DIR/node_modules" ]]; then
-    echo "[remodex-local] installing bridge dependencies"
-    (cd "$BRIDGE_DIR" && npm install)
-  fi
-
   mkdir -p "$STATE_DIR"
 
   if [[ "$command" == "stop" ]]; then
@@ -535,6 +553,11 @@ main() {
     stop_pid_file "tunnel" "$TUNNEL_PID_FILE"
     stop_pid_file "relay" "$RELAY_PID_FILE"
     exit 0
+  fi
+
+  if [[ ! -d "$BRIDGE_DIR/node_modules" ]]; then
+    echo "[remodex-local] installing bridge dependencies"
+    (cd "$BRIDGE_DIR" && npm install)
   fi
 
   trap cleanup EXIT INT TERM
@@ -616,7 +639,7 @@ main() {
   rm -f "$BRIDGE_LOG_FILE"
   REMODEX_RELAY="$RELAY_URL" \
   REMODEX_REFRESH_ENABLED="$REFRESH_ENABLED" \
-  node ./bin/remodex.js up 2>&1 | tee -a "$BRIDGE_LOG_FILE"
+  node "$BRIDGE_DIR/bin/remodex.js" up 2>&1 | tee -a "$BRIDGE_LOG_FILE"
 
   preserve_runtime_after_successful_up
   echo "[remodex-local] bridge service is up; use remodex stop to stop the local relay, tunnel, and macOS bridge service"
