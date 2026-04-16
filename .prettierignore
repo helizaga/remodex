@@ -1,0 +1,9 @@
+**/node_modules/**
+CodexMobile/build/**
+CodexMobile/CodexMobile/Assets.xcassets/**
+CodexMobile/CodexMobile/Remodex.icon/**
+CodexMobile/Docs/**
+CodexMobile/CodexMobile/Resources/Mermaid/**
+deeplinks-*.js
+main-*.js
+*.xcresult/**

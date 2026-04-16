@@ -256,8 +256,6 @@ struct TurnTimelineRenderSnapshot: Equatable {
     }
 }
 
-@MainActor
-@Observable
 final class ThreadTimelineState {
     let threadID: String
     var messages: [CodexMessage]
@@ -282,6 +280,8 @@ final class ThreadTimelineState {
         self.repoRefreshSignal = nil
         self.renderSnapshot = TurnTimelineRenderSnapshot.empty(threadID: threadID)
     }
+
+    nonisolated deinit {}
 }
 
 struct AssistantRevertStateCacheEntry {
@@ -291,9 +291,59 @@ struct AssistantRevertStateCacheEntry {
     let statesByMessageID: [String: AssistantRevertPresentation]
 }
 
+final class TurnTimelineStore {
+    var stateByThread: [String: ThreadTimelineState] = [:]
+    var stoppedTurnIDsByThread: [String: Set<String>] = [:]
+    var messageIndexCacheByThread: [String: [String: Int]] = [:]
+    var latestAssistantOutputByThread: [String: String] = [:]
+    var latestRepoAffectingMessageSignalByThread: [String: String] = [:]
+    var assistantRevertStateCacheByThread: [String: AssistantRevertStateCacheEntry] = [:]
+    var assistantRevertStateRevision: Int = 0
+    var busyRepoRoots: Set<String> = []
+    var busyRepoRootsRevision: Int = 0
+
+    func timelineState(for threadID: String) -> ThreadTimelineState {
+        if let existing = stateByThread[threadID] {
+            return existing
+        }
+
+        let state = ThreadTimelineState(threadID: threadID)
+        stateByThread[threadID] = state
+        return state
+    }
+
+    func removeTimelineState(for threadID: String) {
+        stateByThread.removeValue(forKey: threadID)
+        stoppedTurnIDsByThread.removeValue(forKey: threadID)
+        messageIndexCacheByThread.removeValue(forKey: threadID)
+        latestAssistantOutputByThread.removeValue(forKey: threadID)
+        latestRepoAffectingMessageSignalByThread.removeValue(forKey: threadID)
+        assistantRevertStateCacheByThread.removeValue(forKey: threadID)
+    }
+
+    func removeAllTimelineState() {
+        stateByThread.removeAll()
+        stoppedTurnIDsByThread.removeAll()
+        messageIndexCacheByThread.removeAll()
+        latestAssistantOutputByThread.removeAll()
+        latestRepoAffectingMessageSignalByThread.removeAll()
+        assistantRevertStateCacheByThread.removeAll()
+        assistantRevertStateRevision = 0
+        busyRepoRoots.removeAll()
+        busyRepoRootsRevision = 0
+    }
+
+    nonisolated deinit {}
+}
+
 @MainActor
 @Observable
 final class CodexService {
+    enum SecureStateBootstrap {
+        case restorePersistedState
+        case ephemeral
+    }
+
     static let minimumSupportedBridgePackageVersion = "1.3.5"
 
     // --- Public state ---------------------------------------------------------
@@ -408,6 +458,8 @@ final class CodexService {
     var webSocketSession: URLSession?
     var webSocketSessionDelegate: CodexURLSessionWebSocketDelegate?
     var webSocketTask: URLSessionWebSocketTask?
+    // Test hook: lets teardown coverage assert cleanup without constructing live Apple socket objects.
+    @ObservationIgnored var transportTeardownObserver: (() -> Void)?
     // Raw frame buffer used when the relay runs over manual TCP websocket framing.
     var manualWebSocketReadBuffer = Data()
     var usesManualWebSocketTransport = false
@@ -525,26 +577,56 @@ final class CodexService {
     // Canonical repo roots keyed by observed working directories from bridge git/status responses.
     var repoRootByWorkingDirectory: [String: String] = [:]
     var knownRepoRoots: Set<String> = []
-    // Service-owned per-thread UI state keeps the active chat isolated from unrelated thread mutations.
-    @ObservationIgnored var threadTimelineStateByThread: [String: ThreadTimelineState] = [:]
+    // Service-owned per-thread UI state is delegated into a dedicated timeline store.
+    var timelineRenderSnapshotsByThread: [String: TurnTimelineRenderSnapshot] = [:]
+    @ObservationIgnored var timelineStore = TurnTimelineStore()
     @ObservationIgnored var forkedFromThreadIDByThreadID: [String: String] = [:]
     @ObservationIgnored var renamedThreadNameByThreadID: [String: String] = [:]
     @ObservationIgnored var associatedManagedWorktreePathByThreadID: [String: String] = [:]
     @ObservationIgnored var authoritativeProjectPathByThreadID: [String: String] = [:]
-    @ObservationIgnored var stoppedTurnIDsByThread: [String: Set<String>] = [:]
     // Lazily rebuilt id->index maps keep hot-path message lookups out of repeated linear scans.
-    @ObservationIgnored var messageIndexCacheByThread: [String: [String: Int]] = [:]
-    @ObservationIgnored var latestAssistantOutputByThread: [String: String] = [:]
-    @ObservationIgnored var latestRepoAffectingMessageSignalByThread: [String: String] = [:]
-    @ObservationIgnored var assistantRevertStateCacheByThread: [String: AssistantRevertStateCacheEntry] = [:]
-    @ObservationIgnored var assistantRevertStateRevision: Int = 0
-    @ObservationIgnored var busyRepoRoots: Set<String> = []
-    @ObservationIgnored var busyRepoRootsRevision: Int = 0
+    @ObservationIgnored var threadTimelineStateByThread: [String: ThreadTimelineState] {
+        get { timelineStore.stateByThread }
+        set { timelineStore.stateByThread = newValue }
+    }
+    @ObservationIgnored var stoppedTurnIDsByThread: [String: Set<String>] {
+        get { timelineStore.stoppedTurnIDsByThread }
+        set { timelineStore.stoppedTurnIDsByThread = newValue }
+    }
+    @ObservationIgnored var messageIndexCacheByThread: [String: [String: Int]] {
+        get { timelineStore.messageIndexCacheByThread }
+        set { timelineStore.messageIndexCacheByThread = newValue }
+    }
+    @ObservationIgnored var latestAssistantOutputByThread: [String: String] {
+        get { timelineStore.latestAssistantOutputByThread }
+        set { timelineStore.latestAssistantOutputByThread = newValue }
+    }
+    @ObservationIgnored var latestRepoAffectingMessageSignalByThread: [String: String] {
+        get { timelineStore.latestRepoAffectingMessageSignalByThread }
+        set { timelineStore.latestRepoAffectingMessageSignalByThread = newValue }
+    }
+    @ObservationIgnored var assistantRevertStateCacheByThread: [String: AssistantRevertStateCacheEntry] {
+        get { timelineStore.assistantRevertStateCacheByThread }
+        set { timelineStore.assistantRevertStateCacheByThread = newValue }
+    }
+    @ObservationIgnored var assistantRevertStateRevision: Int {
+        get { timelineStore.assistantRevertStateRevision }
+        set { timelineStore.assistantRevertStateRevision = newValue }
+    }
+    @ObservationIgnored var timelineRefreshInProgressThreadIDs: Set<String> = []
+    @ObservationIgnored var busyRepoRoots: Set<String> {
+        get { timelineStore.busyRepoRoots }
+        set { timelineStore.busyRepoRoots = newValue }
+    }
+    @ObservationIgnored var busyRepoRootsRevision: Int {
+        get { timelineStore.busyRepoRootsRevision }
+        set { timelineStore.busyRepoRootsRevision = newValue }
+    }
 
     let encoder: JSONEncoder
     let decoder: JSONDecoder
-    let messagePersistence = CodexMessagePersistence()
-    let aiChangeSetPersistence = AIChangeSetPersistence()
+    let messagePersistence: CodexMessagePersistence
+    let aiChangeSetPersistence: AIChangeSetPersistence
     let defaults: UserDefaults
     let userNotificationCenter: CodexUserNotificationCentering
     let remoteNotificationRegistrar: CodexRemoteNotificationRegistering
@@ -566,18 +648,44 @@ final class CodexService {
         encoder: JSONEncoder = JSONEncoder(),
         decoder: JSONDecoder = JSONDecoder(),
         defaults: UserDefaults = .standard,
-        userNotificationCenter: CodexUserNotificationCentering = UNUserNotificationCenter.current(),
-        remoteNotificationRegistrar: CodexRemoteNotificationRegistering = CodexApplicationRemoteNotificationRegistrar()
+        messagePersistence: CodexMessagePersistence? = nil,
+        aiChangeSetPersistence: AIChangeSetPersistence? = nil,
+        userNotificationCenter: CodexUserNotificationCentering? = nil,
+        remoteNotificationRegistrar: CodexRemoteNotificationRegistering? = nil,
+        secureStateBootstrap: SecureStateBootstrap? = nil
     ) {
+        let resolvedSecureStateBootstrap = secureStateBootstrap
+            ?? (CodexRuntimeEnvironment.isRunningAutomatedTests ? .ephemeral : .restorePersistedState)
         self.encoder = encoder
         self.decoder = decoder
         self.defaults = defaults
-        self.userNotificationCenter = userNotificationCenter
-        self.remoteNotificationRegistrar = remoteNotificationRegistrar
-        self.phoneIdentityState = codexPhoneIdentityStateFromSecureStore()
-        self.trustedMacRegistry = codexTrustedMacRegistryFromSecureStore()
-        self.lastTrustedMacDeviceId = SecureStore.readString(for: CodexSecureKeys.lastTrustedMacDeviceId)
-        let loadedMessages = messagePersistence.load().mapValues { messages in
+        self.messagePersistence = messagePersistence ?? CodexMessagePersistence()
+        self.aiChangeSetPersistence = aiChangeSetPersistence ?? AIChangeSetPersistence()
+        if let userNotificationCenter {
+            self.userNotificationCenter = userNotificationCenter
+        } else if CodexRuntimeEnvironment.isRunningAutomatedTests {
+            self.userNotificationCenter = CodexNoopUserNotificationCenter()
+        } else {
+            self.userNotificationCenter = UNUserNotificationCenter.current()
+        }
+        if let remoteNotificationRegistrar {
+            self.remoteNotificationRegistrar = remoteNotificationRegistrar
+        } else if CodexRuntimeEnvironment.isRunningAutomatedTests {
+            self.remoteNotificationRegistrar = CodexNoopRemoteNotificationRegistrar()
+        } else {
+            self.remoteNotificationRegistrar = CodexApplicationRemoteNotificationRegistrar()
+        }
+        switch resolvedSecureStateBootstrap {
+        case .restorePersistedState:
+            self.phoneIdentityState = codexPhoneIdentityStateFromSecureStore()
+            self.trustedMacRegistry = codexTrustedMacRegistryFromSecureStore()
+            self.lastTrustedMacDeviceId = SecureStore.readString(for: CodexSecureKeys.lastTrustedMacDeviceId)
+        case .ephemeral:
+            self.phoneIdentityState = codexEphemeralPhoneIdentityState()
+            self.trustedMacRegistry = .empty
+            self.lastTrustedMacDeviceId = nil
+        }
+        let loadedMessages = self.messagePersistence.load().mapValues { messages in
             messages.map { message in
                 var value = message
                 // Streaming cannot survive app relaunch; clear stale flags loaded from disk.
@@ -589,7 +697,7 @@ final class CodexService {
         self.messagesByThread = loadedMessages
         rebuildSubagentIdentityDirectory()
 
-        let loadedChangeSets = aiChangeSetPersistence.load()
+        let loadedChangeSets = self.aiChangeSetPersistence.load()
         self.aiChangeSetsByID = loadedChangeSets.reduce(into: [:]) { partialResult, changeSet in
             partialResult[changeSet.id] = changeSet
         }
@@ -702,31 +810,53 @@ final class CodexService {
             )
         }
 
-        // Restore relay session from Keychain
-        self.relaySessionId = SecureStore.readString(for: CodexSecureKeys.relaySessionId)
-        self.relayUrl = SecureStore.readString(for: CodexSecureKeys.relayUrl)
-        self.relayMacDeviceId = SecureStore.readString(for: CodexSecureKeys.relayMacDeviceId)
-        self.relayMacIdentityPublicKey = SecureStore.readString(for: CodexSecureKeys.relayMacIdentityPublicKey)
-        if let rawProtocolVersion = SecureStore.readString(for: CodexSecureKeys.relayProtocolVersion),
-           let parsedProtocolVersion = Int(rawProtocolVersion) {
-            self.relayProtocolVersion = parsedProtocolVersion
-        } else {
+        switch resolvedSecureStateBootstrap {
+        case .restorePersistedState:
+            // Restore relay session from Keychain.
+            self.relaySessionId = SecureStore.readString(for: CodexSecureKeys.relaySessionId)
+            self.relayUrl = SecureStore.readString(for: CodexSecureKeys.relayUrl)
+            self.relayMacDeviceId = SecureStore.readString(for: CodexSecureKeys.relayMacDeviceId)
+            self.relayMacIdentityPublicKey = SecureStore.readString(for: CodexSecureKeys.relayMacIdentityPublicKey)
+            if let rawProtocolVersion = SecureStore.readString(for: CodexSecureKeys.relayProtocolVersion),
+               let parsedProtocolVersion = Int(rawProtocolVersion) {
+                self.relayProtocolVersion = parsedProtocolVersion
+            } else {
+                self.relayProtocolVersion = codexSecureProtocolVersion
+            }
+            if let rawLastAppliedSeq = SecureStore.readString(for: CodexSecureKeys.relayLastAppliedBridgeOutboundSeq),
+               let parsedLastAppliedSeq = Int(rawLastAppliedSeq) {
+                self.lastAppliedBridgeOutboundSeq = parsedLastAppliedSeq
+            }
+            self.remoteNotificationDeviceToken = SecureStore.readString(for: CodexSecureKeys.pushDeviceToken)
+            if let relayMacDeviceId,
+               let trustedMac = trustedMacRegistry.records[relayMacDeviceId] {
+                self.secureConnectionState = .trustedMac
+                self.secureMacFingerprint = codexSecureFingerprint(for: trustedMac.macIdentityPublicKey)
+            } else if let trustedMac = preferredTrustedMacRecord {
+                self.secureConnectionState = .liveSessionUnresolved
+                self.secureMacFingerprint = codexSecureFingerprint(for: trustedMac.macIdentityPublicKey)
+            }
+        case .ephemeral:
+            self.relaySessionId = nil
+            self.relayUrl = nil
+            self.relayMacDeviceId = nil
+            self.relayMacIdentityPublicKey = nil
             self.relayProtocolVersion = codexSecureProtocolVersion
-        }
-        if let rawLastAppliedSeq = SecureStore.readString(for: CodexSecureKeys.relayLastAppliedBridgeOutboundSeq),
-           let parsedLastAppliedSeq = Int(rawLastAppliedSeq) {
-            self.lastAppliedBridgeOutboundSeq = parsedLastAppliedSeq
-        }
-        self.remoteNotificationDeviceToken = SecureStore.readString(for: CodexSecureKeys.pushDeviceToken)
-        if let relayMacDeviceId,
-           let trustedMac = trustedMacRegistry.records[relayMacDeviceId] {
-            self.secureConnectionState = .trustedMac
-            self.secureMacFingerprint = codexSecureFingerprint(for: trustedMac.macIdentityPublicKey)
-        } else if let trustedMac = preferredTrustedMacRecord {
-            self.secureConnectionState = .liveSessionUnresolved
-            self.secureMacFingerprint = codexSecureFingerprint(for: trustedMac.macIdentityPublicKey)
+            self.lastAppliedBridgeOutboundSeq = 0
+            self.remoteNotificationDeviceToken = nil
         }
         rebuildThreadLookupCaches()
+    }
+
+    deinit {
+        MainActor.assumeIsolated {
+            if CodexRuntimeEnvironment.isRunningAutomatedTests {
+                releaseConnectionResourcesForAutomatedTestDeinit()
+            } else {
+                releaseConnectionResourcesForDeinit()
+            }
+            releaseNotificationResourcesForDeinit()
+        }
     }
 
     // Persists per-thread plan-mode provenance so reconnect/relaunch keeps native vs fallback behavior stable.

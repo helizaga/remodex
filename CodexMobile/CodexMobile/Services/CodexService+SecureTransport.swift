@@ -694,7 +694,9 @@ private extension CodexService {
         switch errorResponse?.code {
         case "session_unavailable":
             secureConnectionState = .liveSessionUnresolved
-            throw CodexTrustedSessionResolveError.macOffline("Your trusted Mac is offline right now.")
+            throw CodexTrustedSessionResolveError.macOffline(
+                "The relay could not find a live session for your trusted Mac right now."
+            )
         case "phone_not_trusted", "invalid_signature":
             secureConnectionState = .rePairRequired
             throw CodexTrustedSessionResolveError.rePairRequired(

@@ -426,9 +426,6 @@ final class AIChangeSetTests: XCTestCase {
 
     private func makeService() -> CodexService {
         let service = CodexService()
-        Self.retainedServices.append(service)
         return service
     }
-
-    private static var retainedServices: [CodexService] = []
 }

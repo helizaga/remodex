@@ -9,7 +9,6 @@ import XCTest
 
 @MainActor
 final class CodexServiceIncomingCommandExecutionTests: XCTestCase {
-    private static var retainedServices: [CodexService] = []
 
     func testLegacyBeginAndModernItemStartedMergeIntoSingleRunRow() {
         let service = makeService()
@@ -691,6 +690,130 @@ final class CodexServiceIncomingCommandExecutionTests: XCTestCase {
         XCTAssertEqual(fileRows[0].itemId, "file-1")
     }
 
+    func testHistoryMergeKeepsDistinctFileChangeRowsFromSameTurnSeparate() {
+        let service = makeService()
+        let threadID = "thread-\(UUID().uuidString)"
+        let turnID = "turn-\(UUID().uuidString)"
+        let now = Date()
+        let appFileChangeText = """
+        Status: completed
+
+        Path: Sources/App.swift
+        Kind: update
+        Totals: +2 -1
+        """
+        let settingsFileChangeText = """
+        Status: completed
+
+        Path: Sources/Settings.swift
+        Kind: update
+        Totals: +5 -3
+        """
+
+        let existing = [
+            CodexMessage(
+                threadId: threadID,
+                role: .system,
+                kind: .fileChange,
+                text: appFileChangeText,
+                createdAt: now,
+                turnId: turnID,
+                itemId: nil,
+                isStreaming: false,
+                deliveryState: .confirmed
+            ),
+            CodexMessage(
+                threadId: threadID,
+                role: .system,
+                kind: .fileChange,
+                text: settingsFileChangeText,
+                createdAt: now.addingTimeInterval(0.1),
+                turnId: turnID,
+                itemId: nil,
+                isStreaming: false,
+                deliveryState: .confirmed
+            ),
+        ]
+        let history = [
+            CodexMessage(
+                threadId: threadID,
+                role: .system,
+                kind: .fileChange,
+                text: appFileChangeText,
+                createdAt: now.addingTimeInterval(0.2),
+                turnId: turnID,
+                itemId: "file-app",
+                isStreaming: false,
+                deliveryState: .confirmed
+            ),
+            CodexMessage(
+                threadId: threadID,
+                role: .system,
+                kind: .fileChange,
+                text: settingsFileChangeText,
+                createdAt: now.addingTimeInterval(0.3),
+                turnId: turnID,
+                itemId: "file-settings",
+                isStreaming: false,
+                deliveryState: .confirmed
+            ),
+        ]
+
+        let merged = service.mergeHistoryMessages(existing, history)
+        let fileRows = merged.filter { $0.role == .system && $0.kind == .fileChange }
+
+        XCTAssertEqual(fileRows.count, 2)
+        XCTAssertEqual(fileRows.map(\.itemId), ["file-app", "file-settings"])
+        XCTAssertEqual(fileRows.map(\.text), [appFileChangeText, settingsFileChangeText])
+    }
+
+    func testHistoryMergeUpgradesSyntheticFileChangeIdentityToRealItemID() {
+        let service = makeService()
+        let threadID = "thread-\(UUID().uuidString)"
+        let turnID = "turn-\(UUID().uuidString)"
+        let now = Date()
+        let fileChangeText = """
+        Status: completed
+
+        Path: Sources/App.swift
+        Kind: update
+        Totals: +2 -1
+        """
+
+        let existing = [
+            CodexMessage(
+                threadId: threadID,
+                role: .system,
+                kind: .fileChange,
+                text: fileChangeText,
+                createdAt: now,
+                turnId: turnID,
+                itemId: "turn:\(turnID)|kind:fileChange",
+                isStreaming: true,
+                deliveryState: .confirmed
+            ),
+        ]
+        let history = [
+            CodexMessage(
+                threadId: threadID,
+                role: .system,
+                kind: .fileChange,
+                text: fileChangeText,
+                createdAt: now.addingTimeInterval(0.2),
+                turnId: turnID,
+                itemId: "file-1",
+                isStreaming: false,
+                deliveryState: .confirmed
+            ),
+        ]
+
+        let merged = service.mergeHistoryMessages(existing, history)
+        let fileRows = merged.filter { $0.role == .system && $0.kind == .fileChange }
+
+        XCTAssertEqual(fileRows.count, 1)
+        XCTAssertEqual(fileRows[0].itemId, "file-1")
+    }
+
     func testHistoryUserMessageReconcilesPendingPhoneRowWhenHistoryOmitsLocalMetadata() {
         let service = makeService()
         let threadID = "thread-\(UUID().uuidString)"
@@ -1310,9 +1433,6 @@ final class CodexServiceIncomingCommandExecutionTests: XCTestCase {
         defaults.removePersistentDomain(forName: suiteName)
         let service = CodexService(defaults: defaults)
         service.messagesByThread = [:]
-        // CodexService currently crashes while deallocating in unit-test environment.
-        // Keep instances alive for the process lifetime so assertions can run deterministically.
-        Self.retainedServices.append(service)
         return service
     }
 }

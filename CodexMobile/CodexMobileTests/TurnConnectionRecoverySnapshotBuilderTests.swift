@@ -18,12 +18,12 @@ final class TurnConnectionRecoverySnapshotBuilderTests: XCTestCase {
             isConnecting: false,
             shouldAutoReconnectOnForeground: true,
             isRetryingConnectionRecovery: true,
-            lastErrorMessage: "Trying to reach your saved Mac. Remodex will keep retrying."
+            lastErrorMessage: "Trying to reach your saved Mac. Remodex will keep retrying. If you restarted the bridge on your Mac, scan the new QR code."
         )
 
         XCTAssertEqual(snapshot?.status, .interrupted)
         XCTAssertEqual(snapshot?.trailingStyle, .action("Wake Screen"))
-        XCTAssertEqual(snapshot?.summary, "Trying to reach your saved Mac. Remodex will keep retrying.")
+        XCTAssertEqual(snapshot?.summary, "Trying to reach your saved Mac. Remodex will keep retrying. If you restarted the bridge on your Mac, scan the new QR code.")
     }
 
     func testReconnectProgressStillShowsBeforeManualWakeFallbackIsUnlocked() {
@@ -36,7 +36,7 @@ final class TurnConnectionRecoverySnapshotBuilderTests: XCTestCase {
             isConnecting: false,
             shouldAutoReconnectOnForeground: true,
             isRetryingConnectionRecovery: true,
-            lastErrorMessage: "Trying to reach your saved Mac. Remodex will keep retrying."
+            lastErrorMessage: "Trying to reach your saved Mac. Remodex will keep retrying. If you restarted the bridge on your Mac, scan the new QR code."
         )
 
         XCTAssertEqual(snapshot?.status, .reconnecting)

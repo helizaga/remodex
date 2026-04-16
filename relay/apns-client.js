@@ -39,30 +39,35 @@ function createAPNsClient({
       throw apnsError("invalid_device_token", "A valid APNs device token is required.", 400);
     }
 
-    const authority = apnsEnvironment === "development"
-      ? "https://api.sandbox.push.apple.com"
-      : "https://api.push.apple.com";
+    const authority =
+      apnsEnvironment === "development"
+        ? "https://api.sandbox.push.apple.com"
+        : "https://api.push.apple.com";
     const client = http2Connect(authority);
 
     try {
-      const response = await sendRequest(client, {
-        ":method": "POST",
-        ":path": `/3/device/${normalizedDeviceToken}`,
-        authorization: `bearer ${authorizationToken()}`,
-        "apns-topic": bundleId,
-        "apns-push-type": "alert",
-        "apns-priority": "10",
-        "content-type": "application/json",
-      }, JSON.stringify({
-        aps: {
-          alert: {
-            title: normalizeString(title) || "Remodex",
-            body: normalizeString(body) || "Response ready",
-          },
-          sound: "default",
+      const response = await sendRequest(
+        client,
+        {
+          ":method": "POST",
+          ":path": `/3/device/${normalizedDeviceToken}`,
+          authorization: `bearer ${authorizationToken()}`,
+          "apns-topic": bundleId,
+          "apns-push-type": "alert",
+          "apns-priority": "10",
+          "content-type": "application/json",
         },
-        ...payload,
-      }));
+        JSON.stringify({
+          aps: {
+            alert: {
+              title: normalizeString(title) || "Remodex",
+              body: normalizeString(body) || "Response ready",
+            },
+            sound: "default",
+          },
+          ...payload,
+        })
+      );
 
       if (response.status >= 400) {
         throw apnsError(

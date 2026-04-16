@@ -1,18 +1,84 @@
-// FILE: bridge.test.js
-// Purpose: Verifies relay watchdog helpers used to recover from stale sleep/wake sockets.
-// Layer: Unit test
-// Exports: node:test suite
-// Depends on: node:test, node:assert/strict, ../src/bridge
-
 const test = require("node:test");
 const assert = require("node:assert/strict");
+
 const {
   buildHeartbeatBridgeStatus,
   createMacOSBridgeWakeAssertion,
   hasRelayConnectionGoneStale,
+  isActiveRelaySocket,
+  nextRelayReconnectDelayMs,
   persistBridgePreferences,
+  redactedRelayCloseReason,
+  relayCloseDiagnostic,
+  shouldShutdownOnRelayCloseCode,
   sanitizeThreadHistoryImagesForRelay,
 } = require("../src/bridge");
+
+test("isActiveRelaySocket only accepts the current relay socket", () => {
+  const currentSocket = { id: "current" };
+  const staleSocket = { id: "stale" };
+
+  assert.equal(isActiveRelaySocket(currentSocket, currentSocket), true);
+  assert.equal(isActiveRelaySocket(currentSocket, staleSocket), false);
+  assert.equal(isActiveRelaySocket(null, staleSocket), false);
+});
+
+test("nextRelayReconnectDelayMs backs off exponentially and caps the delay", () => {
+  assert.equal(nextRelayReconnectDelayMs(1), 1_000);
+  assert.equal(nextRelayReconnectDelayMs(2), 2_000);
+  assert.equal(nextRelayReconnectDelayMs(3), 4_000);
+  assert.equal(nextRelayReconnectDelayMs(6), 30_000);
+  assert.equal(nextRelayReconnectDelayMs(10), 30_000);
+});
+
+test("shouldShutdownOnRelayCloseCode only fails closed for invalid relay sessions", () => {
+  assert.equal(shouldShutdownOnRelayCloseCode(4000), true);
+  assert.equal(shouldShutdownOnRelayCloseCode(4001), true);
+  assert.equal(shouldShutdownOnRelayCloseCode(4005), true);
+  assert.equal(shouldShutdownOnRelayCloseCode(4002), false);
+  assert.equal(shouldShutdownOnRelayCloseCode(1006), false);
+});
+
+test("relayCloseDiagnostic classifies saved-session and permanent reconnect failures", () => {
+  assert.deepEqual(relayCloseDiagnostic(4002), {
+    code: "saved_session_unavailable",
+    message: "The saved session expired or is temporarily unavailable. Retrying...",
+    isPermanent: false,
+  });
+
+  assert.deepEqual(relayCloseDiagnostic(4000), {
+    code: "re_pair_required",
+    message: "This relay pairing is no longer valid. Scan a new QR code to reconnect.",
+    isPermanent: true,
+  });
+
+  assert.deepEqual(relayCloseDiagnostic(4005), {
+    code: "re_pair_required",
+    message:
+      "This saved relay session is no longer trusted by the Mac. Scan a new QR code to reconnect.",
+    isPermanent: true,
+  });
+
+  assert.deepEqual(relayCloseDiagnostic(4010, "relay proxy reset"), {
+    code: "relay_temporarily_unavailable",
+    message: "The relay connection closed unexpectedly: [redacted]",
+    isPermanent: false,
+  });
+
+  assert.deepEqual(relayCloseDiagnostic(4010), {
+    code: "relay_temporarily_unavailable",
+    message: "The relay or network is temporarily unavailable.",
+    isPermanent: false,
+  });
+});
+
+test("redactedRelayCloseReason hides non-empty relay close reasons from logs", () => {
+  assert.equal(redactedRelayCloseReason("sessionId=abc123"), "[redacted]");
+  assert.equal(redactedRelayCloseReason("   relay rejected   "), "[redacted]");
+  assert.equal(redactedRelayCloseReason(""), "");
+  assert.equal(redactedRelayCloseReason("   "), "");
+  assert.equal(redactedRelayCloseReason(null), "");
+});
 
 test("hasRelayConnectionGoneStale returns true once the relay silence crosses the timeout", () => {
   assert.equal(
@@ -115,9 +181,7 @@ test("sanitizeThreadHistoryImagesForRelay replaces inline history images with li
     },
   });
 
-  const sanitized = JSON.parse(
-    sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/read")
-  );
+  const sanitized = JSON.parse(sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/read"));
   const content = sanitized.result.thread.turns[0].items[0].content;
 
   assert.deepEqual(content[0], {
@@ -138,10 +202,7 @@ test("sanitizeThreadHistoryImagesForRelay leaves unrelated RPC payloads unchange
     },
   });
 
-  assert.equal(
-    sanitizeThreadHistoryImagesForRelay(rawMessage, "turn/start"),
-    rawMessage
-  );
+  assert.equal(sanitizeThreadHistoryImagesForRelay(rawMessage, "turn/start"), rawMessage);
 });
 
 test("createMacOSBridgeWakeAssertion spawns a macOS caffeinate idle-sleep assertion tied to the bridge pid", () => {
@@ -165,11 +226,13 @@ test("createMacOSBridgeWakeAssertion spawns a macOS caffeinate idle-sleep assert
   });
 
   assert.equal(assertion.active, true);
-  assert.deepEqual(spawnCalls, [{
-    command: "/usr/bin/caffeinate",
-    args: ["-i", "-w", "4242"],
-    options: { stdio: "ignore" },
-  }]);
+  assert.deepEqual(spawnCalls, [
+    {
+      command: "/usr/bin/caffeinate",
+      args: ["-i", "-w", "4242"],
+      options: { stdio: "ignore" },
+    },
+  ]);
 
   assertion.stop();
   assert.equal(fakeChild.killed, true);
@@ -246,11 +309,13 @@ test("persistBridgePreferences only saves the daemon preference field", () => {
     }
   );
 
-  assert.deepEqual(writes, [{
-    relayUrl: "ws://127.0.0.1:9000/relay",
-    refreshEnabled: true,
-    keepMacAwakeEnabled: false,
-  }]);
+  assert.deepEqual(writes, [
+    {
+      relayUrl: "ws://127.0.0.1:9000/relay",
+      refreshEnabled: true,
+      keepMacAwakeEnabled: false,
+    },
+  ]);
 });
 
 test("sanitizeThreadHistoryImagesForRelay strips bulky compaction replacement history", () => {
@@ -295,9 +360,7 @@ test("sanitizeThreadHistoryImagesForRelay strips bulky compaction replacement hi
     },
   });
 
-  const sanitized = JSON.parse(
-    sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/resume")
-  );
+  const sanitized = JSON.parse(sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/resume"));
   const items = sanitized.result.thread.turns[0].items;
 
   assert.deepEqual(items[0], {
@@ -311,4 +374,132 @@ test("sanitizeThreadHistoryImagesForRelay strips bulky compaction replacement hi
     id: "item-compaction-camel",
     type: "contextCompaction",
   });
+});
+
+test("sanitizeThreadHistoryImagesForRelay recursively elides inline image payload fields outside content arrays", () => {
+  const rawMessage = JSON.stringify({
+    id: "req-thread-read-recursive",
+    result: {
+      thread: {
+        id: "thread-recursive-images",
+        turns: [
+          {
+            id: "turn-1",
+            items: [
+              {
+                id: "item-recursive-image",
+                type: "user_message",
+                attachment: {
+                  sourceURL: "data:image/png;base64,AAAA",
+                  payloadDataURL: "data:image/png;base64,BBBB",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    },
+  });
+
+  const sanitized = JSON.parse(sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/read"));
+  const attachment = sanitized.result.thread.turns[0].items[0].attachment;
+
+  assert.deepEqual(attachment, {
+    sourceURL: "remodex://history-image-elided",
+  });
+});
+
+test("sanitizeThreadHistoryImagesForRelay strips attachment previews once the sanitized thread is still too large", () => {
+  const rawMessage = JSON.stringify({
+    id: "req-thread-read-soft-cap",
+    result: {
+      thread: {
+        id: "thread-soft-cap",
+        turns: [
+          {
+            id: "turn-1",
+            items: [
+              {
+                id: "item-attachment-preview",
+                type: "user_message",
+                attachment: {
+                  thumbnailBase64JPEG: "A".repeat(10_000),
+                  sourceURL: "http://127.0.0.1/image.png",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    },
+  });
+
+  const sanitized = JSON.parse(
+    sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/read", {
+      softCapBytes: 1_000,
+    })
+  );
+  const attachment = sanitized.result.thread.turns[0].items[0].attachment;
+
+  assert.deepEqual(attachment, {
+    thumbnailBase64JPEG: "",
+    sourceURL: "http://127.0.0.1/image.png",
+  });
+});
+
+test("sanitizeThreadHistoryImagesForRelay drops oldest turns once sanitizing still exceeds the relay budget", () => {
+  const oversizedText = "x".repeat(4_096);
+  const rawMessage = JSON.stringify({
+    id: "req-thread-read-truncated",
+    result: {
+      thread: {
+        id: "thread-large-history",
+        turns: [
+          {
+            id: "turn-1",
+            items: [
+              {
+                id: "item-1",
+                type: "assistant_message",
+                text: oversizedText,
+              },
+            ],
+          },
+          {
+            id: "turn-2",
+            items: [
+              {
+                id: "item-2",
+                type: "assistant_message",
+                text: oversizedText,
+              },
+            ],
+          },
+          {
+            id: "turn-3",
+            items: [
+              {
+                id: "item-3",
+                type: "assistant_message",
+                text: "latest",
+              },
+            ],
+          },
+        ],
+      },
+    },
+  });
+
+  const sanitized = JSON.parse(
+    sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/read", {
+      softCapBytes: 5_000,
+    })
+  );
+
+  assert.equal(sanitized.result.thread.relayHistoryTruncated, true);
+  assert.equal(sanitized.result.thread.relayHistoryDroppedTurns, 1);
+  assert.deepEqual(
+    sanitized.result.thread.turns.map((turn) => turn.id),
+    ["turn-2", "turn-3"]
+  );
 });

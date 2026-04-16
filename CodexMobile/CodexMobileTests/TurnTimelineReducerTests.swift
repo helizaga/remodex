@@ -1584,6 +1584,7 @@ final class TurnTimelineReducerTests: XCTestCase {
         XCTAssertEqual(mermaidSegmentKinds(in: finalizedModel.mermaidContent), [.markdown, .mermaid])
     }
 
+    @MainActor
     func testAssistantBlockInfoShowsCopyWhenLatestRunCompleted() {
         let now = Date()
         let messages = [
@@ -1606,9 +1607,10 @@ final class TurnTimelineReducerTests: XCTestCase {
             stoppedTurnIDs: []
         )
 
-        XCTAssertEqual(blockInfo, ["Completed response"])
+        XCTAssertEqual(blockInfo[0]?.copyText, "Completed response")
     }
 
+    @MainActor
     func testAssistantBlockInfoHidesCopyWhenLatestRunStopped() {
         let now = Date()
         let messages = [
@@ -1631,9 +1633,10 @@ final class TurnTimelineReducerTests: XCTestCase {
             stoppedTurnIDs: ["turn-1"]
         )
 
-        XCTAssertEqual(blockInfo, [nil])
+        XCTAssertNil(blockInfo[0])
     }
 
+    @MainActor
     func testAssistantBlockInfoDeduplicatesEquivalentSingleFileDiffSnapshots() {
         let now = Date()
         let diffCode = """
@@ -1708,6 +1711,7 @@ final class TurnTimelineReducerTests: XCTestCase {
         XCTAssertEqual(blockInfo[2]?.blockDiffEntries?.first?.deletions, 0)
     }
 
+    @MainActor
     func testAssistantBlockInfoMergesDifferentSnapshotsForSameFile() {
         let now = Date()
         let firstDiff = """
@@ -1783,6 +1787,7 @@ final class TurnTimelineReducerTests: XCTestCase {
         XCTAssertEqual(blockInfo[2]?.blockDiffEntries?.first?.deletions, 0)
     }
 
+    @MainActor
     func testAssistantBlockInfoPrefersLatestSummaryTotalsAfterDiffChunk() {
         let now = Date()
         let diffCode = """
@@ -1850,6 +1855,7 @@ final class TurnTimelineReducerTests: XCTestCase {
         XCTAssertEqual(blockInfo[2]?.blockDiffText?.contains("```diff"), true)
     }
 
+    @MainActor
     func testAssistantBlockInfoPrefersInlineTotalsOverSameMessageDiffCounts() {
         let now = Date()
         let diffCode = """
@@ -1903,6 +1909,7 @@ final class TurnTimelineReducerTests: XCTestCase {
         XCTAssertEqual(blockInfo[1]?.blockDiffText?.contains("```diff"), true)
     }
 
+    @MainActor
     func testAssistantBlockInfoKeepsRepeatedSameFileChunksAtFinalTotals() {
         let now = Date()
         let firstDiff = """
@@ -1967,6 +1974,7 @@ final class TurnTimelineReducerTests: XCTestCase {
         XCTAssertEqual(blockInfo[1]?.blockDiffText?.contains("secondChange"), true)
     }
 
+    @MainActor
     func testAssistantBlockInfoKeepsSummaryOnlyFileWhenSiblingHasDiffChunk() {
         let now = Date()
         let diffCode = """
@@ -2034,6 +2042,7 @@ final class TurnTimelineReducerTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testAssistantBlockInfoKeepsSummaryOnlyEntriesWithoutDiffFencesSeparated() {
         let now = Date()
         let messages = [
@@ -2093,6 +2102,7 @@ final class TurnTimelineReducerTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testAssistantBlockInfoDoesNotDoubleCountIdenticalSummaryOnlySnapshots() {
         let now = Date()
         let messages = [
@@ -2221,6 +2231,7 @@ final class TurnTimelineReducerTests: XCTestCase {
 }
 
 final class TurnScrollStateTrackerTests: XCTestCase {
+    @MainActor
     func testUserDragImmediatelySwitchesFollowBottomToManual() {
         XCTAssertEqual(
             TurnScrollStateTracker.modeAfterUserDragBegan(currentMode: .followBottom),
@@ -2228,6 +2239,7 @@ final class TurnScrollStateTrackerTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testUserDragKeepsAssistantAnchorModeUntilAnchorCompletes() {
         XCTAssertEqual(
             TurnScrollStateTracker.modeAfterUserDragBegan(currentMode: .anchorAssistantResponse),
@@ -2235,6 +2247,7 @@ final class TurnScrollStateTrackerTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testUserDragEndingAtBottomRestoresFollowBottom() {
         XCTAssertEqual(
             TurnScrollStateTracker.modeAfterUserDragEnded(
@@ -2245,6 +2258,7 @@ final class TurnScrollStateTrackerTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testUserDragEndingAwayFromBottomKeepsManualMode() {
         XCTAssertEqual(
             TurnScrollStateTracker.modeAfterUserDragEnded(

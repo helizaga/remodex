@@ -16,6 +16,15 @@ struct RPCMessage: Codable, Sendable {
     let result: JSONValue?
     let error: RPCError?
 
+    enum CodingKeys: String, CodingKey {
+        case jsonrpc
+        case id
+        case method
+        case params
+        case result
+        case error
+    }
+
     // --- Convenience initializers ---------------------------------------------
 
     // Builds an RPC request/notification payload to send over WebSocket.
@@ -64,20 +73,40 @@ struct RPCMessage: Codable, Sendable {
         self.result = result
         self.error = error
     }
+
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        jsonrpc = try container.decodeIfPresent(String.self, forKey: .jsonrpc)
+        id = try container.decodeIfPresent(JSONValue.self, forKey: .id)
+        method = try container.decodeIfPresent(String.self, forKey: .method)
+        params = try container.decodeIfPresent(JSONValue.self, forKey: .params)
+        result = try container.decodeIfPresent(JSONValue.self, forKey: .result)
+        error = try container.decodeIfPresent(RPCError.self, forKey: .error)
+    }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(jsonrpc, forKey: .jsonrpc)
+        try container.encodeIfPresent(id, forKey: .id)
+        try container.encodeIfPresent(method, forKey: .method)
+        try container.encodeIfPresent(params, forKey: .params)
+        try container.encodeIfPresent(result, forKey: .result)
+        try container.encodeIfPresent(error, forKey: .error)
+    }
 }
 
 extension RPCMessage {
     // --- Message kind helpers -------------------------------------------------
 
-    var isRequest: Bool {
+    nonisolated var isRequest: Bool {
         method != nil
     }
 
-    var isResponse: Bool {
+    nonisolated var isResponse: Bool {
         result != nil || error != nil
     }
 
-    var isErrorResponse: Bool {
+    nonisolated var isErrorResponse: Bool {
         error != nil
     }
 }
@@ -91,5 +120,25 @@ struct RPCError: Codable, Error, Sendable {
         self.code = code
         self.message = message
         self.data = data
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case code
+        case message
+        case data
+    }
+
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        code = try container.decode(Int.self, forKey: .code)
+        message = try container.decode(String.self, forKey: .message)
+        data = try container.decodeIfPresent(JSONValue.self, forKey: .data)
+    }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(code, forKey: .code)
+        try container.encode(message, forKey: .message)
+        try container.encodeIfPresent(data, forKey: .data)
     }
 }

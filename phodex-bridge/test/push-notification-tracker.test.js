@@ -24,56 +24,68 @@ test("push tracker sends one completion push with a stable ready body", async ()
     previewMaxChars: 80,
   });
 
-  tracker.handleOutbound(JSON.stringify({
-    method: "thread/started",
-    params: {
-      thread: {
-        id: "thread-1",
-        title: "Fix auth bug",
+  tracker.handleOutbound(
+    JSON.stringify({
+      method: "thread/started",
+      params: {
+        thread: {
+          id: "thread-1",
+          title: "Fix auth bug",
+        },
       },
-    },
-  }));
-  tracker.handleOutbound(JSON.stringify({
-    method: "turn/started",
-    params: {
-      threadId: "thread-1",
-      turnId: "turn-1",
-    },
-  }));
-  tracker.handleOutbound(JSON.stringify({
-    method: "item/agentMessage/delta",
-    params: {
-      threadId: "thread-1",
-      turnId: "turn-1",
-      delta: "Looking at the login flow.",
-    },
-  }));
-  tracker.handleOutbound(JSON.stringify({
-    method: "item/completed",
-    params: {
-      threadId: "thread-1",
-      turnId: "turn-1",
-      item: {
-        type: "agent_message",
-        role: "assistant",
-        text: "The login fix is ready to review.",
+    })
+  );
+  tracker.handleOutbound(
+    JSON.stringify({
+      method: "turn/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
       },
-    },
-  }));
-  tracker.handleOutbound(JSON.stringify({
-    method: "turn/completed",
-    params: {
-      threadId: "thread-1",
-      turnId: "turn-1",
-    },
-  }));
-  tracker.handleOutbound(JSON.stringify({
-    method: "turn/completed",
-    params: {
-      threadId: "thread-1",
-      turnId: "turn-1",
-    },
-  }));
+    })
+  );
+  tracker.handleOutbound(
+    JSON.stringify({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        delta: "Looking at the login flow.",
+      },
+    })
+  );
+  tracker.handleOutbound(
+    JSON.stringify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agent_message",
+          role: "assistant",
+          text: "The login fix is ready to review.",
+        },
+      },
+    })
+  );
+  tracker.handleOutbound(
+    JSON.stringify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+      },
+    })
+  );
+  tracker.handleOutbound(
+    JSON.stringify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+      },
+    })
+  );
 
   await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -98,32 +110,38 @@ test("push tracker ignores non-assistant item completions when a turn finishes",
     },
   });
 
-  tracker.handleOutbound(JSON.stringify({
-    method: "turn/started",
-    params: {
-      threadId: "thread-tools",
-      turnId: "turn-tools",
-    },
-  }));
-  tracker.handleOutbound(JSON.stringify({
-    method: "item/completed",
-    params: {
-      threadId: "thread-tools",
-      turnId: "turn-tools",
-      item: {
-        type: "commandExecution",
-        status: "completed",
-        command: "/bin/zsh -lc \"echo one\"",
+  tracker.handleOutbound(
+    JSON.stringify({
+      method: "turn/started",
+      params: {
+        threadId: "thread-tools",
+        turnId: "turn-tools",
       },
-    },
-  }));
-  tracker.handleOutbound(JSON.stringify({
-    method: "turn/completed",
-    params: {
-      threadId: "thread-tools",
-      turnId: "turn-tools",
-    },
-  }));
+    })
+  );
+  tracker.handleOutbound(
+    JSON.stringify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-tools",
+        turnId: "turn-tools",
+        item: {
+          type: "commandExecution",
+          status: "completed",
+          command: '/bin/zsh -lc "echo one"',
+        },
+      },
+    })
+  );
+  tracker.handleOutbound(
+    JSON.stringify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-tools",
+        turnId: "turn-tools",
+      },
+    })
+  );
 
   await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -144,31 +162,37 @@ test("push tracker uses failure previews for failed turns", async () => {
     },
   });
 
-  tracker.handleOutbound(JSON.stringify({
-    method: "turn/started",
-    params: {
-      threadId: "thread-2",
-      turnId: "turn-2",
-    },
-  }));
-  tracker.handleOutbound(JSON.stringify({
-    method: "turn/failed",
-    params: {
-      threadId: "thread-2",
-      turnId: "turn-2",
-      message: "Tests failed on CI.",
-    },
-  }));
-  tracker.handleOutbound(JSON.stringify({
-    method: "turn/completed",
-    params: {
-      threadId: "thread-2",
-      turnId: "turn-2",
-      turn: {
-        status: "failed",
+  tracker.handleOutbound(
+    JSON.stringify({
+      method: "turn/started",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-2",
       },
-    },
-  }));
+    })
+  );
+  tracker.handleOutbound(
+    JSON.stringify({
+      method: "turn/failed",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-2",
+        message: "Tests failed on CI.",
+      },
+    })
+  );
+  tracker.handleOutbound(
+    JSON.stringify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-2",
+        turn: {
+          status: "failed",
+        },
+      },
+    })
+  );
 
   await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -190,21 +214,25 @@ test("push tracker sends a failed push for terminal error events", async () => {
     },
   });
 
-  tracker.handleOutbound(JSON.stringify({
-    method: "turn/started",
-    params: {
-      threadId: "thread-error",
-      turnId: "turn-error",
-    },
-  }));
-  tracker.handleOutbound(JSON.stringify({
-    method: "error",
-    params: {
-      threadId: "thread-error",
-      turnId: "turn-error",
-      message: "Connection dropped while applying the patch.",
-    },
-  }));
+  tracker.handleOutbound(
+    JSON.stringify({
+      method: "turn/started",
+      params: {
+        threadId: "thread-error",
+        turnId: "turn-error",
+      },
+    })
+  );
+  tracker.handleOutbound(
+    JSON.stringify({
+      method: "error",
+      params: {
+        threadId: "thread-error",
+        turnId: "turn-error",
+        message: "Connection dropped while applying the patch.",
+      },
+    })
+  );
 
   await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -228,40 +256,48 @@ test("push tracker dedupes turnless terminal thread statuses per time bucket", a
     now: () => currentTime,
   });
 
-  tracker.handleOutbound(JSON.stringify({
-    method: "thread/started",
-    params: {
-      thread: {
-        id: "thread-status",
-        title: "Status-only runtime",
+  tracker.handleOutbound(
+    JSON.stringify({
+      method: "thread/started",
+      params: {
+        thread: {
+          id: "thread-status",
+          title: "Status-only runtime",
+        },
       },
-    },
-  }));
-  tracker.handleOutbound(JSON.stringify({
-    method: "thread/status/changed",
-    params: {
-      threadId: "thread-status",
-      status: "completed",
-    },
-  }));
-  tracker.handleOutbound(JSON.stringify({
-    method: "thread/status/changed",
-    params: {
-      threadId: "thread-status",
-      status: "completed",
-    },
-  }));
+    })
+  );
+  tracker.handleOutbound(
+    JSON.stringify({
+      method: "thread/status/changed",
+      params: {
+        threadId: "thread-status",
+        status: "completed",
+      },
+    })
+  );
+  tracker.handleOutbound(
+    JSON.stringify({
+      method: "thread/status/changed",
+      params: {
+        threadId: "thread-status",
+        status: "completed",
+      },
+    })
+  );
 
   await new Promise((resolve) => setTimeout(resolve, 10));
 
   currentTime = 31_000;
-  tracker.handleOutbound(JSON.stringify({
-    method: "thread/status/changed",
-    params: {
-      threadId: "thread-status",
-      status: "completed",
-    },
-  }));
+  tracker.handleOutbound(
+    JSON.stringify({
+      method: "thread/status/changed",
+      params: {
+        threadId: "thread-status",
+        status: "completed",
+      },
+    })
+  );
 
   await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -287,22 +323,26 @@ test("push tracker ignores thread-status fallback after a turn completion alread
     now: () => currentTime,
   });
 
-  tracker.handleOutbound(JSON.stringify({
-    method: "turn/completed",
-    params: {
-      threadId: "thread-mixed-runtime",
-      turnId: "turn-mixed-runtime",
-    },
-  }));
+  tracker.handleOutbound(
+    JSON.stringify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-mixed-runtime",
+        turnId: "turn-mixed-runtime",
+      },
+    })
+  );
 
   currentTime = 1_000;
-  tracker.handleOutbound(JSON.stringify({
-    method: "thread/status/changed",
-    params: {
-      threadId: "thread-mixed-runtime",
-      status: "completed",
-    },
-  }));
+  tracker.handleOutbound(
+    JSON.stringify({
+      method: "thread/status/changed",
+      params: {
+        threadId: "thread-mixed-runtime",
+        status: "completed",
+      },
+    })
+  );
 
   await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -326,31 +366,37 @@ test("push tracker clears fallback suppression when a new turn starts", async ()
     now: () => currentTime,
   });
 
-  tracker.handleOutbound(JSON.stringify({
-    method: "turn/completed",
-    params: {
-      threadId: "thread-queued-runtime",
-      turnId: "turn-a",
-    },
-  }));
+  tracker.handleOutbound(
+    JSON.stringify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-queued-runtime",
+        turnId: "turn-a",
+      },
+    })
+  );
 
   currentTime = 1_000;
-  tracker.handleOutbound(JSON.stringify({
-    method: "turn/started",
-    params: {
-      threadId: "thread-queued-runtime",
-      turnId: "turn-b",
-    },
-  }));
+  tracker.handleOutbound(
+    JSON.stringify({
+      method: "turn/started",
+      params: {
+        threadId: "thread-queued-runtime",
+        turnId: "turn-b",
+      },
+    })
+  );
 
   currentTime = 2_000;
-  tracker.handleOutbound(JSON.stringify({
-    method: "thread/status/changed",
-    params: {
-      threadId: "thread-queued-runtime",
-      status: "completed",
-    },
-  }));
+  tracker.handleOutbound(
+    JSON.stringify({
+      method: "thread/status/changed",
+      params: {
+        threadId: "thread-queued-runtime",
+        status: "completed",
+      },
+    })
+  );
 
   await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -375,25 +421,29 @@ test("push tracker expires old sent dedupe keys", async () => {
     now: () => currentTime,
   });
 
-  tracker.handleOutbound(JSON.stringify({
-    method: "turn/completed",
-    params: {
-      threadId: "thread-expiry",
-      turnId: "turn-expiry",
-    },
-  }));
+  tracker.handleOutbound(
+    JSON.stringify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-expiry",
+        turnId: "turn-expiry",
+      },
+    })
+  );
 
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(notifications.length, 1);
 
   currentTime = 24 * 60 * 60 * 1000 + 1;
-  tracker.handleOutbound(JSON.stringify({
-    method: "turn/completed",
-    params: {
-      threadId: "thread-expiry",
-      turnId: "turn-expiry",
-    },
-  }));
+  tracker.handleOutbound(
+    JSON.stringify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-expiry",
+        turnId: "turn-expiry",
+      },
+    })
+  );
 
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(notifications.length, 2);
@@ -412,26 +462,31 @@ test("notifications handler forwards device registration to the push service cli
   });
 
   const responses = [];
-  const handled = handler.handleNotificationsRequest(JSON.stringify({
-    id: "request-1",
-    method: "notifications/push/register",
-    params: {
-      deviceToken: "aabbcc",
-      alertsEnabled: true,
-      authorizationStatus: "authorized",
-      appEnvironment: "development",
-    },
-  }), (message) => {
-    responses.push(JSON.parse(message));
-  });
+  const handled = handler.handleNotificationsRequest(
+    JSON.stringify({
+      id: "request-1",
+      method: "notifications/push/register",
+      params: {
+        deviceToken: "aabbcc",
+        alertsEnabled: true,
+        authorizationStatus: "authorized",
+        appEnvironment: "development",
+      },
+    }),
+    (message) => {
+      responses.push(JSON.parse(message));
+    }
+  );
 
   await new Promise((resolve) => setTimeout(resolve, 10));
 
   assert.equal(handled, true);
-  assert.deepEqual(registrations, [{
-    deviceToken: "aabbcc",
-    alertsEnabled: true,
-    apnsEnvironment: "development",
-  }]);
+  assert.deepEqual(registrations, [
+    {
+      deviceToken: "aabbcc",
+      alertsEnabled: true,
+      apnsEnvironment: "development",
+    },
+  ]);
   assert.equal(responses[0]?.result?.ok, true);
 });

@@ -116,7 +116,9 @@ async function workspaceRevertPatchApply(repoRoot, params) {
     return {
       success: false,
       revertedFiles: [],
-      conflicts: parseApplyConflicts(applyResult.stderr || applyResult.stdout || "Patch does not apply."),
+      conflicts: parseApplyConflicts(
+        applyResult.stderr || applyResult.stdout || "Patch does not apply."
+      ),
       unsupportedReasons: [],
       stagedFiles: [],
       status: await gitStatus(repoRoot).catch(() => null),
@@ -135,8 +137,7 @@ async function workspaceRevertPatchApply(repoRoot, params) {
 }
 
 function resolveForwardPatch(params) {
-  const forwardPatch =
-    typeof params.forwardPatch === "string" ? params.forwardPatch : "";
+  const forwardPatch = typeof params.forwardPatch === "string" ? params.forwardPatch : "";
 
   if (!forwardPatch.trim()) {
     throw workspaceError("missing_patch", "The request must include a non-empty forwardPatch.");
@@ -211,17 +212,20 @@ function splitPatchIntoChunks(patch) {
 
 function analyzePatchChunk(lines) {
   const path = extractPatchPath(lines);
-  const isBinary = lines.some((line) => line.startsWith("Binary files ") || line === "GIT binary patch");
-  const isRenameOrModeOnly = lines.some((line) =>
-    line.startsWith("rename from ")
-      || line.startsWith("rename to ")
-      || line.startsWith("copy from ")
-      || line.startsWith("copy to ")
-      || line.startsWith("old mode ")
-      || line.startsWith("new mode ")
-      || line.startsWith("similarity index ")
-      || line.startsWith("new file mode 120")
-      || line.startsWith("deleted file mode 120")
+  const isBinary = lines.some(
+    (line) => line.startsWith("Binary files ") || line === "GIT binary patch"
+  );
+  const isRenameOrModeOnly = lines.some(
+    (line) =>
+      line.startsWith("rename from ") ||
+      line.startsWith("rename to ") ||
+      line.startsWith("copy from ") ||
+      line.startsWith("copy to ") ||
+      line.startsWith("old mode ") ||
+      line.startsWith("new mode ") ||
+      line.startsWith("similarity index ") ||
+      line.startsWith("new file mode 120") ||
+      line.startsWith("deleted file mode 120")
   );
 
   let additions = 0;
@@ -241,7 +245,13 @@ function analyzePatchChunk(lines) {
   if (isRenameOrModeOnly) {
     unsupportedReasons.push("Rename, mode-only, or symlink changes are not auto-revertable in v1.");
   }
-  if (!path || (!additions && !deletions && !lines.includes("--- /dev/null") && !lines.includes("+++ /dev/null"))) {
+  if (
+    !path ||
+    (!additions &&
+      !deletions &&
+      !lines.includes("--- /dev/null") &&
+      !lines.includes("+++ /dev/null"))
+  ) {
     if (!isBinary && !isRenameOrModeOnly) {
       unsupportedReasons.push("No exact patch was captured.");
     }

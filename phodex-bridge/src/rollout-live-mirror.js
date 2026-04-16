@@ -5,10 +5,7 @@
 // Depends on: fs, ./rollout-watch
 
 const fs = require("fs");
-const {
-  findRecentRolloutFileForContextRead,
-  resolveSessionsRoot,
-} = require("./rollout-watch");
+const { findRecentRolloutFileForContextRead, resolveSessionsRoot } = require("./rollout-watch");
 
 const DEFAULT_POLL_INTERVAL_MS = 700;
 const DEFAULT_LOOKUP_TIMEOUT_MS = 5_000;
@@ -228,17 +225,14 @@ function bootstrapFromExistingRollout({
       populateSessionMetaState(state, parsed.payload);
     }
 
-    const taskEventType = parsed?.type === "event_msg"
-      ? readString(parsed?.payload?.type)
-      : "";
+    const taskEventType = parsed?.type === "event_msg" ? readString(parsed?.payload?.type) : "";
     if (taskEventType === "user_message") {
       pendingUserPreludeLine = line;
     }
     if (taskEventType === "task_started") {
       insideActiveRun = true;
-      activeTurnId = readString(parsed?.payload?.turn_id)
-        || readString(parsed?.payload?.turnId)
-        || "";
+      activeTurnId =
+        readString(parsed?.payload?.turn_id) || readString(parsed?.payload?.turnId) || "";
       activeRunLines.length = 0;
       if (pendingUserPreludeLine) {
         activeRunLines.push(pendingUserPreludeLine);
@@ -327,11 +321,13 @@ function synthesizeNotificationsFromRolloutEntry(entry, state) {
       state.hasThinking = false;
       state.commandCalls.clear();
 
-      notifications.push(createNotification("turn/started", {
-        threadId: state.threadId,
-        turnId,
-        id: turnId,
-      }));
+      notifications.push(
+        createNotification("turn/started", {
+          threadId: state.threadId,
+          turnId,
+          id: turnId,
+        })
+      );
       notifications.push(...ensureThinkingNotifications(state));
       return notifications;
     }
@@ -342,35 +338,46 @@ function synthesizeNotificationsFromRolloutEntry(entry, state) {
         return [];
       }
 
-      notifications.push(createNotification("codex/event/user_message", {
-        threadId: state.threadId,
-        turnId: readString(payload.turn_id) || readString(payload.turnId) || state.activeTurnId || "",
-        message,
-      }));
+      notifications.push(
+        createNotification("codex/event/user_message", {
+          threadId: state.threadId,
+          turnId:
+            readString(payload.turn_id) || readString(payload.turnId) || state.activeTurnId || "",
+          message,
+        })
+      );
       return notifications;
     }
 
     if (eventType === "task_complete") {
-      const turnId = readString(payload.turn_id) || readString(payload.turnId) || state.activeTurnId;
+      const turnId =
+        readString(payload.turn_id) || readString(payload.turnId) || state.activeTurnId;
       if (!turnId) {
         return [];
       }
 
-      notifications.push(createNotification("turn/completed", {
-        threadId: state.threadId,
-        turnId,
-        id: turnId,
-      }));
+      notifications.push(
+        createNotification("turn/completed", {
+          threadId: state.threadId,
+          turnId,
+          id: turnId,
+        })
+      );
       resetRunState(state);
       return notifications;
     }
 
     if (eventType === "agent_reasoning") {
-      notifications.push(...reasoningNotifications(state, firstNonEmptyString([
-        readString(payload.message),
-        readString(payload.text),
-        readString(payload.summary),
-      ])));
+      notifications.push(
+        ...reasoningNotifications(
+          state,
+          firstNonEmptyString([
+            readString(payload.message),
+            readString(payload.text),
+            readString(payload.summary),
+          ])
+        )
+      );
       return notifications;
     }
 
@@ -380,11 +387,14 @@ function synthesizeNotificationsFromRolloutEntry(entry, state) {
         return [];
       }
 
-      notifications.push(createNotification("codex/event/agent_message", {
-        threadId: state.threadId,
-        turnId: readString(payload.turn_id) || readString(payload.turnId) || state.activeTurnId || "",
-        message,
-      }));
+      notifications.push(
+        createNotification("codex/event/agent_message", {
+          threadId: state.threadId,
+          turnId:
+            readString(payload.turn_id) || readString(payload.turnId) || state.activeTurnId || "",
+          message,
+        })
+      );
       return notifications;
     }
 
@@ -431,7 +441,9 @@ function reasoningNotifications(state, text) {
     createNotification("item/reasoning/textDelta", {
       threadId: state.threadId,
       turnId: state.activeTurnId,
-      itemId: state.reasoningItemId || buildSyntheticItemId("thinking", state.threadId, state.activeTurnId),
+      itemId:
+        state.reasoningItemId ||
+        buildSyntheticItemId("thinking", state.threadId, state.activeTurnId),
       delta,
     }),
   ];
@@ -509,25 +521,29 @@ function toolOutputNotifications(state, payload) {
   const output = readString(payload.output);
   const notifications = [...ensureThinkingNotifications(state)];
   if (output) {
-    notifications.push(createNotification("codex/event/exec_command_output_delta", {
+    notifications.push(
+      createNotification("codex/event/exec_command_output_delta", {
+        threadId: state.threadId,
+        turnId: state.activeTurnId,
+        call_id: callId,
+        command: toolCall.command,
+        cwd: toolCall.cwd || "",
+        chunk: output,
+      })
+    );
+  }
+
+  notifications.push(
+    createNotification("codex/event/exec_command_end", {
       threadId: state.threadId,
       turnId: state.activeTurnId,
       call_id: callId,
       command: toolCall.command,
       cwd: toolCall.cwd || "",
-      chunk: output,
-    }));
-  }
-
-  notifications.push(createNotification("codex/event/exec_command_end", {
-    threadId: state.threadId,
-    turnId: state.activeTurnId,
-    call_id: callId,
-    command: toolCall.command,
-    cwd: toolCall.cwd || "",
-    status: "completed",
-    output: output || "",
-  }));
+      status: "completed",
+      output: output || "",
+    })
+  );
   state.commandCalls.delete(callId);
   return notifications;
 }
@@ -587,10 +603,12 @@ function isDesktopRolloutOrigin(sessionMeta) {
     return false;
   }
 
-  return originator.includes("desktop")
-    || originator.includes("vscode")
-    || source.includes("vscode")
-    || source.includes("desktop");
+  return (
+    originator.includes("desktop") ||
+    originator.includes("vscode") ||
+    source.includes("vscode") ||
+    source.includes("desktop")
+  );
 }
 
 function extractReasoningText(payload) {
@@ -600,11 +618,7 @@ function extractReasoningText(payload) {
         .filter(Boolean)
         .join("\n")
     : "";
-  return firstNonEmptyString([
-    summary,
-    readString(payload?.text),
-    readString(payload?.content),
-  ]);
+  return firstNonEmptyString([summary, readString(payload?.text), readString(payload?.content)]);
 }
 
 function parseToolArguments(rawArguments) {
@@ -614,24 +628,28 @@ function parseToolArguments(rawArguments) {
 
 function resolveToolCommand(toolName, argumentsObject) {
   if (isCommandToolName(toolName)) {
-    return firstNonEmptyString([
-      readString(argumentsObject.cmd),
-      readString(argumentsObject.command),
-      readString(argumentsObject.raw_command),
-      readString(argumentsObject.rawCommand),
-    ]) || toolName;
+    return (
+      firstNonEmptyString([
+        readString(argumentsObject.cmd),
+        readString(argumentsObject.command),
+        readString(argumentsObject.raw_command),
+        readString(argumentsObject.rawCommand),
+      ]) || toolName
+    );
   }
 
   return toolName;
 }
 
 function resolveToolWorkingDirectory(argumentsObject, state) {
-  return firstNonEmptyString([
-    readString(argumentsObject.workdir),
-    readString(argumentsObject.cwd),
-    readString(argumentsObject.working_directory),
-    readString(state.sessionMeta?.cwd),
-  ]) || "";
+  return (
+    firstNonEmptyString([
+      readString(argumentsObject.workdir),
+      readString(argumentsObject.cwd),
+      readString(argumentsObject.working_directory),
+      readString(state.sessionMeta?.cwd),
+    ]) || ""
+  );
 }
 
 function isCommandToolName(toolName) {
@@ -641,14 +659,14 @@ function isCommandToolName(toolName) {
 
 function genericToolActivityMessage(toolName) {
   switch (readString(toolName).toLowerCase()) {
-  case "apply_patch":
-    return "Applying patch";
-  case "write_stdin":
-    return "Writing to terminal";
-  case "read_thread_terminal":
-    return "Reading terminal output";
-  default:
-    return `Running ${toolName}`;
+    case "apply_patch":
+      return "Applying patch";
+    case "write_stdin":
+      return "Writing to terminal";
+    case "read_thread_terminal":
+      return "Reading terminal output";
+    default:
+      return `Running ${toolName}`;
   }
 }
 
@@ -673,10 +691,7 @@ function resetRunState(state) {
 }
 
 function readThreadId(params) {
-  return firstNonEmptyString([
-    readString(params?.threadId),
-    readString(params?.thread_id),
-  ]) || "";
+  return firstNonEmptyString([readString(params?.threadId), readString(params?.thread_id)]) || "";
 }
 
 function readFileSize(filePath, fsModule) {

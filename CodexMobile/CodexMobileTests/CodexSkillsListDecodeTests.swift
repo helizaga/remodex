@@ -9,7 +9,6 @@ import XCTest
 
 @MainActor
 final class CodexSkillsListDecodeTests: XCTestCase {
-    private static var retainedServices: [CodexService] = []
 
     func testFetchServerThreadsPaginatesAndRequestsExplicitSourceKinds() async throws {
         let service = makeService()
@@ -151,9 +150,6 @@ final class CodexSkillsListDecodeTests: XCTestCase {
         defaults.removePersistentDomain(forName: suiteName)
         let service = CodexService(defaults: defaults)
         service.messagesByThread = [:]
-
-        // Keep instances alive to avoid deallocation issues in the unit-test runtime.
-        Self.retainedServices.append(service)
         return service
     }
 

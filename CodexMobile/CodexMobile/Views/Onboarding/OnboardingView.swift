@@ -1,5 +1,5 @@
 // FILE: OnboardingView.swift
-// Purpose: Split onboarding flow — swipeable pages with fixed bottom bar.
+// Purpose: Split onboarding flow that keeps the fork's local-first setup steps explicit.
 // Layer: View
 // Exports: OnboardingView
 // Depends on: SwiftUI, OnboardingWelcomePage, OnboardingFeaturesPage, OnboardingStepPage
@@ -14,6 +14,7 @@ struct OnboardingView: View {
     private let pageCount = 5
     private let codexInstallStepIndex = 2
     private let codexInstallCommand = "npm install -g @openai/codex@latest"
+    private let localBridgeCommand = "./run-local-remodex.sh up"
 
     var body: some View {
         ZStack {
@@ -31,7 +32,7 @@ struct OnboardingView: View {
                         stepNumber: 1,
                         icon: "terminal",
                         title: "Install Codex CLI",
-                        description: "The AI coding agent that lives in your terminal. Remodex connects to it from your iPhone.",
+                        description: "Install Codex on your Mac first. Remodex connects to that local runtime from your iPhone.",
                         command: codexInstallCommand
                     )
                     .tag(2)
@@ -39,9 +40,9 @@ struct OnboardingView: View {
                     OnboardingStepPage(
                         stepNumber: 2,
                         icon: "link",
-                        title: "Install the Bridge",
-                        description: "A lightweight relay that securely connects your Mac to your iPhone.",
-                        command: "npm install -g remodex@latest",
+                        title: "Start the Local Bridge",
+                        description: "From this fork's repo root on your Mac, run the local-first launcher so the bridge and relay come up together.",
+                        command: localBridgeCommand,
                         commandCaption: "Remodex uses macOS caffeinate by default while the bridge is running so your Mac stays reachable even if the display turns off. You can change this later in Settings."
                     )
                     .tag(3)
@@ -49,9 +50,8 @@ struct OnboardingView: View {
                     OnboardingStepPage(
                         stepNumber: 3,
                         icon: "qrcode.viewfinder",
-                        title: "Start Pairing",
-                        description: "Run this on your Mac. A QR code will appear in your terminal — scan it next.",
-                        command: "remodex up"
+                        title: "Scan the Pairing QR",
+                        description: "Open Remodex on your iPhone and scan the QR from inside the app. Do not use the generic Camera app for pairing."
                     )
                     .tag(4)
                 }
@@ -71,21 +71,17 @@ struct OnboardingView: View {
         }
     }
 
-    // MARK: - Bottom bar
-
     private var bottomBar: some View {
         VStack(spacing: 20) {
-            // Animated pill dots
             HStack(spacing: 8) {
-                ForEach(0..<pageCount, id: \.self) { i in
+                ForEach(0..<pageCount, id: \.self) { index in
                     Capsule()
-                        .fill(i == currentPage ? Color.white : Color.white.opacity(0.18))
-                        .frame(width: i == currentPage ? 24 : 8, height: 8)
+                        .fill(index == currentPage ? Color.white : Color.white.opacity(0.18))
+                        .frame(width: index == currentPage ? 24 : 8, height: 8)
                 }
             }
             .animation(.spring(response: 0.35, dampingFraction: 0.8), value: currentPage)
 
-            // CTA button
             PrimaryCapsuleButton(
                 title: buttonTitle,
                 systemImage: currentPage == pageCount - 1 ? "qrcode" : nil,
@@ -108,8 +104,6 @@ struct OnboardingView: View {
         )
     }
 
-    // MARK: - State
-
     private var buttonTitle: String {
         switch currentPage {
         case 0: return "Get Started"
@@ -120,7 +114,6 @@ struct OnboardingView: View {
     }
 
     private func handleContinue() {
-        // The CLI install step is a hard requirement, so warn before advancing.
         if currentPage == codexInstallStepIndex {
             isShowingCodexInstallReminder = true
             return
@@ -139,8 +132,6 @@ struct OnboardingView: View {
         }
     }
 }
-
-// MARK: - Previews
 
 #Preview("Full Flow") {
     OnboardingView {

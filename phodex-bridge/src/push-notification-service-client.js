@@ -16,11 +16,7 @@ function createPushNotificationServiceClient({
 } = {}) {
   const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
 
-  async function registerDevice({
-    deviceToken,
-    alertsEnabled,
-    apnsEnvironment,
-  } = {}) {
+  async function registerDevice({ deviceToken, alertsEnabled, apnsEnvironment } = {}) {
     return postJSON("/v1/push/session/register-device", {
       sessionId,
       notificationSecret,
@@ -30,14 +26,7 @@ function createPushNotificationServiceClient({
     });
   }
 
-  async function notifyCompletion({
-    threadId,
-    turnId,
-    result,
-    title,
-    body,
-    dedupeKey,
-  } = {}) {
+  async function notifyCompletion({ threadId, turnId, result, title, body, dedupeKey } = {}) {
     return postJSON("/v1/push/session/notify-completion", {
       sessionId,
       notificationSecret,
@@ -55,13 +44,12 @@ function createPushNotificationServiceClient({
       return { ok: false, skipped: true };
     }
 
-    const controller = typeof AbortController === "function" && requestTimeoutMs > 0
-      ? new AbortController()
-      : null;
+    const controller =
+      typeof AbortController === "function" && requestTimeoutMs > 0 ? new AbortController() : null;
     const timeoutID = controller
       ? setTimeout(() => {
-        controller.abort(createTimeoutAbortError(requestTimeoutMs));
-      }, requestTimeoutMs)
+          controller.abort(createTimeoutAbortError(requestTimeoutMs));
+        }, requestTimeoutMs)
       : null;
 
     let response;
@@ -76,7 +64,9 @@ function createPushNotificationServiceClient({
       });
     } catch (error) {
       if (isAbortError(error)) {
-        const timeoutError = new Error(`Push service request timed out after ${requestTimeoutMs}ms`);
+        const timeoutError = new Error(
+          `Push service request timed out after ${requestTimeoutMs}ms`
+        );
         timeoutError.code = "push_request_timeout";
         throw timeoutError;
       }

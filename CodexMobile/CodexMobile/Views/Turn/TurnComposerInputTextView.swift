@@ -100,7 +100,7 @@ struct TurnComposerInputTextView: UIViewRepresentable {
     // the smaller ad hoc size that made the input feel visually detached.
     private func composerUIFont() -> UIFont {
         // Read the SwiftUI environment so UIKit gets refreshed when Dynamic Type changes.
-        let _ = dynamicTypeSize
+        _ = dynamicTypeSize
         return AppFont.uiFont(size: 15, textStyle: .body)
     }
 

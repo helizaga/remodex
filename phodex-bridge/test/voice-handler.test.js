@@ -41,18 +41,21 @@ test("voice/transcribe returns transcribed text without exposing auth tokens", a
     },
   });
 
-  const handled = handler.handleVoiceRequest(JSON.stringify({
-    id: "voice-1",
-    method: "voice/transcribe",
-    params: {
-      mimeType: "audio/wav",
-      audioBase64: makeTestWavBase64(),
-      sampleRateHz: 24_000,
-      durationMs: 1_200,
-    },
-  }), (response) => {
-    responses.push(JSON.parse(response));
-  });
+  const handled = handler.handleVoiceRequest(
+    JSON.stringify({
+      id: "voice-1",
+      method: "voice/transcribe",
+      params: {
+        mimeType: "audio/wav",
+        audioBase64: makeTestWavBase64(),
+        sampleRateHz: 24_000,
+        durationMs: 1_200,
+      },
+    }),
+    (response) => {
+      responses.push(JSON.parse(response));
+    }
+  );
 
   assert.equal(handled, true);
   await tick();
@@ -62,12 +65,14 @@ test("voice/transcribe returns transcribed text without exposing auth tokens", a
   assert.equal(fetchCalls[0].options.method, "POST");
   assert.equal(fetchCalls[0].options.headers.Authorization.startsWith("Bearer "), true);
   assert.equal(fetchCalls[0].options.headers["ChatGPT-Account-Id"], undefined);
-  assert.deepEqual(responses, [{
-    id: "voice-1",
-    result: {
-      text: "hello world",
+  assert.deepEqual(responses, [
+    {
+      id: "voice-1",
+      result: {
+        text: "hello world",
+      },
     },
-  }]);
+  ]);
 });
 
 test("voice/transcribe retries once after a 401 response", async () => {
@@ -109,18 +114,21 @@ test("voice/transcribe retries once after a 401 response", async () => {
     },
   });
 
-  handler.handleVoiceRequest(JSON.stringify({
-    id: "voice-2",
-    method: "voice/transcribe",
-    params: {
-      mimeType: "audio/wav",
-      audioBase64: makeTestWavBase64(),
-      sampleRateHz: 24_000,
-      durationMs: 800,
-    },
-  }), (response) => {
-    responses.push(JSON.parse(response));
-  });
+  handler.handleVoiceRequest(
+    JSON.stringify({
+      id: "voice-2",
+      method: "voice/transcribe",
+      params: {
+        mimeType: "audio/wav",
+        audioBase64: makeTestWavBase64(),
+        sampleRateHz: 24_000,
+        durationMs: 800,
+      },
+    }),
+    (response) => {
+      responses.push(JSON.parse(response));
+    }
+  );
 
   await tick();
 
@@ -144,18 +152,21 @@ test("voice/transcribe rejects API-key auth because voice remains ChatGPT-only",
     },
   });
 
-  handler.handleVoiceRequest(JSON.stringify({
-    id: "voice-4",
-    method: "voice/transcribe",
-    params: {
-      mimeType: "audio/wav",
-      audioBase64: makeTestWavBase64(),
-      sampleRateHz: 24_000,
-      durationMs: 300,
-    },
-  }), (response) => {
-    responses.push(JSON.parse(response));
-  });
+  handler.handleVoiceRequest(
+    JSON.stringify({
+      id: "voice-4",
+      method: "voice/transcribe",
+      params: {
+        mimeType: "audio/wav",
+        audioBase64: makeTestWavBase64(),
+        sampleRateHz: 24_000,
+        durationMs: 300,
+      },
+    }),
+    (response) => {
+      responses.push(JSON.parse(response));
+    }
+  );
 
   await tick();
 
@@ -177,18 +188,21 @@ test("voice/transcribe returns a user-facing auth error when Mac auth is missing
     },
   });
 
-  handler.handleVoiceRequest(JSON.stringify({
-    id: "voice-3",
-    method: "voice/transcribe",
-    params: {
-      mimeType: "audio/wav",
-      audioBase64: makeTestWavBase64(),
-      sampleRateHz: 24_000,
-      durationMs: 300,
-    },
-  }), (response) => {
-    responses.push(JSON.parse(response));
-  });
+  handler.handleVoiceRequest(
+    JSON.stringify({
+      id: "voice-3",
+      method: "voice/transcribe",
+      params: {
+        mimeType: "audio/wav",
+        audioBase64: makeTestWavBase64(),
+        sampleRateHz: 24_000,
+        durationMs: 300,
+      },
+    }),
+    (response) => {
+      responses.push(JSON.parse(response));
+    }
+  );
 
   await tick();
 
@@ -225,18 +239,21 @@ test("voice/transcribe rejects malformed or non-WAV audio before contacting the 
       },
     });
 
-    handler.handleVoiceRequest(JSON.stringify({
-      id: `voice-invalid-${testCase.name}`,
-      method: "voice/transcribe",
-      params: {
-        mimeType: "audio/wav",
-        audioBase64: testCase.audioBase64,
-        sampleRateHz: 24_000,
-        durationMs: 300,
-      },
-    }), (response) => {
-      responses.push(JSON.parse(response));
-    });
+    handler.handleVoiceRequest(
+      JSON.stringify({
+        id: `voice-invalid-${testCase.name}`,
+        method: "voice/transcribe",
+        params: {
+          mimeType: "audio/wav",
+          audioBase64: testCase.audioBase64,
+          sampleRateHz: 24_000,
+          durationMs: 300,
+        },
+      }),
+      (response) => {
+        responses.push(JSON.parse(response));
+      }
+    );
 
     await tick();
 
@@ -262,18 +279,21 @@ test("voice/transcribe rejects clips longer than two minutes before contacting t
     },
   });
 
-  handler.handleVoiceRequest(JSON.stringify({
-    id: "voice-too-long",
-    method: "voice/transcribe",
-    params: {
-      mimeType: "audio/wav",
-      audioBase64: makeTestWavBase64(),
-      sampleRateHz: 24_000,
-      durationMs: 120_100,
-    },
-  }), (response) => {
-    responses.push(JSON.parse(response));
-  });
+  handler.handleVoiceRequest(
+    JSON.stringify({
+      id: "voice-too-long",
+      method: "voice/transcribe",
+      params: {
+        mimeType: "audio/wav",
+        audioBase64: makeTestWavBase64(),
+        sampleRateHz: 24_000,
+        durationMs: 120_100,
+      },
+    }),
+    (response) => {
+      responses.push(JSON.parse(response));
+    }
+  );
 
   await tick();
 
@@ -303,11 +323,12 @@ test("resolveVoiceAuth returns token for ChatGPT sessions", async () => {
 
 test("resolveVoiceAuth rejects when no token is available regardless of requiresOpenaiAuth", async () => {
   await assert.rejects(
-    () => resolveVoiceAuth(async () => ({
-      authMethod: null,
-      authToken: null,
-      requiresOpenaiAuth: true,
-    })),
+    () =>
+      resolveVoiceAuth(async () => ({
+        authMethod: null,
+        authToken: null,
+        requiresOpenaiAuth: true,
+      })),
     (error) => {
       assert.equal(error.errorCode, "token_missing");
       return true;
@@ -317,11 +338,12 @@ test("resolveVoiceAuth rejects when no token is available regardless of requires
 
 test("resolveVoiceAuth rejects when Mac has no token", async () => {
   await assert.rejects(
-    () => resolveVoiceAuth(async () => ({
-      authMethod: "chatgpt",
-      authToken: null,
-      requiresOpenaiAuth: false,
-    })),
+    () =>
+      resolveVoiceAuth(async () => ({
+        authMethod: "chatgpt",
+        authToken: null,
+        requiresOpenaiAuth: false,
+      })),
     (error) => {
       assert.match(error.message, /No ChatGPT session token/);
       assert.equal(error.errorCode, "token_missing");

@@ -9,9 +9,8 @@ import XCTest
 
 @MainActor
 final class CodexServiceThreadListTests: XCTestCase {
-    private static var retainedServices: [CodexService] = []
 
-    func testListThreadsRequestsSeventyActiveThreadsAndAppServerSourceKinds() async {
+    func testListThreadsRequestsSeventyActiveThreadsAndAppServerSourceKinds() async throws {
         let service = makeService()
         service.isConnected = true
         service.isInitialized = true
@@ -44,7 +43,7 @@ final class CodexServiceThreadListTests: XCTestCase {
             )
         }
 
-        await service.listThreads()
+        try await service.listThreads()
 
         XCTAssertEqual(activeRequestParams?["limit"]?.intValue, 70)
         XCTAssertEqual(archivedRequestParams?["limit"]?.intValue, 10)
@@ -86,7 +85,6 @@ final class CodexServiceThreadListTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard
         defaults.removePersistentDomain(forName: suiteName)
         let service = CodexService(defaults: defaults)
-        Self.retainedServices.append(service)
         return service
     }
 }

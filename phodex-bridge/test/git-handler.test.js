@@ -27,7 +27,10 @@ function makeTempRepo() {
   git(repoDir, "config", "user.email", "tests@example.com");
   fs.writeFileSync(path.join(repoDir, "README.md"), "# Test\n");
   fs.mkdirSync(path.join(repoDir, "phodex-bridge", "src"), { recursive: true });
-  fs.writeFileSync(path.join(repoDir, "phodex-bridge", "src", "index.js"), "export const ready = true;\n");
+  fs.writeFileSync(
+    path.join(repoDir, "phodex-bridge", "src", "index.js"),
+    "export const ready = true;\n"
+  );
   git(repoDir, "add", "README.md");
   git(repoDir, "add", "phodex-bridge/src/index.js");
   git(repoDir, "commit", "-m", "Initial commit");
@@ -77,7 +80,10 @@ test("gitBranches marks branches that are checked out in another worktree", asyn
 
     assert.deepEqual(result.branchesCheckedOutElsewhere, ["feature/clean-switch"]);
     assert.ok(result.branches.includes("feature/clean-switch"));
-    assert.equal(result.worktreePathByBranch["feature/clean-switch"], canonicalPath(siblingWorktree));
+    assert.equal(
+      result.worktreePathByBranch["feature/clean-switch"],
+      canonicalPath(siblingWorktree)
+    );
   } finally {
     fs.rmSync(repoDir, { recursive: true, force: true });
     fs.rmSync(siblingWorktree, { recursive: true, force: true });
@@ -179,8 +185,9 @@ test("gitCheckout surfaces a specific error when the branch is open in another w
     await assert.rejects(
       __test.gitCheckout(repoDir, { branch: "feature/clean-switch" }),
       (error) =>
-        error?.errorCode === "checkout_branch_in_other_worktree"
-          && error?.userMessage === "Cannot switch branches: this branch is already open in another worktree."
+        error?.errorCode === "checkout_branch_in_other_worktree" &&
+        error?.userMessage ===
+          "Cannot switch branches: this branch is already open in another worktree."
     );
   } finally {
     fs.rmSync(repoDir, { recursive: true, force: true });
@@ -201,8 +208,8 @@ test("gitCheckout surfaces a specific error when untracked files would be overwr
     await assert.rejects(
       __test.gitCheckout(repoDir, { branch: "main" }),
       (error) =>
-        error?.errorCode === "checkout_conflict_untracked_collision"
-          && error?.userMessage === "Cannot switch branches: untracked files would be overwritten."
+        error?.errorCode === "checkout_conflict_untracked_collision" &&
+        error?.userMessage === "Cannot switch branches: untracked files would be overwritten."
     );
   } finally {
     fs.rmSync(repoDir, { recursive: true, force: true });
@@ -216,8 +223,8 @@ test("gitCheckout surfaces a specific error when the requested branch does not e
     await assert.rejects(
       __test.gitCheckout(repoDir, { branch: "remodex/missing" }),
       (error) =>
-        error?.errorCode === "branch_not_found"
-          && error?.userMessage === "Branch 'remodex/missing' does not exist locally."
+        error?.errorCode === "branch_not_found" &&
+        error?.userMessage === "Branch 'remodex/missing' does not exist locally."
     );
   } finally {
     fs.rmSync(repoDir, { recursive: true, force: true });
@@ -260,7 +267,10 @@ test("normalizeCreatedBranchName avoids double-prefixing remodex branches", () =
   assert.equal(__test.normalizeCreatedBranchName("feature/foo"), "remodex/feature/foo");
   assert.equal(__test.normalizeCreatedBranchName("remodex/feature/foo"), "remodex/feature/foo");
   assert.equal(__test.normalizeCreatedBranchName("my new branch"), "remodex/my-new-branch");
-  assert.equal(__test.normalizeCreatedBranchName("feature / login page"), "remodex/feature/login-page");
+  assert.equal(
+    __test.normalizeCreatedBranchName("feature / login page"),
+    "remodex/feature/login-page"
+  );
   assert.equal(__test.normalizeCreatedBranchName("   "), "");
 });
 
@@ -271,8 +281,8 @@ test("gitCreateBranch rejects invalid Git branch names before checkout", async (
     await assert.rejects(
       __test.gitCreateBranch(repoDir, { name: "feature..oops" }),
       (error) =>
-        error?.errorCode === "invalid_branch_name"
-          && error?.userMessage === "Branch 'remodex/feature..oops' is not a valid Git branch name."
+        error?.errorCode === "invalid_branch_name" &&
+        error?.userMessage === "Branch 'remodex/feature..oops' is not a valid Git branch name."
     );
   } finally {
     fs.rmSync(repoDir, { recursive: true, force: true });
@@ -314,8 +324,8 @@ test("gitCreateBranch rejects duplicate branch names with a specific error", asy
     await assert.rejects(
       __test.gitCreateBranch(repoDir, { name: "already-there" }),
       (error) =>
-        error?.errorCode === "branch_exists"
-          && error?.userMessage === "Branch 'remodex/already-there' already exists."
+        error?.errorCode === "branch_exists" &&
+        error?.userMessage === "Branch 'remodex/already-there' already exists."
     );
   } finally {
     fs.rmSync(repoDir, { recursive: true, force: true });
@@ -370,8 +380,9 @@ test("gitCreateBranch rejects names that already exist only on origin", async ()
     await assert.rejects(
       __test.gitCreateBranch(repoDir, { name: "remote-only" }),
       (error) =>
-        error?.errorCode === "branch_exists"
-          && error?.userMessage === "Branch 'remodex/remote-only' already exists on origin. Check it out locally instead of creating a new branch."
+        error?.errorCode === "branch_exists" &&
+        error?.userMessage ===
+          "Branch 'remodex/remote-only' already exists on origin. Check it out locally instead of creating a new branch."
     );
   } finally {
     fs.rmSync(repoDir, { recursive: true, force: true });
@@ -419,7 +430,10 @@ test("gitCreateWorktree creates a managed worktree under CODEX_HOME/worktrees", 
     assert.equal(result.alreadyExisted, false);
     assert.ok(result.worktreePath.startsWith(managedWorktreesRoot));
     assert.equal(path.basename(result.worktreePath), "phodex-bridge");
-    assert.equal(git(result.worktreePath, "rev-parse", "--abbrev-ref", "HEAD"), "remodex/new-worktree");
+    assert.equal(
+      git(result.worktreePath, "rev-parse", "--abbrev-ref", "HEAD"),
+      "remodex/new-worktree"
+    );
 
     git(repoDir, "worktree", "remove", "--force", path.dirname(result.worktreePath));
   } finally {
@@ -469,7 +483,10 @@ test("gitCreateWorktree reuses an existing worktree for the same remodex branch"
   const projectDir = path.join(repoDir, "phodex-bridge");
   const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "remodex-codex-home-"));
   const previousCodexHome = process.env.CODEX_HOME;
-  const siblingWorktree = path.join(path.dirname(repoDir), `${path.basename(repoDir)}-wt-remodex-existing`);
+  const siblingWorktree = path.join(
+    path.dirname(repoDir),
+    `${path.basename(repoDir)}-wt-remodex-existing`
+  );
 
   process.env.CODEX_HOME = codexHome;
 
@@ -509,8 +526,9 @@ test("gitCreateWorktree rejects a reused local branch name before ignoring the c
         baseBranch: "main",
       }),
       (error) =>
-        error?.errorCode === "branch_exists"
-          && error?.userMessage === "Branch 'remodex/already-there' already exists locally. Choose another name or open that branch instead."
+        error?.errorCode === "branch_exists" &&
+        error?.userMessage ===
+          "Branch 'remodex/already-there' already exists locally. Choose another name or open that branch instead."
     );
   } finally {
     fs.rmSync(repoDir, { recursive: true, force: true });
@@ -529,8 +547,8 @@ test("gitCreateWorktree rejects invalid Git branch names before creating a workt
         changeTransfer: "copy",
       }),
       (error) =>
-        error?.errorCode === "invalid_branch_name"
-          && error?.userMessage === "Branch 'remodex/feature..oops' is not a valid Git branch name."
+        error?.errorCode === "invalid_branch_name" &&
+        error?.userMessage === "Branch 'remodex/feature..oops' is not a valid Git branch name."
     );
   } finally {
     fs.rmSync(repoDir, { recursive: true, force: true });
@@ -550,8 +568,9 @@ test("gitCreateWorktree rejects remote-only base branches because worktrees star
         baseBranch: "feature/remote-base",
       }),
       (error) =>
-        error?.errorCode === "missing_base_branch"
-          && error?.userMessage === "Base branch 'feature/remote-base' is not available locally. Create or check out that branch first."
+        error?.errorCode === "missing_base_branch" &&
+        error?.userMessage ===
+          "Base branch 'feature/remote-base' is not available locally. Create or check out that branch first."
     );
   } finally {
     fs.rmSync(repoDir, { recursive: true, force: true });
@@ -663,10 +682,7 @@ test("gitCreateWorktree ignores dirty changes outside the current project scope"
       fs.readFileSync(path.join(path.dirname(result.worktreePath), "README.md"), "utf8"),
       "# Test\n"
     );
-    assert.equal(
-      fs.readFileSync(path.join(repoDir, "README.md"), "utf8"),
-      "# Test\nroot only\n"
-    );
+    assert.equal(fs.readFileSync(path.join(repoDir, "README.md"), "utf8"), "# Test\nroot only\n");
     assert.match(git(repoDir, "status", "--short"), /README\.md/);
 
     git(repoDir, "worktree", "remove", "--force", path.dirname(result.worktreePath));
@@ -962,7 +978,10 @@ test("gitTransferManagedHandoff moves tracked changes from a managed worktree ba
       baseBranch: "main",
     });
 
-    fs.writeFileSync(path.join(managed.worktreePath, "src", "index.js"), "export const ready = 'back';\n");
+    fs.writeFileSync(
+      path.join(managed.worktreePath, "src", "index.js"),
+      "export const ready = 'back';\n"
+    );
     fs.writeFileSync(path.join(managed.worktreePath, "scratch.txt"), "from worktree\n");
 
     const result = await __test.gitTransferManagedHandoff(managed.worktreePath, {
@@ -975,10 +994,7 @@ test("gitTransferManagedHandoff moves tracked changes from a managed worktree ba
       fs.readFileSync(path.join(projectDir, "src", "index.js"), "utf8"),
       "export const ready = 'back';\n"
     );
-    assert.equal(
-      fs.readFileSync(path.join(projectDir, "scratch.txt"), "utf8"),
-      "from worktree\n"
-    );
+    assert.equal(fs.readFileSync(path.join(projectDir, "scratch.txt"), "utf8"), "from worktree\n");
     assert.equal(fs.existsSync(path.join(managed.worktreePath, "scratch.txt")), false);
   } finally {
     if (previousCodexHome === undefined) {
@@ -1033,8 +1049,9 @@ test("gitCreateWorktree rejects dirty handoff when the chosen base branch is not
         baseBranch: "feature/clean-switch",
       }),
       (error) =>
-        error?.errorCode === "dirty_worktree_base_mismatch"
-          && error?.userMessage === "Uncommitted changes can move into a new worktree only from main. Switch the base branch to match or clean up local changes first."
+        error?.errorCode === "dirty_worktree_base_mismatch" &&
+        error?.userMessage ===
+          "Uncommitted changes can move into a new worktree only from main. Switch the base branch to match or clean up local changes first."
     );
   } finally {
     fs.rmSync(repoDir, { recursive: true, force: true });

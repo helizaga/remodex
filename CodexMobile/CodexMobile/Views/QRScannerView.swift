@@ -15,6 +15,7 @@ struct QRScannerView: View {
     @State private var scannerError: String?
     @State private var bridgeUpdatePrompt: CodexBridgeUpdatePrompt?
     @State private var didCopyBridgeUpdateCommand = false
+    @State private var copyResetTask: Task<Void, Never>?
     @State private var hasCameraPermission = false
     @State private var isCheckingPermission = true
 
@@ -74,13 +75,16 @@ struct QRScannerView: View {
         } message: {
             Text(scannerError ?? "Invalid QR code")
         }
+        .onDisappear {
+            copyResetTask?.cancel()
+            copyResetTask = nil
+            didCopyBridgeUpdateCommand = false
+        }
     }
 
     // Blocks repeated scans when the camera spots a bridge QR from an incompatible npm release.
     private func bridgeUpdateView(prompt: CodexBridgeUpdatePrompt) -> some View {
-        VStack(alignment: .leading, spacing: 24) {
-            Spacer()
-
+        ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 12) {
                 Text(prompt.title)
                     .font(AppFont.title3(weight: .semibold))
@@ -112,6 +116,8 @@ struct QRScannerView: View {
             }
 
             Button("I Updated It") {
+                copyResetTask?.cancel()
+                copyResetTask = nil
                 bridgeUpdatePrompt = nil
                 didCopyBridgeUpdateCommand = false
             }
@@ -121,10 +127,11 @@ struct QRScannerView: View {
             .foregroundStyle(.black)
             .background(.white, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             .buttonStyle(.plain)
-
-            Spacer()
+            .padding(.top, 8)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 24)
+        .padding(.vertical, 32)
     }
 
     private func bridgeUpdateStep(
@@ -164,7 +171,10 @@ struct QRScannerView: View {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             didCopyBridgeUpdateCommand = true
                         }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        copyResetTask?.cancel()
+                        copyResetTask = Task {
+                            try? await Task.sleep(for: .seconds(1.5))
+                            guard !Task.isCancelled else { return }
                             withAnimation(.easeInOut(duration: 0.2)) {
                                 didCopyBridgeUpdateCommand = false
                             }
@@ -269,6 +279,9 @@ struct QRScannerView: View {
         case .scanError(let message):
             scannerError = message
             resetScanLock()
+        case .appUpdateRequired(let message):
+            scannerError = message
+            resetScanLock()
         case .bridgeUpdateRequired(let prompt):
             didCopyBridgeUpdateCommand = false
             bridgeUpdatePrompt = prompt
@@ -284,8 +297,6 @@ private extension CodexBridgeUpdatePrompt {
         command: "npm install -g remodex@latest"
     )
 }
-
-// MARK: - Preview
 
 #Preview("Bridge Update Required") {
     QRScannerView(

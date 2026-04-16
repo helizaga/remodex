@@ -46,6 +46,7 @@ test("composeAccountStatus marks authenticated accounts and carries account meta
     requiresOpenaiAuth: false,
     bridgeVersion: bridgePackageVersion,
     bridgeLatestVersion: "9.9.9",
+    codexTransportMode: null,
   });
 });
 
@@ -80,6 +81,7 @@ test("composeAccountStatus keeps authenticated UI state when account/read still 
     requiresOpenaiAuth: false,
     bridgeVersion: bridgePackageVersion,
     bridgeLatestVersion: "9.9.9",
+    codexTransportMode: null,
   });
 });
 
@@ -115,24 +117,28 @@ test("composeAccountStatus reports reauth when auth status explicitly requires C
     requiresOpenaiAuth: true,
     bridgeVersion: bridgePackageVersion,
     bridgeLatestVersion: "9.9.9",
+    codexTransportMode: null,
   });
 });
 
 test("redactAuthStatus strips token-bearing fields from the status snapshot", () => {
-  const status = redactAuthStatus({
-    authMethod: "chatgpt",
-    authToken: null,
-  }, {
-    accountRead: {
-      account: null,
-      requiresOpenaiAuth: true,
+  const status = redactAuthStatus(
+    {
+      authMethod: "chatgpt",
+      authToken: null,
     },
-    loginInFlight: true,
-    bridgeVersionInfo: {
-      bridgeVersion: bridgePackageVersion,
-      bridgeLatestVersion: "9.9.9",
-    },
-  });
+    {
+      accountRead: {
+        account: null,
+        requiresOpenaiAuth: true,
+      },
+      loginInFlight: true,
+      bridgeVersionInfo: {
+        bridgeVersion: bridgePackageVersion,
+        bridgeLatestVersion: "9.9.9",
+      },
+    }
+  );
 
   assert.deepEqual(status, {
     authMethod: "chatgpt",
@@ -145,6 +151,7 @@ test("redactAuthStatus strips token-bearing fields from the status snapshot", ()
     expiresAt: null,
     bridgeVersion: bridgePackageVersion,
     bridgeLatestVersion: "9.9.9",
+    codexTransportMode: null,
   });
   assert.equal(Object.prototype.hasOwnProperty.call(status, "authToken"), false);
 });
@@ -177,6 +184,7 @@ test("composeAccountStatus keeps a fresh signed-out state distinct from reauth",
     requiresOpenaiAuth: true,
     bridgeVersion: bridgePackageVersion,
     bridgeLatestVersion: "9.9.9",
+    codexTransportMode: null,
   });
 });
 
@@ -229,6 +237,7 @@ test("composeSanitizedAuthStatusFromSettledResults keeps the available auth snap
     expiresAt: null,
     bridgeVersion: bridgePackageVersion,
     bridgeLatestVersion: "9.9.9",
+    codexTransportMode: null,
   });
 });
 
@@ -265,18 +274,52 @@ test("composeSanitizedAuthStatusFromSettledResults keeps authenticated UI state 
     expiresAt: null,
     bridgeVersion: bridgePackageVersion,
     bridgeLatestVersion: "9.9.9",
+    codexTransportMode: null,
   });
 });
 
-test("composeSanitizedAuthStatusFromSettledResults fails when both auth reads fail", () => {
-  assert.throws(() => composeSanitizedAuthStatusFromSettledResults({
+test("composeSanitizedAuthStatusFromSettledResults propagates transportMode into codexTransportMode", () => {
+  const status = composeSanitizedAuthStatusFromSettledResults({
     accountReadResult: {
-      status: "rejected",
-      reason: new Error("account/read failed"),
+      status: "fulfilled",
+      value: {
+        account: {
+          type: "chatgpt",
+          email: "user@example.com",
+        },
+        requiresOpenaiAuth: false,
+      },
     },
     authStatusResult: {
-      status: "rejected",
-      reason: new Error("getAuthStatus failed"),
+      status: "fulfilled",
+      value: {
+        authMethod: "chatgpt",
+        authToken: "token-value",
+      },
     },
-  }), (error) => error?.errorCode === "auth_status_unavailable");
+    transportMode: "local_relay",
+    bridgeVersionInfo: {
+      bridgeVersion: bridgePackageVersion,
+      bridgeLatestVersion: "9.9.9",
+    },
+  });
+
+  assert.equal(status.codexTransportMode, "local_relay");
+});
+
+test("composeSanitizedAuthStatusFromSettledResults fails when both auth reads fail", () => {
+  assert.throws(
+    () =>
+      composeSanitizedAuthStatusFromSettledResults({
+        accountReadResult: {
+          status: "rejected",
+          reason: new Error("account/read failed"),
+        },
+        authStatusResult: {
+          status: "rejected",
+          reason: new Error("getAuthStatus failed"),
+        },
+      }),
+    (error) => error?.errorCode === "auth_status_unavailable"
+  );
 });

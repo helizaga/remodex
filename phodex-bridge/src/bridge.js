@@ -9,10 +9,7 @@ const { randomBytes } = require("crypto");
 const { execFile, spawn } = require("child_process");
 const os = require("os");
 const { promisify } = require("util");
-const {
-  CodexDesktopRefresher,
-  readBridgeConfig,
-} = require("./codex-desktop-refresher");
+const { CodexDesktopRefresher, readBridgeConfig } = require("./codex-desktop-refresher");
 const { createCodexTransport } = require("./codex-transport");
 const { createThreadRolloutActivityWatcher } = require("./rollout-watch");
 const { printQR } = require("./qr");
@@ -24,15 +21,14 @@ const { handleThreadContextRequest } = require("./thread-context-handler");
 const { handleWorkspaceRequest } = require("./workspace-handler");
 const { createNotificationsHandler } = require("./notifications-handler");
 const { createVoiceHandler, resolveVoiceAuth } = require("./voice-handler");
-const {
-  composeSanitizedAuthStatusFromSettledResults,
-} = require("./account-status");
+const { composeSanitizedAuthStatusFromSettledResults } = require("./account-status");
 const { createBridgePackageVersionStatusReader } = require("./package-version-status");
 const { createPushNotificationServiceClient } = require("./push-notification-service-client");
 const { createPushNotificationTracker } = require("./push-notification-tracker");
 const {
   loadOrCreateBridgeDeviceState,
   rememberLastSeenPhoneAppVersion,
+  resetBridgeDeviceState,
   resolveBridgeRelaySession,
 } = require("./secure-device-state");
 const { createBridgeSecureTransport } = require("./secure-transport");
@@ -46,12 +42,17 @@ const {
 } = require("./ios-app-compatibility");
 const { createShortPairingCode, SHORT_PAIRING_CODE_LENGTH } = require("./qr");
 
+const RELAY_STABLE_CONNECTION_MS = 15_000;
+const MAX_RELAY_RECONNECT_DELAY_MS = 30_000;
 const execFileAsync = promisify(execFile);
 const RELAY_WATCHDOG_PING_INTERVAL_MS = 10_000;
 const RELAY_WATCHDOG_STALE_AFTER_MS = 25_000;
 const BRIDGE_STATUS_HEARTBEAT_INTERVAL_MS = 5_000;
 const STALE_RELAY_STATUS_MESSAGE = "Relay heartbeat stalled; reconnect pending.";
 const RELAY_HISTORY_IMAGE_REFERENCE_URL = "remodex://history-image-elided";
+// Leave headroom under the iPhone websocket frame ceiling so thread reopen snapshots
+// do not fail once secure-envelope overhead is added on top of the JSON payload.
+const RELAY_HISTORY_SOFT_CAP_BYTES = 12 * 1024 * 1024;
 function startBridge({
   config: explicitConfig = null,
   printPairingQr = true,
@@ -66,15 +67,23 @@ function startBridge({
   const relayBaseUrl = config.relayUrl.replace(/\/+$/, "");
   if (!relayBaseUrl) {
     console.error("[remodex] No relay URL configured.");
-    console.error("[remodex] In a source checkout, run ./run-local-remodex.sh or set REMODEX_RELAY.");
+    console.error(
+      "[remodex] In a source checkout, run ./run-local-remodex.sh or set REMODEX_RELAY."
+    );
     process.exit(1);
   }
 
   let deviceState;
   try {
+    if (config.resetRelaySession) {
+      resetBridgeDeviceState();
+      console.log("[remodex] cleared saved pairing state; generating a new pairing QR");
+    }
     deviceState = loadOrCreateBridgeDeviceState();
   } catch (error) {
-    console.error(`[remodex] ${(error && error.message) || "Failed to load the saved bridge pairing state."}`);
+    console.error(
+      `[remodex] ${(error && error.message) || "Failed to load the saved bridge pairing state."}`
+    );
     process.exit(1);
   }
   const relaySession = resolveBridgeRelaySession(deviceState);
@@ -115,11 +124,14 @@ function startBridge({
   let isShuttingDown = false;
   let reconnectAttempt = 0;
   let reconnectTimer = null;
+  let stableConnectionTimer = null;
   let relayWatchdogTimer = null;
   let statusHeartbeatTimer = null;
   let lastRelayActivityAt = 0;
   let lastPublishedBridgeStatus = null;
   let lastConnectionStatus = null;
+  let latestReconnectDiagnostic = null;
+  let lastPermanentReconnectReason = null;
   let codexLaunchState = config.codexEndpoint ? "connected" : "starting";
   let codexHandshakeState = config.codexEndpoint ? "warm" : "cold";
   const forwardedInitializeRequestIds = new Set();
@@ -131,10 +143,7 @@ function startBridge({
     "account/login/cancel",
     "account/logout",
   ]);
-  const relaySanitizedRequestMethods = new Set([
-    "thread/read",
-    "thread/resume",
-  ]);
+  const relaySanitizedRequestMethods = new Set(["thread/read", "thread/resume"]);
   const forwardedRequestMethodTTLms = 2 * 60_000;
   const pendingAuthLogin = {
     loginId: null,
@@ -146,6 +155,7 @@ function startBridge({
     sessionId,
     relayUrl: relayBaseUrl,
     deviceState,
+    pairingTtlMs: config.pairingTtlMs,
     onTrustedPhoneUpdate(nextDeviceState) {
       deviceState = nextDeviceState;
       sendRelayRegistrationUpdate(nextDeviceState);
@@ -165,8 +175,8 @@ function startBridge({
   // already provides the authoritative live stream for resumed threads.
   const rolloutLiveMirror = !config.codexEndpoint
     ? createRolloutLiveMirrorController({
-      sendApplicationResponse,
-    })
+        sendApplicationResponse,
+      })
     : null;
   let contextUsageWatcher = null;
   let watchedContextUsageKey = null;
@@ -202,7 +212,9 @@ function startBridge({
     } else {
       console.error("[remodex] Failed to start `codex app-server`.");
       console.error(`[remodex] Launch command: ${codex.describe()}`);
-      console.error("[remodex] Make sure the Codex CLI is installed and that the launcher works on this OS.");
+      console.error(
+        "[remodex] Make sure the Codex CLI is installed and that the launcher works on this OS."
+      );
     }
     console.error(error.message);
     process.exit(1);
@@ -224,6 +236,15 @@ function startBridge({
 
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
+  }
+
+  function clearStableConnectionTimer() {
+    if (!stableConnectionTimer) {
+      return;
+    }
+
+    clearTimeout(stableConnectionTimer);
+    stableConnectionTimer = null;
   }
 
   // Periodically rewrites the latest bridge snapshot so CLI status does not stay frozen.
@@ -317,15 +338,20 @@ function startBridge({
       return;
     }
 
-    if (closeCode === 4000 || closeCode === 4001) {
+    if (shouldShutdownOnRelayCloseCode(closeCode)) {
       logConnectionStatus("disconnected");
-      shutdown(codex, () => socket, () => {
-        isShuttingDown = true;
-        bridgeWakeAssertion.stop();
-        clearReconnectTimer();
-        clearRelayWatchdog();
-        clearBridgeStatusHeartbeat();
-      });
+      shutdown(
+        codex,
+        () => socket,
+        () => {
+          isShuttingDown = true;
+          bridgeWakeAssertion.stop();
+          clearReconnectTimer();
+          clearStableConnectionTimer();
+          clearRelayWatchdog();
+          clearBridgeStatusHeartbeat();
+        }
+      );
       return;
     }
 
@@ -334,7 +360,7 @@ function startBridge({
     }
 
     reconnectAttempt += 1;
-    const delayMs = Math.min(1_000 * reconnectAttempt, 5_000);
+    const delayMs = nextRelayReconnectDelayMs(reconnectAttempt);
     logConnectionStatus("connecting");
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
@@ -344,6 +370,10 @@ function startBridge({
 
   function connectRelay() {
     if (isShuttingDown) {
+      return;
+    }
+
+    if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) {
       return;
     }
 
@@ -359,48 +389,85 @@ function startBridge({
     socket = nextSocket;
 
     nextSocket.on("open", () => {
+      if (!isActiveRelaySocket(socket, nextSocket)) {
+        if (nextSocket.readyState === WebSocket.OPEN) {
+          nextSocket.close();
+        }
+        return;
+      }
+
       markRelayActivity();
       clearReconnectTimer();
-      reconnectAttempt = 0;
+      clearStableConnectionTimer();
       startRelayWatchdog(nextSocket);
+      latestReconnectDiagnostic = null;
+      stableConnectionTimer = setTimeout(() => {
+        if (isActiveRelaySocket(socket, nextSocket)) {
+          reconnectAttempt = 0;
+        }
+      }, RELAY_STABLE_CONNECTION_MS);
       logConnectionStatus("connected");
       secureTransport.bindLiveSendWireMessage(sendRelayWireMessage);
       sendRelayRegistrationUpdate(deviceState);
     });
 
     nextSocket.on("message", (data) => {
+      if (!isActiveRelaySocket(socket, nextSocket)) {
+        return;
+      }
+
       markRelayActivity();
       const message = typeof data === "string" ? data : data.toString("utf8");
-      if (secureTransport.handleIncomingWireMessage(message, {
-        sendControlMessage(controlMessage) {
-          if (nextSocket.readyState === WebSocket.OPEN) {
-            nextSocket.send(JSON.stringify(controlMessage));
-          }
-        },
-        onApplicationMessage(plaintextMessage) {
-          handleApplicationMessage(plaintextMessage);
-        },
-      })) {
+      if (
+        secureTransport.handleIncomingWireMessage(message, {
+          sendControlMessage(controlMessage) {
+            if (nextSocket.readyState === WebSocket.OPEN) {
+              nextSocket.send(JSON.stringify(controlMessage));
+            }
+          },
+          onApplicationMessage(plaintextMessage) {
+            handleApplicationMessage(plaintextMessage);
+          },
+        })
+      ) {
         return;
       }
     });
 
     nextSocket.on("ping", () => {
+      if (!isActiveRelaySocket(socket, nextSocket)) {
+        return;
+      }
       markRelayActivity();
     });
 
     nextSocket.on("pong", () => {
+      if (!isActiveRelaySocket(socket, nextSocket)) {
+        return;
+      }
       markRelayActivity();
     });
 
-    nextSocket.on("close", (code) => {
-      if (socket === nextSocket) {
-        clearRelayWatchdog();
+    nextSocket.on("close", (code, reasonBuffer) => {
+      if (!isActiveRelaySocket(socket, nextSocket)) {
+        return;
+      }
+
+      clearStableConnectionTimer();
+      clearRelayWatchdog();
+      const reason =
+        typeof reasonBuffer?.toString === "function" ? reasonBuffer.toString("utf8") : "";
+      recordRelayCloseDiagnostic(code, reason);
+      if (code !== 1000 || reason) {
+        const detail = [`code ${code}`];
+        const redactedReason = redactedRelayCloseReason(reason);
+        if (redactedReason) {
+          detail.push(`reason: ${redactedReason}`);
+        }
+        console.log(`[remodex] relay closed (${detail.join(", ")})`);
       }
       logConnectionStatus("disconnected");
-      if (socket === nextSocket) {
-        socket = null;
-      }
+      socket = null;
       stopContextUsageWatcher();
       rolloutLiveMirror?.stopAll();
       desktopRefresher.handleTransportReset();
@@ -408,9 +475,11 @@ function startBridge({
     });
 
     nextSocket.on("error", () => {
-      if (socket === nextSocket) {
-        clearRelayWatchdog();
+      if (!isActiveRelaySocket(socket, nextSocket)) {
+        return;
       }
+
+      clearRelayWatchdog();
       logConnectionStatus("disconnected");
     });
   }
@@ -443,6 +512,7 @@ function startBridge({
   });
 
   codex.onClose(() => {
+    clearStableConnectionTimer();
     clearRelayWatchdog();
     clearBridgeStatusHeartbeat();
     logConnectionStatus("disconnected");
@@ -458,27 +528,43 @@ function startBridge({
     stopContextUsageWatcher();
     rolloutLiveMirror?.stopAll();
     desktopRefresher.handleTransportReset();
-    failBridgeManagedCodexRequests(new Error("Codex transport closed before the bridge request completed."));
+    failBridgeManagedCodexRequests(
+      new Error("Codex transport closed before the bridge request completed.")
+    );
     forwardedRequestMethodsById.clear();
     if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) {
       socket.close();
     }
   });
 
-  process.on("SIGINT", () => shutdown(codex, () => socket, () => {
-    isShuttingDown = true;
-    bridgeWakeAssertion.stop();
-    clearReconnectTimer();
-    clearRelayWatchdog();
-    clearBridgeStatusHeartbeat();
-  }));
-  process.on("SIGTERM", () => shutdown(codex, () => socket, () => {
-    isShuttingDown = true;
-    bridgeWakeAssertion.stop();
-    clearReconnectTimer();
-    clearRelayWatchdog();
-    clearBridgeStatusHeartbeat();
-  }));
+  process.on("SIGINT", () =>
+    shutdown(
+      codex,
+      () => socket,
+      () => {
+        isShuttingDown = true;
+        bridgeWakeAssertion.stop();
+        clearReconnectTimer();
+        clearStableConnectionTimer();
+        clearRelayWatchdog();
+        clearBridgeStatusHeartbeat();
+      }
+    )
+  );
+  process.on("SIGTERM", () =>
+    shutdown(
+      codex,
+      () => socket,
+      () => {
+        isShuttingDown = true;
+        bridgeWakeAssertion.stop();
+        clearReconnectTimer();
+        clearStableConnectionTimer();
+        clearRelayWatchdog();
+        clearBridgeStatusHeartbeat();
+      }
+    )
+  );
 
   // Routes decrypted app payloads through the same bridge handlers as before.
   function handleApplicationMessage(rawMessage) {
@@ -500,12 +586,14 @@ function startBridge({
     if (notificationsHandler.handleNotificationsRequest(rawMessage, sendApplicationResponse)) {
       return;
     }
-    if (handleDesktopRequest(rawMessage, sendApplicationResponse, {
-      bundleId: config.codexBundleId,
-      appPath: config.codexAppPath,
-      readBridgePreferences,
-      updateBridgePreferences,
-    })) {
+    if (
+      handleDesktopRequest(rawMessage, sendApplicationResponse, {
+        bundleId: config.codexBundleId,
+        appPath: config.codexAppPath,
+        readBridgePreferences,
+        updateBridgePreferences,
+      })
+    ) {
       return;
     }
     if (handleGitRequest(rawMessage, sendApplicationResponse)) {
@@ -536,10 +624,12 @@ function startBridge({
     }
 
     const method = typeof parsed?.method === "string" ? parsed.method.trim() : "";
-    if (method !== "account/status/read"
-      && method !== "getAuthStatus"
-      && method !== "account/login/openOnMac"
-      && method !== "voice/resolveAuth") {
+    if (
+      method !== "account/status/read" &&
+      method !== "getAuthStatus" &&
+      method !== "account/login/openOnMac" &&
+      method !== "voice/resolveAuth"
+    ) {
       return false;
     }
 
@@ -578,29 +668,31 @@ function startBridge({
   // Combines account/read + getAuthStatus into one safe snapshot for the phone UI.
   // The two RPCs are settled independently so one transient failure does not hide the other.
   async function readSanitizedAuthStatus() {
-    const [accountReadResult, authStatusResult, bridgeVersionInfoResult] = await Promise.allSettled([
-      sendCodexRequest("account/read", {
-        refreshToken: false,
-      }),
-      sendCodexRequest("getAuthStatus", {
-        includeToken: true,
-        refreshToken: true,
-      }),
-      readBridgePackageVersionStatus(),
-    ]);
+    const [accountReadResult, authStatusResult, bridgeVersionInfoResult] = await Promise.allSettled(
+      [
+        sendCodexRequest("account/read", {
+          refreshToken: false,
+        }),
+        sendCodexRequest("getAuthStatus", {
+          includeToken: true,
+          refreshToken: true,
+        }),
+        readBridgePackageVersionStatus(),
+      ]
+    );
 
     return composeSanitizedAuthStatusFromSettledResults({
-      accountReadResult: accountReadResult.status === "fulfilled"
-        ? {
-          status: "fulfilled",
-          value: normalizeAccountRead(accountReadResult.value),
-        }
-        : accountReadResult,
+      accountReadResult:
+        accountReadResult.status === "fulfilled"
+          ? {
+              status: "fulfilled",
+              value: normalizeAccountRead(accountReadResult.value),
+            }
+          : accountReadResult,
       authStatusResult,
       loginInFlight: Boolean(pendingAuthLogin.loginId),
-      bridgeVersionInfo: bridgeVersionInfoResult.status === "fulfilled"
-        ? bridgeVersionInfoResult.value
-        : null,
+      bridgeVersionInfo:
+        bridgeVersionInfoResult.status === "fulfilled" ? bridgeVersionInfoResult.value : null,
       transportMode: codex.mode,
     });
   }
@@ -746,12 +838,12 @@ function startBridge({
 
   function pruneExpiredForwardedRequestMethods(now = Date.now()) {
     for (const [requestId, trackedRequest] of forwardedRequestMethodsById.entries()) {
-      if (!trackedRequest || (now - trackedRequest.createdAt) >= forwardedRequestMethodTTLms) {
+      if (!trackedRequest || now - trackedRequest.createdAt >= forwardedRequestMethodTTLms) {
         forwardedRequestMethodsById.delete(requestId);
       }
     }
     for (const [requestId, trackedRequest] of relaySanitizedResponseMethodsById.entries()) {
-      if (!trackedRequest || (now - trackedRequest.createdAt) >= forwardedRequestMethodTTLms) {
+      if (!trackedRequest || now - trackedRequest.createdAt >= forwardedRequestMethodTTLms) {
         relaySanitizedResponseMethodsById.delete(requestId);
       }
     }
@@ -831,13 +923,15 @@ function startBridge({
       return;
     }
 
-    sendApplicationResponse(JSON.stringify({
-      method: "thread/tokenUsage/updated",
-      params: {
-        threadId,
-        usage,
-      },
-    }));
+    sendApplicationResponse(
+      JSON.stringify({
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId,
+          usage,
+        },
+      })
+    );
   }
 
   // The spawned/shared Codex app-server stays warm across phone reconnects.
@@ -859,10 +953,12 @@ function startBridge({
     if (method === "initialize" && parsed.id != null) {
       const compatibilityError = bridgeManagedInitializeCompatibilityError(parsed.params || {});
       if (compatibilityError) {
-        sendApplicationResponse(JSON.stringify({
-          id: parsed.id,
-          error: compatibilityError,
-        }));
+        sendApplicationResponse(
+          JSON.stringify({
+            id: parsed.id,
+            error: compatibilityError,
+          })
+        );
         return true;
       }
 
@@ -871,12 +967,14 @@ function startBridge({
         return false;
       }
 
-      sendApplicationResponse(JSON.stringify({
-        id: parsed.id,
-        result: {
-          bridgeManaged: true,
-        },
-      }));
+      sendApplicationResponse(
+        JSON.stringify({
+          id: parsed.id,
+          result: {
+            bridgeManaged: true,
+          },
+        })
+      );
       return true;
     }
 
@@ -908,10 +1006,12 @@ function startBridge({
       return null;
     }
 
-    logIOSAppCompatibilityWarning(buildCachedIOSAppCompatibilityWarning({
-      bridgeVersion: bridgePackageVersion,
-      iosAppVersion: clientVersion,
-    }));
+    logIOSAppCompatibilityWarning(
+      buildCachedIOSAppCompatibilityWarning({
+        bridgeVersion: bridgePackageVersion,
+        iosAppVersion: clientVersion,
+      })
+    );
 
     return {
       code: -32001,
@@ -963,9 +1063,8 @@ function startBridge({
       return;
     }
 
-    const errorMessage = typeof parsed?.error?.message === "string"
-      ? parsed.error.message.toLowerCase()
-      : "";
+    const errorMessage =
+      typeof parsed?.error?.message === "string" ? parsed.error.message.toLowerCase() : "";
     if (errorMessage.includes("already initialized")) {
       codexHandshakeState = "warm";
     }
@@ -1050,10 +1149,23 @@ function startBridge({
   function publishBridgeStatus(status) {
     const nextStatus = {
       ...status,
+      latestReconnectDiagnostic,
+      lastPermanentReconnectReason,
       codexLaunchState,
     };
     lastPublishedBridgeStatus = nextStatus;
     onBridgeStatus?.(nextStatus);
+  }
+
+  function recordRelayCloseDiagnostic(closeCode, reasonText) {
+    const diagnostic = relayCloseDiagnostic(closeCode, reasonText);
+    latestReconnectDiagnostic = diagnostic;
+    if (diagnostic?.isPermanent) {
+      lastPermanentReconnectReason = {
+        code: diagnostic.code,
+        message: diagnostic.message,
+      };
+    }
   }
 
   // Refreshes the relay's trusted-mac index after the QR bootstrap locks in a phone identity.
@@ -1063,10 +1175,12 @@ function startBridge({
       return;
     }
 
-    socket.send(JSON.stringify({
-      kind: "relayMacRegistration",
-      registration: buildMacRegistration(nextDeviceState, pairingSession),
-    }));
+    socket.send(
+      JSON.stringify({
+        kind: "relayMacRegistration",
+        registration: buildMacRegistration(nextDeviceState, pairingSession),
+      })
+    );
   }
 
   function readBridgePreferences() {
@@ -1145,7 +1259,9 @@ function createMacOSBridgeWakeAssertion({
       });
 
       nextChild.on?.("error", (error) => {
-        consoleImpl.warn(`[remodex] Failed to hold the Mac awake while the bridge is active: ${error.message}`);
+        consoleImpl.warn(
+          `[remodex] Failed to hold the Mac awake while the bridge is active: ${error.message}`
+        );
       });
       nextChild.on?.("exit", () => {
         if (child === nextChild) {
@@ -1199,7 +1315,9 @@ function buildMacRegistrationHeaders(deviceState, pairingSession) {
     "x-machine-name": registration.displayName,
     "x-pairing-code": registration.pairingCode,
     "x-pairing-version": registration.pairingVersion ? String(registration.pairingVersion) : "",
-    "x-pairing-expires-at": registration.pairingExpiresAt ? String(registration.pairingExpiresAt) : "",
+    "x-pairing-expires-at": registration.pairingExpiresAt
+      ? String(registration.pairingExpiresAt)
+      : "",
   };
   if (registration.trustedPhoneDeviceId && registration.trustedPhonePublicKey) {
     headers["x-trusted-phone-device-id"] = registration.trustedPhoneDeviceId;
@@ -1217,7 +1335,9 @@ function buildMacRegistration(deviceState, pairingSession) {
     trustedPhoneDeviceId: normalizeNonEmptyString(trustedPhoneEntry?.[0]),
     trustedPhonePublicKey: normalizeNonEmptyString(trustedPhoneEntry?.[1]),
     pairingCode: normalizeNonEmptyString(pairingSession?.pairingCode),
-    pairingVersion: Number.isInteger(pairingSession?.pairingPayload?.v) ? pairingSession.pairingPayload.v : 0,
+    pairingVersion: Number.isInteger(pairingSession?.pairingPayload?.v)
+      ? pairingSession.pairingPayload.v
+      : 0,
     pairingExpiresAt: Number.isFinite(pairingSession?.pairingPayload?.expiresAt)
       ? pairingSession.pairingPayload.expiresAt
       : 0,
@@ -1262,36 +1382,35 @@ function shouldStartContextUsageWatcher(context) {
     return false;
   }
 
-  return context.method === "turn/start"
-    || context.method === "turn/started";
+  return context.method === "turn/start" || context.method === "turn/started";
 }
 
 function extractThreadId(method, params) {
   if (method === "turn/start" || method === "turn/started") {
     return (
-      readString(params?.threadId)
-      || readString(params?.thread_id)
-      || readString(params?.turn?.threadId)
-      || readString(params?.turn?.thread_id)
+      readString(params?.threadId) ||
+      readString(params?.thread_id) ||
+      readString(params?.turn?.threadId) ||
+      readString(params?.turn?.thread_id)
     );
   }
 
   if (method === "thread/start" || method === "thread/started") {
     return (
-      readString(params?.threadId)
-      || readString(params?.thread_id)
-      || readString(params?.thread?.id)
-      || readString(params?.thread?.threadId)
-      || readString(params?.thread?.thread_id)
+      readString(params?.threadId) ||
+      readString(params?.thread_id) ||
+      readString(params?.thread?.id) ||
+      readString(params?.thread?.threadId) ||
+      readString(params?.thread?.thread_id)
     );
   }
 
   if (method === "turn/completed") {
     return (
-      readString(params?.threadId)
-      || readString(params?.thread_id)
-      || readString(params?.turn?.threadId)
-      || readString(params?.turn?.thread_id)
+      readString(params?.threadId) ||
+      readString(params?.thread_id) ||
+      readString(params?.turn?.threadId) ||
+      readString(params?.turn?.thread_id)
     );
   }
 
@@ -1301,12 +1420,12 @@ function extractThreadId(method, params) {
 function extractTurnId(method, params) {
   if (method === "turn/started" || method === "turn/completed") {
     return (
-      readString(params?.turnId)
-      || readString(params?.turn_id)
-      || readString(params?.id)
-      || readString(params?.turn?.id)
-      || readString(params?.turn?.turnId)
-      || readString(params?.turn?.turn_id)
+      readString(params?.turnId) ||
+      readString(params?.turn_id) ||
+      readString(params?.id) ||
+      readString(params?.turn?.id) ||
+      readString(params?.turn?.turnId) ||
+      readString(params?.turn?.turn_id)
     );
   }
 
@@ -1317,13 +1436,87 @@ function readString(value) {
   return typeof value === "string" && value ? value : null;
 }
 
+function isActiveRelaySocket(currentSocket, candidateSocket) {
+  return currentSocket === candidateSocket;
+}
+
 function normalizeNonEmptyString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
+function relayCloseDiagnostic(closeCode, reasonText = "") {
+  const normalizedReason = normalizeNonEmptyString(reasonText);
+  const diagnosticReason = redactedRelayCloseReason(normalizedReason);
+
+  switch (closeCode) {
+    case 4000:
+      return {
+        code: "re_pair_required",
+        message: "This relay pairing is no longer valid. Scan a new QR code to reconnect.",
+        isPermanent: true,
+      };
+    case 4001:
+      return {
+        code: "session_replaced",
+        message: "This relay session was replaced by a newer Mac connection.",
+        isPermanent: true,
+      };
+    case 4002:
+      return {
+        code: "saved_session_unavailable",
+        message: "The saved session expired or is temporarily unavailable. Retrying...",
+        isPermanent: false,
+      };
+    case 4003:
+      return {
+        code: "re_pair_required",
+        message: "This device was replaced by a newer connection. Scan a new QR code to reconnect.",
+        isPermanent: true,
+      };
+    case 4004:
+      return {
+        code: "relay_temporarily_unavailable",
+        message: "The Mac was temporarily unavailable and the bridge will retry.",
+        isPermanent: false,
+      };
+    case 4005:
+      return {
+        code: "re_pair_required",
+        message:
+          "This saved relay session is no longer trusted by the Mac. Scan a new QR code to reconnect.",
+        isPermanent: true,
+      };
+    default:
+      if (closeCode == null || closeCode === 1000) {
+        return null;
+      }
+
+      return {
+        code: "relay_temporarily_unavailable",
+        message: diagnosticReason
+          ? `The relay connection closed unexpectedly: ${diagnosticReason}`
+          : "The relay or network is temporarily unavailable.",
+        isPermanent: false,
+      };
+  }
+}
+
+function shouldShutdownOnRelayCloseCode(closeCode) {
+  return relayCloseDiagnostic(closeCode)?.isPermanent === true;
+}
+
+function nextRelayReconnectDelayMs(reconnectAttempt) {
+  const normalizedAttempt = Math.max(1, Number(reconnectAttempt) || 1);
+  return Math.min(1_000 * 2 ** (normalizedAttempt - 1), MAX_RELAY_RECONNECT_DELAY_MS);
+}
+
 // Shrinks `thread/read` and `thread/resume` snapshots by eliding bulky history payloads
 // that the iPhone does not render directly (inline images, compaction replacement history).
-function sanitizeThreadHistoryImagesForRelay(rawMessage, requestMethod) {
+function sanitizeThreadHistoryImagesForRelay(
+  rawMessage,
+  requestMethod,
+  { softCapBytes = RELAY_HISTORY_SOFT_CAP_BYTES } = {}
+) {
   if (requestMethod !== "thread/read" && requestMethod !== "thread/resume") {
     return rawMessage;
   }
@@ -1334,123 +1527,116 @@ function sanitizeThreadHistoryImagesForRelay(rawMessage, requestMethod) {
     return rawMessage;
   }
 
-  let didSanitize = false;
-  const sanitizedTurns = thread.turns.map((turn) => {
-    if (!turn || typeof turn !== "object" || !Array.isArray(turn.items)) {
-      return turn;
-    }
+  const recursivelySanitized = sanitizeRelayThreadHistoryNode(thread);
+  const firstPassThread = recursivelySanitized.didChange ? recursivelySanitized.value : thread;
 
-    let turnDidChange = false;
-    const sanitizedItems = turn.items.map((item) => {
-      if (!item || typeof item !== "object") {
-        return item;
-      }
+  const serialized = serializeRelayThreadResponse(parsed, firstPassThread);
 
-      let itemDidChange = false;
-      let sanitizedItem = item;
-
-      if (Array.isArray(item.content)) {
-        const sanitizedContent = item.content.map((contentItem) => {
-          const sanitizedEntry = sanitizeInlineHistoryImageContentItem(contentItem);
-          if (sanitizedEntry !== contentItem) {
-            itemDidChange = true;
-          }
-          return sanitizedEntry;
-        });
-
-        if (itemDidChange) {
-          sanitizedItem = {
-            ...sanitizedItem,
-            content: sanitizedContent,
-          };
-        }
-      }
-
-      const sanitizedCompactionItem = sanitizeCompactionHistoryItem(sanitizedItem);
-      if (sanitizedCompactionItem !== sanitizedItem) {
-        sanitizedItem = sanitizedCompactionItem;
-        itemDidChange = true;
-      }
-
-      if (itemDidChange) {
-        turnDidChange = true;
-      }
-
-      return itemDidChange ? sanitizedItem : item;
-    });
-
-    if (!turnDidChange) {
-      return turn;
-    }
-
-    didSanitize = true;
-    return {
-      ...turn,
-      items: sanitizedItems,
-    };
-  });
-
-  if (!didSanitize) {
-    return rawMessage;
+  if (Buffer.byteLength(serialized, "utf8") <= softCapBytes) {
+    return recursivelySanitized.didChange ? serialized : rawMessage;
   }
 
+  const aggressivelySanitized = stripRelayHistoryAttachmentPreviews(firstPassThread);
+  const aggressivelySanitizedThread = aggressivelySanitized.didChange
+    ? aggressivelySanitized.value
+    : firstPassThread;
+  const aggressivelySerialized = serializeRelayThreadResponse(parsed, aggressivelySanitizedThread);
+  if (Buffer.byteLength(aggressivelySerialized, "utf8") <= softCapBytes) {
+    return aggressivelySerialized;
+  }
+
+  const truncatedThread = truncateRelayThreadHistoryForSoftCap(
+    parsed,
+    aggressivelySanitizedThread,
+    softCapBytes
+  );
+  if (truncatedThread) {
+    return serializeRelayThreadResponse(parsed, truncatedThread);
+  }
+
+  return aggressivelySerialized;
+}
+
+function serializeRelayThreadResponse(parsed, thread) {
   return JSON.stringify({
     ...parsed,
     result: {
       ...parsed.result,
       thread: {
         ...thread,
-        turns: sanitizedTurns,
       },
     },
   });
 }
 
-// Drops huge replacement-history blobs from compaction items because the phone only needs
-// the compacted marker itself, not the entire pre-compaction transcript snapshot.
-function sanitizeCompactionHistoryItem(item) {
-  if (!item || typeof item !== "object" || Array.isArray(item)) {
-    return item;
-  }
-
-  let sanitizedItem = omitCompactionReplacementHistory(item);
-  const payload = sanitizedItem.payload;
-  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-    const sanitizedPayload = omitCompactionReplacementHistory(payload);
-    if (sanitizedPayload !== payload) {
-      sanitizedItem = {
-        ...sanitizedItem,
-        payload: sanitizedPayload,
-      };
-    }
-  }
-
-  return sanitizedItem;
-}
-
-function omitCompactionReplacementHistory(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return value;
-  }
-
-  let nextValue = value;
-  let didChange = false;
-  for (const key of ["replacement_history", "replacementHistory"]) {
-    if (Object.prototype.hasOwnProperty.call(nextValue, key)) {
-      if (!didChange) {
-        nextValue = { ...nextValue };
+function sanitizeRelayThreadHistoryNode(value, key = "") {
+  if (Array.isArray(value)) {
+    let didChange = false;
+    const nextArray = value.map((entry) => {
+      const sanitized = sanitizeRelayThreadHistoryNode(entry, key);
+      if (sanitized.didChange) {
         didChange = true;
       }
-      delete nextValue[key];
-    }
+      return sanitized.value;
+    });
+    return {
+      value: didChange ? nextArray : value,
+      didChange,
+    };
   }
 
-  return didChange ? nextValue : value;
+  if (!value || typeof value !== "object") {
+    return {
+      value,
+      didChange: false,
+    };
+  }
+
+  const sanitizedInlineHistoryImage = sanitizeInlineHistoryImageContentItem(value);
+  if (sanitizedInlineHistoryImage !== value) {
+    return {
+      value: sanitizedInlineHistoryImage,
+      didChange: true,
+    };
+  }
+
+  let didChange = false;
+  const nextObject = {};
+  for (const [entryKey, entryValue] of Object.entries(value)) {
+    if (entryKey === "replacement_history" || entryKey === "replacementHistory") {
+      didChange = true;
+      continue;
+    }
+
+    if (isInlineHistoryImageDataURL(entryValue)) {
+      const replacement = replacementForInlineHistoryImageEntry(entryKey);
+      if (replacement === undefined) {
+        didChange = true;
+        continue;
+      }
+      if (replacement !== entryValue) {
+        didChange = true;
+      }
+      nextObject[entryKey] = replacement;
+      continue;
+    }
+
+    const sanitizedChild = sanitizeRelayThreadHistoryNode(entryValue, entryKey);
+    if (sanitizedChild.didChange) {
+      didChange = true;
+    }
+    nextObject[entryKey] = sanitizedChild.value;
+  }
+
+  return {
+    value: didChange ? nextObject : value,
+    didChange,
+  };
 }
 
 // Converts `data:image/...` history content into a tiny placeholder the iPhone can render safely.
 function sanitizeInlineHistoryImageContentItem(contentItem) {
-  if (!contentItem || typeof contentItem !== "object") {
+  if (!contentItem || typeof contentItem !== "object" || Array.isArray(contentItem)) {
     return contentItem;
   }
 
@@ -1459,19 +1645,15 @@ function sanitizeInlineHistoryImageContentItem(contentItem) {
     return contentItem;
   }
 
-  const hasInlineUrl = isInlineHistoryImageDataURL(contentItem.url)
-    || isInlineHistoryImageDataURL(contentItem.image_url)
-    || isInlineHistoryImageDataURL(contentItem.path);
+  const hasInlineUrl =
+    isInlineHistoryImageDataURL(contentItem.url) ||
+    isInlineHistoryImageDataURL(contentItem.image_url) ||
+    isInlineHistoryImageDataURL(contentItem.path);
   if (!hasInlineUrl) {
     return contentItem;
   }
 
-  const {
-    url: _url,
-    image_url: _imageUrl,
-    path: _path,
-    ...rest
-  } = contentItem;
+  const { url: _url, image_url: _imageUrl, path: _path, ...rest } = contentItem;
 
   return {
     ...rest,
@@ -1479,10 +1661,146 @@ function sanitizeInlineHistoryImageContentItem(contentItem) {
   };
 }
 
+function replacementForInlineHistoryImageEntry(key) {
+  switch (key) {
+    case "payloadDataURL":
+    case "payloadDataUrl":
+    case "payload_data_url":
+      return undefined;
+    default:
+      return RELAY_HISTORY_IMAGE_REFERENCE_URL;
+  }
+}
+
+function stripRelayHistoryAttachmentPreviews(value) {
+  if (Array.isArray(value)) {
+    let didChange = false;
+    const nextArray = value.map((entry) => {
+      const sanitized = stripRelayHistoryAttachmentPreviews(entry);
+      if (sanitized.didChange) {
+        didChange = true;
+      }
+      return sanitized.value;
+    });
+    return {
+      value: didChange ? nextArray : value,
+      didChange,
+    };
+  }
+
+  if (!value || typeof value !== "object") {
+    return {
+      value,
+      didChange: false,
+    };
+  }
+
+  let didChange = false;
+  const nextObject = {};
+  for (const [entryKey, entryValue] of Object.entries(value)) {
+    if (
+      isRelayAttachmentPreviewKey(entryKey) &&
+      typeof entryValue === "string" &&
+      entryValue.length > 0
+    ) {
+      nextObject[entryKey] = "";
+      didChange = true;
+      continue;
+    }
+
+    const sanitizedChild = stripRelayHistoryAttachmentPreviews(entryValue);
+    if (sanitizedChild.didChange) {
+      didChange = true;
+    }
+    nextObject[entryKey] = sanitizedChild.value;
+  }
+
+  return {
+    value: didChange ? nextObject : value,
+    didChange,
+  };
+}
+
+function truncateRelayThreadHistoryForSoftCap(parsed, thread, softCapBytes) {
+  const turns = Array.isArray(thread?.turns) ? thread.turns : null;
+  if (!turns || turns.length === 0) {
+    return null;
+  }
+
+  let workingTurns = turns.slice();
+  let removedTurns = 0;
+  let removedItems = 0;
+
+  const buildThread = () => ({
+    ...thread,
+    turns: workingTurns,
+    relayHistoryTruncated: true,
+    relayHistoryDroppedTurns: removedTurns,
+    relayHistoryDroppedItems: removedItems,
+  });
+
+  while (workingTurns.length > 1) {
+    workingTurns = workingTurns.slice(1);
+    removedTurns += 1;
+    const candidate = buildThread();
+    if (
+      Buffer.byteLength(serializeRelayThreadResponse(parsed, candidate), "utf8") <= softCapBytes
+    ) {
+      return candidate;
+    }
+  }
+
+  const remainingTurn = workingTurns[0];
+  const items = Array.isArray(remainingTurn?.items) ? remainingTurn.items : null;
+  if (items && items.length > 1) {
+    let workingItems = items.slice();
+    while (workingItems.length > 1) {
+      workingItems = workingItems.slice(1);
+      removedItems += 1;
+      workingTurns = [
+        {
+          ...remainingTurn,
+          items: workingItems,
+        },
+      ];
+      const candidate = buildThread();
+      if (
+        Buffer.byteLength(serializeRelayThreadResponse(parsed, candidate), "utf8") <= softCapBytes
+      ) {
+        return candidate;
+      }
+    }
+  }
+
+  const emptyHistoryThread = {
+    ...thread,
+    turns: [],
+    relayHistoryTruncated: true,
+    relayHistoryDroppedTurns: turns.length,
+    relayHistoryDroppedItems: removedItems,
+  };
+  if (
+    Buffer.byteLength(serializeRelayThreadResponse(parsed, emptyHistoryThread), "utf8") <=
+    softCapBytes
+  ) {
+    return emptyHistoryThread;
+  }
+
+  return null;
+}
+
+function isRelayAttachmentPreviewKey(key) {
+  return (
+    key === "thumbnailBase64JPEG" ||
+    key === "thumbnailBase64Jpeg" ||
+    key === "thumbnail_base64_jpeg" ||
+    key === "thumbnailBase64" ||
+    key === "thumbnail_base64"
+  );
+}
+
 function normalizeRelayHistoryContentType(value) {
-  return typeof value === "string"
-    ? value.toLowerCase().replace(/[\s_-]+/g, "")
-    : "";
+  return typeof value === "string" ? value.toLowerCase().replace(/[\s_-]+/g, "") : "";
 }
 
 function isInlineHistoryImageDataURL(value) {
@@ -1496,18 +1814,14 @@ function parseBridgeJSON(value) {
     return null;
   }
 }
-
 // Treats silent relay sockets as stale so the daemon can self-heal after sleep/wake.
 function hasRelayConnectionGoneStale(
   lastActivityAt,
-  {
-    now = Date.now(),
-    staleAfterMs = RELAY_WATCHDOG_STALE_AFTER_MS,
-  } = {}
+  { now = Date.now(), staleAfterMs = RELAY_WATCHDOG_STALE_AFTER_MS } = {}
 ) {
-  return Number.isFinite(lastActivityAt)
-    && Number.isFinite(now)
-    && now - lastActivityAt >= staleAfterMs;
+  return (
+    Number.isFinite(lastActivityAt) && Number.isFinite(now) && now - lastActivityAt >= staleAfterMs
+  );
 }
 
 // Keeps persisted daemon status honest by downgrading stale "connected" snapshots.
@@ -1540,13 +1854,8 @@ function buildHeartbeatBridgeStatus(
 }
 
 function persistBridgePreferences(
-  {
-    keepMacAwakeEnabled,
-  },
-  {
-    readDaemonConfigImpl = readDaemonConfig,
-    writeDaemonConfigImpl = writeDaemonConfig,
-  } = {}
+  { keepMacAwakeEnabled },
+  { readDaemonConfigImpl = readDaemonConfig, writeDaemonConfigImpl = writeDaemonConfig } = {}
 ) {
   writeDaemonConfigImpl({
     ...(readDaemonConfigImpl() || {}),
@@ -1554,11 +1863,24 @@ function persistBridgePreferences(
   });
 }
 
+function redactedRelayCloseReason(reasonText) {
+  if (typeof reasonText !== "string") {
+    return "";
+  }
+
+  return reasonText.trim() ? "[redacted]" : "";
+}
+
 module.exports = {
   buildHeartbeatBridgeStatus,
   createMacOSBridgeWakeAssertion,
   hasRelayConnectionGoneStale,
+  isActiveRelaySocket,
+  nextRelayReconnectDelayMs,
   persistBridgePreferences,
+  redactedRelayCloseReason,
+  relayCloseDiagnostic,
+  shouldShutdownOnRelayCloseCode,
   sanitizeThreadHistoryImagesForRelay,
   startBridge,
 };

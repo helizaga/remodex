@@ -438,32 +438,34 @@ extension ContentViewModel {
         for error: CodexTrustedSessionResolveError,
         codex: CodexService
     ) -> ReconnectURLResolution {
+        let reconnectFailure = codex.reconnectFailurePresentation(for: error)
+
         switch error {
         case .unsupportedRelay:
             if !codex.hasSavedRelaySession {
                 codex.connectionRecoveryState = .idle
-                codex.lastErrorMessage = "This relay needs a fresh QR scan before trusted reconnect is available."
+                codex.lastErrorMessage = reconnectFailure?.message
                 return .stop
             }
             return .fallbackToSaved
-        case .macOffline(let message):
+        case .macOffline:
             if codex.hasSavedRelaySession {
                 codex.lastErrorMessage = nil
                 return .fallbackToSaved
             }
             codex.connectionRecoveryState = .idle
-            codex.lastErrorMessage = message
+            codex.lastErrorMessage = reconnectFailure?.message
             return .stop
-        case .rePairRequired(let message):
+        case .rePairRequired:
             codex.connectionRecoveryState = .idle
             codex.shouldAutoReconnectOnForeground = false
-            codex.lastErrorMessage = message
+            codex.lastErrorMessage = reconnectFailure?.message
             return .stop
         case .noTrustedMac:
             return .fallbackToSaved
-        case .invalidResponse(let message), .network(let message):
+        case .invalidResponse, .network:
             if !codex.hasSavedRelaySession {
-                codex.lastErrorMessage = message
+                codex.lastErrorMessage = reconnectFailure?.message
             }
             return .fallbackToSaved
         }

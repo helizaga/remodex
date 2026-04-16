@@ -47,8 +47,7 @@ struct TurnView: View {
     // ─── ENTRY POINT ─────────────────────────────────────────────
     var body: some View {
         let resolvedThread = currentResolvedThread
-        let timelineState = codex.timelineState(for: thread.id)
-        let renderSnapshot = timelineState.renderSnapshot
+        let renderSnapshot = codex.renderSnapshot(for: thread.id)
         let activeTurnID = renderSnapshot.activeTurnID
         let planSessionSource = codex.currentPlanSessionSource(for: thread.id)
         let gitWorkingDirectory = resolvedThread.gitWorkingDirectory
@@ -641,6 +640,10 @@ struct TurnView: View {
 
     @ViewBuilder
     private func composerStructuredPromptReplacement(message: CodexMessage) -> some View {
+        let renderSnapshot = codex.renderSnapshot(for: thread.id)
+        let isThreadRunning = renderSnapshot.isThreadRunning
+        let isEmptyThread = renderSnapshot.messages.isEmpty
+
         if let request = message.structuredUserInputRequest {
             let isDismissed = viewModel.isStructuredPlanPromptDismissed(request.requestID, codex: codex)
             let isDismissing = viewModel.isStructuredPlanPromptDismissing(request.requestID, codex: codex)
@@ -662,8 +665,8 @@ struct TurnView: View {
                 composerWithSubagentAccessory(
                     currentThread: currentResolvedThread,
                     activeTurnID: codex.activeTurnID(for: thread.id),
-                    isThreadRunning: codex.timelineState(for: thread.id).renderSnapshot.isThreadRunning,
-                    isEmptyThread: codex.timelineState(for: thread.id).renderSnapshot.messages.isEmpty,
+                    isThreadRunning: isThreadRunning,
+                    isEmptyThread: isEmptyThread,
                     isWorktreeProject: currentResolvedThread.isManagedWorktreeProject,
                     showsGitControls: codex.isConnected && currentResolvedThread.gitWorkingDirectory != nil,
                     gitWorkingDirectory: currentResolvedThread.gitWorkingDirectory
@@ -673,8 +676,8 @@ struct TurnView: View {
             composerWithSubagentAccessory(
                 currentThread: currentResolvedThread,
                 activeTurnID: codex.activeTurnID(for: thread.id),
-                isThreadRunning: codex.timelineState(for: thread.id).renderSnapshot.isThreadRunning,
-                isEmptyThread: codex.timelineState(for: thread.id).renderSnapshot.messages.isEmpty,
+                isThreadRunning: isThreadRunning,
+                isEmptyThread: isEmptyThread,
                 isWorktreeProject: currentResolvedThread.isManagedWorktreeProject,
                 showsGitControls: codex.isConnected && currentResolvedThread.gitWorkingDirectory != nil,
                 gitWorkingDirectory: currentResolvedThread.gitWorkingDirectory
@@ -946,7 +949,8 @@ struct TurnView: View {
             workingDirectory: gitWorkingDirectory,
             threadID: thread.id,
             activeTurnID: activeTurnID,
-            onOpenWorktree: { result in
+            onOpenWorktree: { [weak viewModel] result in
+                guard let viewModel else { return }
                 guard !result.alreadyExisted else {
                     viewModel.gitSyncAlert = TurnGitSyncAlert(
                         title: "Branch Already Exists",
@@ -1038,7 +1042,8 @@ struct TurnView: View {
             workingDirectory: gitWorkingDirectory,
             threadID: thread.id,
             activeTurnID: activeTurnID,
-            onOpenWorktree: { result in
+            onOpenWorktree: { [weak viewModel] result in
+                guard let viewModel else { return }
                 guard !result.alreadyExisted else {
                     viewModel.gitSyncAlert = TurnGitSyncAlert(
                         title: "Branch Already Exists",

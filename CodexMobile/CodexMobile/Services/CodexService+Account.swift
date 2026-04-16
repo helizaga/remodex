@@ -97,7 +97,7 @@ struct CodexGPTAccountSnapshot: Codable, Equatable, Sendable {
     }()
 }
 
-func codexGPTAccountInitialSnapshot() -> CodexGPTAccountSnapshot {
+nonisolated func codexGPTAccountInitialSnapshot() -> CodexGPTAccountSnapshot {
     CodexGPTAccountSnapshot(
         status: .unknown,
         authMethod: nil,
@@ -981,14 +981,15 @@ extension CodexService {
     func loggedOutGPTAccountSnapshot(
         status: CodexGPTAccountStatus,
         needsReauth: Bool = false,
-        retaining snapshot: CodexGPTAccountSnapshot = codexGPTAccountInitialSnapshot()
+        retaining snapshot: CodexGPTAccountSnapshot? = nil
     ) -> CodexGPTAccountSnapshot {
-        CodexGPTAccountSnapshot(
+        let resolvedSnapshot = snapshot ?? codexGPTAccountInitialSnapshot()
+        return CodexGPTAccountSnapshot(
             status: status,
             authMethod: nil,
-            email: needsReauth ? snapshot.email : nil,
-            displayName: needsReauth ? snapshot.displayName : nil,
-            planType: needsReauth ? snapshot.planType : nil,
+            email: needsReauth ? resolvedSnapshot.email : nil,
+            displayName: needsReauth ? resolvedSnapshot.displayName : nil,
+            planType: needsReauth ? resolvedSnapshot.planType : nil,
             loginInFlight: false,
             needsReauth: needsReauth,
             expiresAt: nil,
@@ -1005,7 +1006,6 @@ extension CodexService {
         hasLegacyAuthToken: Bool = false
     ) -> Bool {
         firstBoolValue(in: payloadObject, keys: ["tokenReady", "token_ready"])
-            ?? (hasLegacyAuthToken && status == .authenticated && !needsReauth)
             ?? (status == .authenticated && !needsReauth)
     }
 

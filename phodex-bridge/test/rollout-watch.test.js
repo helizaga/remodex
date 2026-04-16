@@ -14,6 +14,7 @@ const { setTimeout: wait } = require("node:timers/promises");
 const {
   contextUsageFromTokenCountPayload,
   createThreadRolloutActivityWatcher,
+  findRolloutFileForThread,
   readLatestContextWindowUsage,
 } = require("../src/rollout-watch");
 
@@ -77,6 +78,7 @@ test("watcher falls back to the thread-scoped rollout when turn id is unavailabl
 test("watcher prefers the newest rollout when the same thread has multiple files", async (t) => {
   const { homeDir, threadDir } = makeTemporarySessionsHome();
   const previousCodexHome = process.env.CODEX_HOME;
+  const nowMs = Date.UTC(2026, 2, 12, 13, 30, 0);
   process.env.CODEX_HOME = homeDir;
   t.after(() => {
     restoreCodexHome(previousCodexHome);
@@ -88,11 +90,13 @@ test("watcher prefers the newest rollout when the same thread has multiple files
     tokensUsed: 111,
     tokenLimit: 1_000,
   });
+  setFileMTime(path.join(threadDir, "rollout-2026-03-05T13-23-27-thread-a.jsonl"), nowMs - 120_000);
   writeRolloutFile(path.join(threadDir, "rollout-2026-03-05T13-25-27-thread-a.jsonl"), {
     turnId: "turn-a-new",
     tokensUsed: 333,
     tokenLimit: 1_000,
   });
+  setFileMTime(path.join(threadDir, "rollout-2026-03-05T13-25-27-thread-a.jsonl"), nowMs - 60_000);
 
   const usages = [];
   const watcher = createThreadRolloutActivityWatcher({
@@ -100,6 +104,7 @@ test("watcher prefers the newest rollout when the same thread has multiple files
     intervalMs: 5,
     lookupTimeoutMs: 100,
     idleTimeoutMs: 100,
+    now: () => nowMs,
     onUsage: ({ usage }) => usages.push(usage),
   });
 
@@ -128,7 +133,7 @@ test("watcher falls back to an older thread rollout outside the recent lookback 
     tokensUsed: 555,
     tokenLimit: 1_000,
   });
-  setFileMTime(oldRolloutPath, nowMs - (24 * 60 * 60 * 1000));
+  setFileMTime(oldRolloutPath, nowMs - 24 * 60 * 60 * 1000);
 
   const newerOtherPath = path.join(threadDir, "rollout-2026-03-12T13-29-00-thread-b.jsonl");
   writeRolloutFile(newerOtherPath, {
@@ -185,7 +190,7 @@ test("readLatestContextWindowUsage prefers the thread-scoped rollout over newer 
   assert.match(result?.rolloutPath ?? "", /thread-a\.jsonl$/);
 });
 
-test("readLatestContextWindowUsage prefers the newest same-thread rollout", (t) => {
+test("readLatestContextWindowUsage prefers the newest rollout when a thread has multiple files", (t) => {
   const { homeDir, threadDir } = makeTemporarySessionsHome();
   const previousCodexHome = process.env.CODEX_HOME;
   process.env.CODEX_HOME = homeDir;
@@ -194,16 +199,21 @@ test("readLatestContextWindowUsage prefers the newest same-thread rollout", (t) 
     fs.rmSync(homeDir, { recursive: true, force: true });
   });
 
-  writeRolloutFile(path.join(threadDir, "rollout-2026-03-05T13-23-27-thread-a.jsonl"), {
+  const olderPath = path.join(threadDir, "rollout-2026-03-05T13-23-27-thread-a.jsonl");
+  writeRolloutFile(olderPath, {
     turnId: "turn-a-old",
     tokensUsed: 222,
     tokenLimit: 1_000,
   });
-  writeRolloutFile(path.join(threadDir, "rollout-2026-03-05T13-25-27-thread-a.jsonl"), {
+  setFileMTime(olderPath, Date.UTC(2026, 2, 5, 13, 23, 27));
+
+  const newerPath = path.join(threadDir, "rollout-2026-03-05T13-25-27-thread-a.jsonl");
+  writeRolloutFile(newerPath, {
     turnId: "turn-a-new",
     tokensUsed: 444,
     tokenLimit: 1_000,
   });
+  setFileMTime(newerPath, Date.UTC(2026, 2, 5, 13, 25, 27));
 
   const result = readLatestContextWindowUsage({ threadId: "thread-a" });
   assert.deepEqual(result?.usage, {
@@ -267,6 +277,92 @@ test("readLatestContextWindowUsage returns null when no rollout matches the requ
 
   const result = readLatestContextWindowUsage({ threadId: "missing-thread" });
   assert.equal(result, null);
+});
+
+test("findRolloutFileForThread skips retryable stat races during full-tree scan", () => {
+  const file = (name) => ({
+    name,
+    isDirectory: () => false,
+    isFile: () => true,
+  });
+  const directory = (name) => ({
+    name,
+    isDirectory: () => true,
+    isFile: () => false,
+  });
+  const fsModule = {
+    existsSync(root) {
+      return root === "/sessions";
+    },
+    readdirSync(current) {
+      if (current === "/sessions") {
+        return [directory("thread-a")];
+      }
+      if (current === "/sessions/thread-a") {
+        return [file("rollout-older-thread-a.jsonl"), file("rollout-newer-thread-a.jsonl")];
+      }
+      throw new Error(`unexpected readdirSync path: ${current}`);
+    },
+    statSync(filePath) {
+      if (filePath.endsWith("rollout-older-thread-a.jsonl")) {
+        const error = new Error("disappeared");
+        error.code = "ENOENT";
+        throw error;
+      }
+
+      if (filePath.endsWith("rollout-newer-thread-a.jsonl")) {
+        return { mtimeMs: 200 };
+      }
+
+      throw new Error(`unexpected statSync path: ${filePath}`);
+    },
+  };
+
+  assert.equal(
+    findRolloutFileForThread("/sessions", "thread-a", { fsModule }),
+    "/sessions/thread-a/rollout-newer-thread-a.jsonl"
+  );
+});
+
+test("findRolloutFileForThread ignores substring rollout names for other threads", () => {
+  const file = (name) => ({
+    name,
+    isDirectory: () => false,
+    isFile: () => true,
+  });
+  const directory = (name) => ({
+    name,
+    isDirectory: () => true,
+    isFile: () => false,
+  });
+  const fsModule = {
+    existsSync(root) {
+      return root === "/sessions";
+    },
+    readdirSync(current) {
+      if (current === "/sessions") {
+        return [directory("thread-a")];
+      }
+      if (current === "/sessions/thread-a") {
+        return [file("rollout-older-thread-a-2.jsonl"), file("rollout-newer-thread-a.jsonl")];
+      }
+      throw new Error(`unexpected readdirSync path: ${current}`);
+    },
+    statSync(filePath) {
+      if (filePath.endsWith("rollout-older-thread-a-2.jsonl")) {
+        return { mtimeMs: 300 };
+      }
+      if (filePath.endsWith("rollout-newer-thread-a.jsonl")) {
+        return { mtimeMs: 200 };
+      }
+      throw new Error(`unexpected statSync path: ${filePath}`);
+    },
+  };
+
+  assert.equal(
+    findRolloutFileForThread("/sessions", "thread-a", { fsModule }),
+    "/sessions/thread-a/rollout-newer-thread-a.jsonl"
+  );
 });
 
 function makeTemporarySessionsHome() {

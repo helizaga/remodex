@@ -32,8 +32,7 @@ struct TerminalRunningIndicator: View {
         HStack(alignment: .bottom, spacing: 1) {
             Text(">")
                 .font(AppFont.mono(.caption2))
-       
-               
+
             RoundedRectangle(cornerRadius: 1, style: .continuous)
                 .fill(Color.secondary)
                 .frame(width: 4, height: 1)

@@ -12,7 +12,7 @@ struct CodexImageAttachment: Identifiable, Codable, Hashable, Sendable {
     let payloadDataURL: String?
     let sourceURL: String?
 
-    init(
+    nonisolated init(
         id: String = UUID().uuidString,
         thumbnailBase64JPEG: String,
         payloadDataURL: String? = nil,
@@ -25,7 +25,7 @@ struct CodexImageAttachment: Identifiable, Codable, Hashable, Sendable {
     }
 
     // History rows only need a thumbnail and, when available, a lightweight remote URL.
-    func sanitizedForStorage(preservingPayloadDataURL: Bool) -> CodexImageAttachment {
+    nonisolated func sanitizedForStorage(preservingPayloadDataURL: Bool) -> CodexImageAttachment {
         CodexImageAttachment(
             id: id,
             thumbnailBase64JPEG: thumbnailBase64JPEG,
@@ -35,7 +35,7 @@ struct CodexImageAttachment: Identifiable, Codable, Hashable, Sendable {
     }
 
     // Keeps attachment matching stable without hashing giant inline data URLs.
-    var stableIdentityKey: String {
+    nonisolated var stableIdentityKey: String {
         if let normalizedSourceURL {
             return normalizedSourceURL
         }
@@ -48,12 +48,12 @@ struct CodexImageAttachment: Identifiable, Codable, Hashable, Sendable {
         return id
     }
 
-    private var normalizedPayloadDataURL: String? {
+    private nonisolated var normalizedPayloadDataURL: String? {
         let trimmed = payloadDataURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    private var normalizedSourceURL: String? {
+    private nonisolated var normalizedSourceURL: String? {
         let trimmed = sourceURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !trimmed.isEmpty, !Self.isInlineImageDataURL(trimmed) else {
             return nil
@@ -61,7 +61,7 @@ struct CodexImageAttachment: Identifiable, Codable, Hashable, Sendable {
         return trimmed
     }
 
-    private static func isInlineImageDataURL(_ value: String) -> Bool {
+    private nonisolated static func isInlineImageDataURL(_ value: String) -> Bool {
         value.lowercased().hasPrefix("data:image")
     }
 }

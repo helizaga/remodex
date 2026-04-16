@@ -4,6 +4,8 @@ This folder contains the public relay and push-service code used by Remodex pair
 
 The point of keeping this code in the repo is transparency: anyone forking Remodex can inspect the transport boundary, verify the encrypted-session flow, and run a compatible relay of their own. What should stay private is the actual deployed endpoint and any production credentials.
 
+In this fork, keep the relay under your control: on your Mac, your LAN, or infrastructure you manage explicitly.
+
 ## What It Does
 
 - accepts WebSocket connections at `/relay/{sessionId}`
@@ -39,12 +41,12 @@ Remodex uses the relay as a transport hop, not as a trusted application server.
 flowchart TD
     A[Mac bridge starts] --> B[Bridge creates sessionId and notification secret]
     B --> C[Bridge prints QR with relay URL, sessionId, bridge identity key, expiry]
-    B --> D[Mac opens WebSocket to /relay/{sessionId}<br/>x-role: mac]
+    B --> D[Mac opens WebSocket to /relay/{sessionId}<br/>x-role: mac + x-notification-secret]
     D --> E[Relay creates in-memory session room]
     D --> E2[Relay records macDeviceId plus trusted phone metadata for live-session resolve]
 
     C --> F[iPhone scans QR]
-    F --> G[iPhone opens WebSocket to /relay/{sessionId}<br/>x-role: iphone]
+    F --> G[iPhone opens WebSocket to /relay/{sessionId}<br/>x-role: iphone (+ trusted phone identity headers on reconnect)]
     G --> H{Mac session live?}
     H -- No --> I[Relay closes iPhone socket<br/>4002 session unavailable]
     H -- Yes --> J[Relay binds iPhone to that session]
@@ -69,9 +71,9 @@ flowchart TD
     U --> V[Push registration/completion endpoints only work while live Mac session exists]
 
     D --> W{Mac reconnects?}
-    W -- Yes --> X[Relay replaces older Mac socket<br/>4001 to old connection]
+    W -- Yes --> X[Relay verifies session secret and only replaces the same Mac device<br/>4001 to old connection]
     G --> Y{iPhone reconnects?}
-    Y -- Yes --> Z[Relay replaces older iPhone socket<br/>4003 to old connection]
+    Y -- Yes --> Z[Relay only replaces the older iPhone socket after trusted identity headers match<br/>4003 to old connection]
 
     X --> E
     Z --> J
@@ -91,10 +93,13 @@ flowchart TD
 
 - WebSocket path: `/relay/{sessionId}`
 - required header: `x-role: mac` or `x-role: iphone`
+- additional required Mac header: `x-notification-secret`
+- trusted reconnect iPhone headers: `x-phone-device-id` and `x-phone-identity-public-key`
 - close code `4000`: invalid session or role
 - close code `4001`: previous Mac connection replaced
 - close code `4002`: session unavailable / Mac disconnected
 - close code `4003`: previous iPhone connection replaced
+- close code `4005`: Mac session authentication failed
 
 Optional HTTP endpoints:
 

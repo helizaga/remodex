@@ -13,10 +13,8 @@ struct OpenSourceBadge: View {
         case dark
     }
 
-    private let repoURL = URL(string: "https://github.com/Emanuele-web04/remodex")!
-
     var body: some View {
-        Link(destination: repoURL) {
+        Link(destination: AppEnvironment.repositoryURL) {
             HStack(spacing: 6) {
                 Image("github-mark-white")
                     .resizable()

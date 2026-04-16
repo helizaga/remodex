@@ -1,0 +1,11 @@
+{
+  "max_regression_percent": 10.0,
+  "metrics": {
+    "scroll_duration_s": 2.5774083834000003,
+    "stream_clock_s": 1.5805650388,
+    "stream_cpu_time_s": 0.009725683799999999,
+    "stream_peak_memory_kb": 43446.0944
+  },
+  "name": "TurnView",
+  "suite": "turnview"
+}

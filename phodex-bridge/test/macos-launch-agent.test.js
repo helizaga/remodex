@@ -39,7 +39,10 @@ test("buildLaunchAgentPlist points launchd at run-service with remodex state pat
 
   assert.match(plist, /<string>com\.remodex\.bridge<\/string>/);
   assert.match(plist, /<string>run-service<\/string>/);
-  assert.match(plist, /<key>KeepAlive<\/key>\s*<dict>\s*<key>SuccessfulExit<\/key>\s*<false\/>\s*<\/dict>/);
+  assert.match(
+    plist,
+    /<key>KeepAlive<\/key>\s*<dict>\s*<key>SuccessfulExit<\/key>\s*<false\/>\s*<\/dict>/
+  );
   assert.match(plist, /<key>REMODEX_DEVICE_STATE_DIR<\/key>/);
 });
 
@@ -58,11 +61,15 @@ test("stopMacOSBridgeService clears stale pairing and status files", () => {
     writePairingSession({ sessionId: "session-1" });
     writeBridgeStatus({ state: "running", connectionStatus: "connected" });
 
+    let callCount = 0;
     stopMacOSBridgeService({
       platform: "darwin",
       execFileSyncImpl() {
-        const error = new Error("Could not find service");
-        error.stderr = Buffer.from("Could not find service");
+        callCount += 1;
+        const error = new Error(callCount === 1 ? "Input/output error" : "Could not find service");
+        error.stderr = Buffer.from(
+          callCount === 1 ? "Boot-out failed: 5: Input/output error" : "Could not find service"
+        );
         throw error;
       },
     });
@@ -72,53 +79,43 @@ test("stopMacOSBridgeService clears stale pairing and status files", () => {
   });
 });
 
-test("stopMacOSBridgeService falls back to label bootout when plist bootout fails", () => {
-  withTempDaemonEnv(() => {
+test("stopMacOSBridgeService tries plist-path bootout before falling back to the service label", () => {
+  withTempDaemonEnv(({ rootDir }) => {
     const calls = [];
-
     stopMacOSBridgeService({
       platform: "darwin",
-      execFileSyncImpl(command, args) {
-        calls.push([command, args]);
-        if (args[1] === `gui/${process.getuid()}`) {
-          const error = new Error("Input/output error");
-          error.stderr = Buffer.from("Bootstrap failed: 5: Input/output error");
-          throw error;
-        }
+      env: { HOME: rootDir, REMODEX_DEVICE_STATE_DIR: rootDir },
+      execFileSyncImpl(_command, args) {
+        calls.push(args);
+        const error = new Error("Could not find service");
+        error.stderr = Buffer.from("Could not find service");
+        throw error;
       },
     });
 
     assert.deepEqual(calls, [
       [
-        "launchctl",
-        [
-          "bootout",
-          `gui/${process.getuid()}`,
-          path.join(process.env.HOME, "Library", "LaunchAgents", "com.remodex.bridge.plist"),
-        ],
+        "bootout",
+        `gui/${process.getuid()}`,
+        path.join(rootDir, "Library", "LaunchAgents", "com.remodex.bridge.plist"),
       ],
-      [
-        "launchctl",
-        [
-          "bootout",
-          `gui/${process.getuid()}/com.remodex.bridge`,
-        ],
-      ],
+      ["bootout", `gui/${process.getuid()}/com.remodex.bridge`],
     ]);
   });
 });
 
 test("resetMacOSBridgePairing stops the daemon before revoking persisted trust", () => {
-  withTempDaemonEnv(() => {
+  withTempDaemonEnv(({ rootDir }) => {
     writePairingSession({ sessionId: "session-reset" });
     writeBridgeStatus({ state: "running", connectionStatus: "connected" });
 
-    let stopCalls = 0;
+    const stopCalls = [];
     let resetCalls = 0;
     const result = resetMacOSBridgePairing({
       platform: "darwin",
+      env: { HOME: rootDir, REMODEX_DEVICE_STATE_DIR: rootDir },
       execFileSyncImpl() {
-        stopCalls += 1;
+        stopCalls.push([...arguments[1]]);
         const error = new Error("Could not find service");
         error.stderr = Buffer.from("Could not find service");
         throw error;
@@ -129,7 +126,14 @@ test("resetMacOSBridgePairing stops the daemon before revoking persisted trust",
       },
     });
 
-    assert.equal(stopCalls, 2);
+    assert.deepEqual(stopCalls, [
+      [
+        "bootout",
+        `gui/${process.getuid()}`,
+        path.join(rootDir, "Library", "LaunchAgents", "com.remodex.bridge.plist"),
+      ],
+      ["bootout", `gui/${process.getuid()}/com.remodex.bridge`],
+    ]);
     assert.equal(resetCalls, 1);
     assert.equal(result.hadState, true);
     assert.equal(readPairingSession(), null);
@@ -142,7 +146,10 @@ test("runMacOSBridgeService records a clean error state instead of throwing when
     writePairingSession({ sessionId: "stale-session" });
 
     assert.doesNotThrow(() => {
-      runMacOSBridgeService({ env: process.env });
+      runMacOSBridgeService({
+        env: process.env,
+        platform: "darwin",
+      });
     });
 
     assert.equal(readPairingSession(), null);

@@ -280,7 +280,7 @@ extension CodexService {
                    activeTurnID(for: normalizedThreadID) == nil {
                     demoteVisibleRunningStateToProtectedFallback(for: normalizedThreadID)
                 }
-                lastErrorMessage = userFacingTurnErrorMessage(from: error)
+                updateLastUserFacingTurnError(from: error)
                 throw error
             }
         }
@@ -351,7 +351,7 @@ extension CodexService {
                 }
             }
 
-            lastErrorMessage = userFacingTurnErrorMessage(from: finalError)
+            updateLastUserFacingTurnError(from: finalError)
             throw finalError
         }
     }
@@ -1245,6 +1245,10 @@ extension CodexService {
     }
 
     func userFacingTurnErrorMessage(from error: Error) -> String {
+        if shouldSuppressRecoverableConnectionError(error) {
+            return ""
+        }
+
         if shouldTreatSendFailureAsDisconnect(error)
             || isRetryableSavedSessionConnectError(error)
             || isRecoverableTransientConnectionError(error)
@@ -1265,6 +1269,11 @@ extension CodexService {
 
         let trimmed = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "Error while sending message" : trimmed
+    }
+
+    func updateLastUserFacingTurnError(from error: Error) {
+        let message = userFacingTurnErrorMessage(from: error)
+        lastErrorMessage = message.isEmpty ? nil : message
     }
 
     // Normalizes outgoing turn input so we can support mixed text + image messages.
@@ -1481,7 +1490,7 @@ extension CodexService {
     // Native/requested plan threads should rely on official requestUserInput events,
     // not on heuristics over assistant prose.
     func allowsAssistantPlanFallbackRecovery(for threadId: String, turnId: String?) -> Bool {
-        let _ = turnId
+        _ = turnId
         return currentPlanSessionSource(for: threadId) == .compatibilityFallback
     }
 
@@ -1623,8 +1632,12 @@ extension CodexService {
         }
 
         let errorMessage = userFacingTurnErrorMessage(from: error)
-        lastErrorMessage = errorMessage
-        appendSystemMessage(threadId: threadId, text: "Send error: \(errorMessage)")
+        if errorMessage.isEmpty {
+            lastErrorMessage = nil
+        } else {
+            lastErrorMessage = errorMessage
+            appendSystemMessage(threadId: threadId, text: "Send error: \(errorMessage)")
+        }
         throw error
     }
 
@@ -1666,7 +1679,7 @@ extension CodexService {
         threadId: String
     ) {
         markMessageDeliveryState(threadId: threadId, messageId: pendingMessageId, state: .failed)
-        lastErrorMessage = userFacingTurnErrorMessage(from: error)
+        updateLastUserFacingTurnError(from: error)
     }
 
     // Some server versions expect `image_url` instead of `url` for image items.

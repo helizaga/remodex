@@ -8,7 +8,7 @@ import SwiftUI
 
 // ─── Diff Classification ────────────────────────────────────────────
 
-enum TurnDiffLineKind {
+enum TurnDiffLineKind: Equatable, Sendable {
     case addition
     case deletion
     case hunk
@@ -16,17 +16,17 @@ enum TurnDiffLineKind {
     case neutral
 
     // Detects whether a code snippet should be treated as a diff patch.
-    static func detect(in code: String) -> Bool {
+    nonisolated static func detect(in code: String) -> Bool {
         let lines = code.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        let additionCount = lines.filter { classify($0) == .addition }.count
-        let deletionCount = lines.filter { classify($0) == .deletion }.count
-        let hasHunk = lines.contains { classify($0) == .hunk }
+        let additionCount = lines.filter { isAddition(classify($0)) }.count
+        let deletionCount = lines.filter { isDeletion(classify($0)) }.count
+        let hasHunk = lines.contains { isHunk(classify($0)) }
         return hasHunk || (additionCount > 0 && deletionCount > 0)
     }
 
     // Strict diff detection: accepts real patch metadata-only diffs (e.g. rename/mode-only),
     // while still avoiding generic prose/code blocks.
-    static func detectVerifiedPatch(in code: String) -> Bool {
+    nonisolated static func detectVerifiedPatch(in code: String) -> Bool {
         let lines = code.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         guard !lines.isEmpty else { return false }
 
@@ -83,7 +83,7 @@ enum TurnDiffLineKind {
     }
 
     // Classifies each diff row so the renderer can color it consistently.
-    static func classify(_ line: String) -> TurnDiffLineKind {
+    nonisolated static func classify(_ line: String) -> TurnDiffLineKind {
         if line.hasPrefix("@@") { return .hunk }
         if line.hasPrefix("diff ") || line.hasPrefix("index ") || line.hasPrefix("---") || line.hasPrefix("+++") {
             return .meta
@@ -91,6 +91,33 @@ enum TurnDiffLineKind {
         if line.hasPrefix("+") && !line.hasPrefix("+++") { return .addition }
         if line.hasPrefix("-") && !line.hasPrefix("---") { return .deletion }
         return .neutral
+    }
+
+    nonisolated private static func isAddition(_ kind: TurnDiffLineKind) -> Bool {
+        switch kind {
+        case .addition:
+            true
+        default:
+            false
+        }
+    }
+
+    nonisolated private static func isDeletion(_ kind: TurnDiffLineKind) -> Bool {
+        switch kind {
+        case .deletion:
+            true
+        default:
+            false
+        }
+    }
+
+    nonisolated private static func isHunk(_ kind: TurnDiffLineKind) -> Bool {
+        switch kind {
+        case .hunk:
+            true
+        default:
+            false
+        }
     }
 
     // Left-side marker color (only on added/removed rows).

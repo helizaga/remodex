@@ -13,7 +13,7 @@ struct SidebarThreadListView: View {
     let groups: [SidebarThreadGroup]
     let selectedThread: CodexThread?
     let bottomContentInset: CGFloat
-    let timingLabelProvider: (CodexThread) -> String?
+    let timingLabelProvider: @MainActor (CodexThread) -> String?
     let diffTotalsByThreadID: [String: TurnSessionDiffTotals]
     let runBadgeStateByThreadID: [String: CodexThreadRunBadgeState]
     let onSelectThread: (CodexThread) -> Void

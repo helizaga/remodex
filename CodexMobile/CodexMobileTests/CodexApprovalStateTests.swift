@@ -9,7 +9,6 @@ import XCTest
 
 @MainActor
 final class CodexApprovalStateTests: XCTestCase {
-    private static var retainedServices: [CodexService] = []
 
     func testIncomingApprovalRequestsQueueWithoutOverwritingDifferentThreads() {
         let service = makeService()
@@ -201,8 +200,6 @@ final class CodexApprovalStateTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard
         defaults.removePersistentDomain(forName: suiteName)
         let service = CodexService(defaults: defaults)
-
-        Self.retainedServices.append(service)
         return service
     }
 }

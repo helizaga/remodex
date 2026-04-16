@@ -36,6 +36,7 @@ struct PlanSystemCard: View {
         return trimmed
     }
 
+    @MainActor
     private var rawInferredQuestionnaire: InferredPlanQuestionnaire? {
         resolvedInferredPlanQuestionnaire(
             bodyText: bodyText,
@@ -120,6 +121,7 @@ private struct NormalizedQuestionSignature: Hashable {
     }
 }
 
+@MainActor
 func resolvedInferredPlanQuestionnaire(
     bodyText: String,
     message: CodexMessage,
@@ -144,6 +146,7 @@ func resolvedInferredPlanQuestionnaire(
     return questionnaire
 }
 
+@MainActor
 private func hasMatchingNativeStructuredPrompt(
     for questionnaire: InferredPlanQuestionnaire,
     message: CodexMessage,
@@ -174,6 +177,7 @@ private func hasMatchingNativeStructuredPrompt(
     }
 }
 
+@MainActor
 private func normalizedQuestionSignature(
     for questions: [CodexStructuredUserInputQuestion]
 ) -> [NormalizedQuestionSignature] {
@@ -565,6 +569,7 @@ struct InferredPlanQuestionnaire: Hashable {
     let outroText: String?
 }
 
+@MainActor
 enum InferredPlanQuestionnaireParser {
     static func parseAssistantMessage(_ text: String) -> InferredPlanQuestionnaire? {
         if hasAssistantQuestionnaireCue(in: text) {
@@ -990,7 +995,6 @@ private struct QuestionBlock {
 private struct ParsedQuestionBlock {
     let question: CodexStructuredUserInputQuestion?
     let outroLines: [String]
-
     var isQuestionLike: Bool {
         guard let question else {
             return false

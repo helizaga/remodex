@@ -9,7 +9,6 @@ import XCTest
 
 @MainActor
 final class CodexApprovalResponsePayloadTests: XCTestCase {
-    private static var retainedServices: [CodexService] = []
 
     func testApprovalDecisionResultWrapsAcceptInDecisionObject() {
         let service = makeService()
@@ -43,8 +42,6 @@ final class CodexApprovalResponsePayloadTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard
         defaults.removePersistentDomain(forName: suiteName)
         let service = CodexService(defaults: defaults)
-
-        Self.retainedServices.append(service)
         return service
     }
 }

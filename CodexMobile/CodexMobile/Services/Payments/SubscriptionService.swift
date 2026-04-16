@@ -65,6 +65,36 @@ private struct CachedSubscriptionState: Codable, Equatable {
     let managementURLString: String?
 }
 
+private final class SubscriptionCustomerInfoUpdatesTaskBox: @unchecked Sendable {
+    private let lock = NSLock()
+    nonisolated(unsafe) private var task: Task<Void, Never>?
+
+    nonisolated init() {}
+
+    nonisolated
+    func taskIfPresent() -> Task<Void, Never>? {
+        lock.lock()
+        defer { lock.unlock() }
+        return task
+    }
+
+    nonisolated
+    func store(_ task: Task<Void, Never>) {
+        lock.lock()
+        defer { lock.unlock() }
+        self.task = task
+    }
+
+    nonisolated
+    func cancel() {
+        lock.lock()
+        let task = self.task
+        self.task = nil
+        lock.unlock()
+        task?.cancel()
+    }
+}
+
 @MainActor
 @Observable
 final class SubscriptionService {
@@ -73,8 +103,7 @@ final class SubscriptionService {
     private static let freeSendLimit = 5
 
     private let defaults: UserDefaults
-    // Keep the task handle nonisolated so `deinit` can cancel it under Swift 6 isolation rules.
-    nonisolated(unsafe) private var customerInfoUpdatesTask: Task<Void, Never>?
+    nonisolated private let customerInfoUpdatesTaskBox = SubscriptionCustomerInfoUpdatesTaskBox()
     private var isBootstrapping = false
     private var hasCachedOptimisticAccess = false
 
@@ -94,12 +123,16 @@ final class SubscriptionService {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        guard AppEnvironment.requiresProSubscription else {
+            applyUnlockedForkState()
+            return
+        }
         restoreCachedStateIfAvailable()
         startCustomerInfoObserverIfConfigured()
     }
 
     deinit {
-        customerInfoUpdatesTask?.cancel()
+        customerInfoUpdatesTaskBox.cancel()
     }
 
     var remainingFreeSendAttempts: Int {
@@ -126,6 +159,11 @@ final class SubscriptionService {
 
     // Bootstraps subscription state once at launch or from the recovery retry action.
     func bootstrap() async {
+        guard AppEnvironment.requiresProSubscription else {
+            applyUnlockedForkState()
+            return
+        }
+
         guard !isBootstrapping else {
             return
         }
@@ -159,6 +197,11 @@ final class SubscriptionService {
 
     // Refreshes the current subscription state without re-entering the blocking bootstrap UI.
     func refreshCustomerInfoSilently() async {
+        guard AppEnvironment.requiresProSubscription else {
+            applyUnlockedForkState()
+            return
+        }
+
         guard !isBootstrapping, bootstrapState != .loading else {
             return
         }
@@ -179,6 +222,11 @@ final class SubscriptionService {
 
     // Reads the current RevenueCat offerings and normalizes the package list for SwiftUI.
     func loadOfferings() async {
+        guard AppEnvironment.requiresProSubscription else {
+            applyUnlockedForkState()
+            return
+        }
+
         startCustomerInfoObserverIfConfigured()
         isLoading = true
         lastErrorMessage = nil
@@ -190,6 +238,11 @@ final class SubscriptionService {
 
     // Starts a purchase flow for the selected package and refreshes entitlements on success.
     func purchase(_ option: SubscriptionPackageOption) async {
+        guard AppEnvironment.requiresProSubscription else {
+            applyUnlockedForkState()
+            return
+        }
+
         guard !isPurchasing else {
             return
         }
@@ -225,6 +278,11 @@ final class SubscriptionService {
 
     // Restores store purchases and then re-checks the Pro entitlement state.
     func restorePurchases() async {
+        guard AppEnvironment.requiresProSubscription else {
+            applyUnlockedForkState()
+            return
+        }
+
         guard !isRestoring else {
             return
         }
@@ -252,20 +310,31 @@ final class SubscriptionService {
 }
 
 private extension SubscriptionService {
+    func applyUnlockedForkState() {
+        bootstrapState = .ready
+        hasProAccess = true
+        hasCachedOptimisticAccess = true
+        isLoading = false
+        isPurchasing = false
+        isRestoring = false
+        lastErrorMessage = nil
+    }
+
     func startCustomerInfoObserverIfConfigured() {
-        guard customerInfoUpdatesTask == nil, Purchases.isConfigured else {
+        guard customerInfoUpdatesTaskBox.taskIfPresent() == nil, Purchases.isConfigured else {
             return
         }
 
-        customerInfoUpdatesTask = Task { [weak self] in
+        let updatesTask = Task { [weak self] in
             for await info in Purchases.shared.customerInfoStream {
                 guard let self else {
                     break
                 }
 
-                await self.handleCustomerInfoStreamUpdate(info)
+                self.handleCustomerInfoStreamUpdate(info)
             }
         }
+        customerInfoUpdatesTaskBox.store(updatesTask)
     }
 
     func handleCustomerInfoStreamUpdate(_ info: CustomerInfo) {
@@ -313,6 +382,11 @@ private extension SubscriptionService {
 
     // Rehydrates the last known subscription snapshot so launch and foreground recovery are local-first.
     func restoreCachedStateIfAvailable() {
+        guard AppEnvironment.requiresProSubscription else {
+            applyUnlockedForkState()
+            return
+        }
+
         freeSendCount = defaults.integer(forKey: Self.freeSendCountDefaultsKey)
         guard let data = defaults.data(forKey: Self.cachedStateDefaultsKey),
               let cachedState = try? JSONDecoder().decode(CachedSubscriptionState.self, from: data) else {

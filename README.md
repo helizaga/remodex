@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="CodexMobile/CodexMobile/Assets.xcassets/remodex-og1.imageset/remodex-og2%20%281%29.png" alt="Remodex" />
+  <img src="CodexMobile/CodexMobile/Assets.xcassets/remodex-og.imageset/remodex-og2%20(1).png" alt="Remodex" />
 </p>
 
 # Remodex
@@ -30,6 +30,8 @@ Control [Codex](https://openai.com/index/codex/) from your iPhone. Remodex is a 
 
 The repo stays local-first and self-host friendly: the iOS app source does not embed a public hosted endpoint, and the transport layer remains inspectable for anyone who wants to run their own setup.
 
+This fork keeps source-checkout defaults explicit: no baked-in hosted relay, and local use should go through `./run-local-remodex.sh` or an explicit `REMODEX_RELAY`.
+
 Today, the background daemon / trusted auto-reconnect flow is implemented for macOS. Self-hosted relay setups still work on other OSes, but they currently use the foreground bridge flow instead of the macOS `launchd` service path.
 
 If you want the public-repo distribution model explained clearly, read [SELF_HOSTING_MODEL.md](SELF_HOSTING_MODEL.md).
@@ -42,9 +44,140 @@ If you want the public-repo distribution model explained clearly, read [SELF_HOS
 
 The app is live on the [App Store](https://apps.apple.com/us/app/remodex-remote-ai-coding/id6760243963).
 
-Build the iOS app from source in Xcode, install your own signed build on-device, then use the in-app onboarding flow to pair by scanning the QR from `remodex up`.
+For this fork, the easiest path for coworkers is usually:
 
-If you scan the pairing QR with a generic camera or QR reader before installing the app, your device may treat the QR payload as plain text and open a web search instead of pairing.
+1. Clone the repo on their own Mac
+2. Build the iPhone app in Xcode with their own free Apple Personal Team
+3. Start the local bridge on the Mac
+4. Scan the QR from inside the app
+
+Important: do not scan the pairing QR with the generic Camera app first. Install and open Remodex, then scan the QR from inside the app's onboarding flow.
+
+## Fastest Coworker Install
+
+This is the lowest-friction source install for a coworker using their own Mac and iPhone. It does not require the paid Apple Developer Program.
+
+### 1. Prerequisites
+
+- macOS
+- Xcode 16+
+- Node.js 18+
+- [Codex CLI](https://github.com/openai/codex) installed and working in Terminal
+- an iPhone connected to the same Mac
+
+### 2. Clone the repo
+
+```sh
+git clone https://github.com/helizaga/remodex.git
+cd remodex
+```
+
+### Tell an LLM to do it
+
+If your coworker would rather hand this off to Codex, Claude, or another coding agent, they can usually paste this and let it drive:
+
+```text
+Set up this Remodex fork on my Mac and iPhone using the repo's lowest-friction local-first path.
+
+Work from this repo root and verify things before making claims.
+
+Goals:
+- get the iPhone app installed from source with a free Apple Personal Team
+- start the local bridge on my Mac
+- leave me with the app ready to pair by QR
+
+Rules:
+- prefer ./scripts/setup-ios-personal-team.sh for Xcode signing setup
+- prefer ./run-local-remodex.sh up for source checkouts
+- do not assume any hosted relay default
+- do not scan the pairing QR with the Camera app; it must be scanned from inside the Remodex app
+- do not run unnecessary tests
+- only stop to ask me questions when you are actually blocked
+- if you need my Apple Team ID, ask only for that and tell me where to find it in Xcode
+
+What I want you to do:
+1. Verify Node.js, Xcode, and codex CLI are available.
+2. Run the Personal Team setup script for this repo.
+3. Tell me the exact remaining Xcode/iPhone clicks if GUI interaction is needed.
+4. Build/install the app if possible.
+5. Start the local stack with ./run-local-remodex.sh up.
+6. Tell me exactly what I need to do next on the phone.
+
+End with:
+- what you verified
+- what you changed
+- what command is running now
+- what I need to do next
+```
+
+### 3. Prepare Xcode signing once
+
+Use your own Apple Personal Team. This repo supports a local-only signing override so you do not need to hand-edit the Xcode project.
+
+```sh
+./scripts/setup-ios-personal-team.sh ABCDE12345 --open
+```
+
+If you do not know your Team ID yet, run the script without arguments and it will prompt you.
+
+That command creates a local `CodexMobile/BuildSupport/PrivateOverrides.xcconfig` with:
+
+- your Apple Team ID
+- a team-scoped local app bundle identifier
+- matching test bundle identifiers
+- a team-scoped local auth callback URL scheme so your source build does not collide with another installed Remodex build
+
+### 4. Install the app on iPhone
+
+Preferred:
+
+```sh
+./scripts/install-ios-on-device.sh
+```
+
+That wrapper builds `CodexMobile` for the first connected iPhone, installs it, launches it, and automatically handles the common case where iOS rejects the install because an older copy of the same bundle ID was signed under a different team.
+
+Manual fallback:
+
+1. Connect the iPhone to the Mac with a cable for first install.
+2. In Xcode, choose the `CodexMobile` scheme and your actual iPhone as the run destination.
+3. Keep `Automatically manage signing` enabled.
+4. Select your Apple Personal Team if Xcode asks.
+5. Accept any prompts for device trust or Developer Mode.
+6. Press Run.
+
+If iOS blocks the app after install, trust the developer profile on the phone:
+
+1. Open `Settings`
+2. Go to `General > VPN & Device Management`
+3. Trust the developer app profile for the Apple account you used in Xcode
+
+### 5. Start the local bridge on the Mac
+
+From the repo root:
+
+```sh
+./run-local-remodex.sh up
+```
+
+This fork prefers the repo-local launcher for source checkouts because it keeps the setup explicit and local-first.
+
+### 6. Pair the phone
+
+1. Open the Remodex app on the iPhone
+2. Go through onboarding
+3. Use the in-app QR scanner
+4. Scan the QR printed by `./run-local-remodex.sh up`
+
+Do not use the Camera app or another QR reader for this step.
+
+### 7. Later launches
+
+After the first successful install and pairing:
+
+- reopen the app on the iPhone
+- run `./run-local-remodex.sh up` on the Mac when needed
+- scan a new QR only if trust was reset or pairing state changed
 
 ## Architecture
 
@@ -135,30 +268,78 @@ After that first scan:
 
 For now, the daemon-backed trusted reconnect path is macOS-only. If you self-host on Linux or Windows, pairing still works, but the bridge runs in the foreground unless you set up your own OS-specific service wrapper.
 
+If you are running this fork from source, prefer the repo-local launcher instead of assuming any package defaults:
+
+```sh
+./run-local-remodex.sh up
+```
+
 ## Run Locally
 
 ```sh
-git clone https://github.com/Emanuele-web04/remodex.git
+git clone https://github.com/helizaga/remodex.git
 cd remodex
-./run-local-remodex.sh
+./run-local-remodex.sh up
 ```
 
-That launcher starts a local relay, points the bridge at `ws://<your-host>:9000/relay`, and prints the pairing QR for the iPhone app.
+In this fork, that launcher is the safest source-checkout path:
 
-For iPhone self-hosting, the recommended path is Tailscale or another stable private network. Plain LAN pairing over `ws://<lan-ip>` on the same Wi-Fi is still available for local testing, but it can be unreliable on some iOS devices even when the relay and Wi-Fi are healthy.
+- it starts the local relay on your Mac
+- it uses an explicit relay URL instead of any silent hosted default
+- it can expose that relay through your configured tunnel workflow when you want remote reachability
+- it still lets you override the relay directly with `REMODEX_RELAY`
 
-Options:
+If you prefer to point the bridge at your own relay directly:
 
-- `./run-local-remodex.sh --hostname <lan-hostname-or-ip>`
-- `./run-local-remodex.sh --bind-host 127.0.0.1 --port 9100`
+```sh
+REMODEX_RELAY="ws://127.0.0.1:9000/relay" ./run-local-remodex.sh up
+```
 
-If your iPhone is pairing over LAN, use a hostname or IP the phone can actually reach.
+To stop the local launcher stack:
+
+```sh
+./run-local-remodex.sh stop
+```
+
+## Agent Setup Prompt
+
+If you want another coding agent to set up this fork for you, give it this prompt:
+
+```text
+You are setting up this local-first Remodex fork from source on my machine.
+
+Goals:
+- Get the source checkout running in the safest local-first mode.
+- Verify prerequisites before making claims.
+- Do not assume any hosted relay, production endpoint, or baked-in remote default.
+- Prefer ./scripts/setup-ios-personal-team.sh for Xcode signing setup when installing to iPhone from source.
+- Prefer ./run-local-remodex.sh up for source checkouts unless I explicitly provide REMODEX_RELAY.
+- Do not run Xcode builds/tests unless I explicitly ask.
+- Do not create scratch markdown files or one-off report files in the repo.
+
+Checklist:
+1. Inspect README.md, AGENTS.md, and phodex-bridge/package.json before acting.
+2. Verify Node.js >= 18 and that the codex CLI is on PATH.
+3. If I want an iPhone source install, use ./scripts/setup-ios-personal-team.sh first. Ask only for my Apple Team ID if you are blocked on that.
+4. Install any missing npm dependencies needed for source execution.
+5. If I did not provide a relay override, start the repo-local stack with ./run-local-remodex.sh up.
+6. On macOS, prefer the built-in local bridge/daemon workflow. On other OSes, use the supported foreground bridge path.
+7. Confirm whether the bridge is running, which relay URL/path it is using, and whether it is waiting for QR pairing.
+8. Tell me exactly what I still need to do in Xcode and on-device, including that the pairing QR should be scanned from inside the Remodex app, not with a generic camera app.
+9. If setup fails, stop at the narrowest real blocker and explain the next fix with exact commands.
+
+Output format:
+- What you verified
+- What you changed
+- What command is now running
+- What I need to do next
+```
 
 ## Custom Relay Endpoint
 
 For a full public self-hosting walkthrough, see [`Docs/self-hosting.md`](Docs/self-hosting.md).
 
-If you want the npm bridge to point at your own setup instead of the package default, override `REMODEX_RELAY` explicitly:
+If you want the npm bridge to point at your own setup instead of any package default, override `REMODEX_RELAY` explicitly:
 
 ```sh
 REMODEX_RELAY="ws://localhost:9000/relay" remodex up
@@ -191,23 +372,6 @@ In that setup, the public endpoints can look like this:
 Have the proxy strip `/remodex` before forwarding so the relay still receives `/relay/...` and `/v1/push/...`.
 
 If you point `REMODEX_RELAY` at your own self-hosted relay, managed push stays off unless you also set `REMODEX_PUSH_SERVICE_URL` on the bridge and explicitly enable push on the relay.
-
-## Publish to npm
-
-Published npm packages can embed default private relay settings at pack time via the `prepack` script.
-
-The current package version is `1.3.4`.
-
-To publish the bridge with `api.phodex.app` as the default relay:
-
-```sh
-cd phodex-bridge
-npm login
-REMODEX_PACKAGE_DEFAULT_RELAY_URL="wss://api.phodex.app/relay" \
-npm publish
-```
-
-After publish, users can still override the packaged default at runtime with `REMODEX_RELAY`.
 
 You can also run the bridge from source:
 
@@ -267,7 +431,7 @@ Prints the installed Remodex CLI version.
 
 ```sh
 remodex --version
-# => 1.3.4
+# => 1.3.3
 ```
 
 ### `remodex reset-pairing`
@@ -303,15 +467,11 @@ remodex watch
 
 ## Environment Variables
 
-`REMODEX_RELAY` is optional, but the default depends on how you got Remodex:
-
-- public GitHub/source checkouts stay open-source and self-host friendly, so they do not ship with a hosted relay baked in
-- official published packages may include a default relay at publish time
-- if you are running from source, assume you should use `./run-local-remodex.sh` or set `REMODEX_RELAY` yourself
+In this fork, treat `REMODEX_RELAY` as explicit configuration. Source checkouts should use `./run-local-remodex.sh` or set `REMODEX_RELAY` themselves rather than relying on package defaults.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `REMODEX_RELAY` | empty in source checkouts; optional in published packages | Session base URL used for QR bootstrap, trusted-session resolve, and phone/Mac session routing |
+| `REMODEX_RELAY` | empty in this source checkout unless set explicitly | Session base URL used for QR bootstrap, trusted-session resolve, and phone/Mac session routing |
 | `REMODEX_PUSH_SERVICE_URL` | disabled by default | Optional HTTP base URL for managed push registration/completion |
 | `REMODEX_CODEX_ENDPOINT` | — | Connect to an existing Codex WebSocket instead of spawning a local `codex app-server` |
 | `REMODEX_REFRESH_ENABLED` | `false` | Auto-refresh Codex.app when phone activity is detected (`true` enables it explicitly) |

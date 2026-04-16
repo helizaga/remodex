@@ -9,7 +9,6 @@ import XCTest
 
 @MainActor
 final class CodexStructuredUserInputDecodeTests: XCTestCase {
-    private static var retainedServices: [CodexService] = []
 
     func testDecodeItemTextReconstructsSkillMentionsFromStructuredInput() {
         let service = makeService()
@@ -255,8 +254,6 @@ final class CodexStructuredUserInputDecodeTests: XCTestCase {
         defaults.removePersistentDomain(forName: suiteName)
         let service = CodexService(defaults: defaults)
         service.messagesByThread = [:]
-
-        Self.retainedServices.append(service)
         return service
     }
 }

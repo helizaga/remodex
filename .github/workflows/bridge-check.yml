@@ -2,17 +2,26 @@ name: Bridge Check
 
 on:
   push:
+    branches:
+      - main
     paths:
       - ".github/workflows/bridge-check.yml"
       - "phodex-bridge/**"
+      - "relay/**"
+      - "run-local-remodex.sh"
   pull_request:
     paths:
       - ".github/workflows/bridge-check.yml"
       - "phodex-bridge/**"
+      - "relay/**"
+      - "run-local-remodex.sh"
 
 jobs:
   bridge-check:
     runs-on: ubuntu-latest
+    concurrency:
+      group: bridge-check-${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
+      cancel-in-progress: true
 
     steps:
       - name: Checkout repository
@@ -23,13 +32,33 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: phodex-bridge/package-lock.json
+          cache-dependency-path: |
+            phodex-bridge/package-lock.json
+            relay/package-lock.json
 
       - name: Install bridge dependencies
         working-directory: phodex-bridge
         run: npm ci
 
+      - name: Install relay dependencies
+        working-directory: relay
+        run: npm ci
+
+      - name: Run bridge tests
+        working-directory: phodex-bridge
+        run: npm test
+
+      - name: Run relay tests
+        working-directory: relay
+        run: npm test
+
       - name: Verify bridge entrypoints load
         working-directory: phodex-bridge
         run: |
           node -e "const mod = require('./src'); const names = ['startBridge', 'openLastActiveThread', 'watchThreadRollout']; for (const name of names) { if (typeof mod[name] !== 'function') { throw new Error('Missing export: ' + name); } }"
+
+      - name: Syntax-check fork launcher and relay
+        run: |
+          bash -n run-local-remodex.sh
+          node --check relay/local-server.js
+          node --check relay/relay.js

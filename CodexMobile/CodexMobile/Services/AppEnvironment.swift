@@ -7,7 +7,10 @@
 import Foundation
 
 enum AppEnvironment {
-    private static let defaultRelayURLInfoPlistKey = "PHODEX_DEFAULT_RELAY_URL"
+    private static let defaultRelayURLInfoPlistKeys = [
+        "PHODEX_DEFAULT_RELAY_URL",
+        "PHODEX_DEFAULT_WS_URL",
+    ]
     private static let revenueCatPublicAPIKeyInfoPlistKey = "REVENUECAT_PUBLIC_API_KEY"
     private static let revenueCatEntitlementNameInfoPlistKey = "REVENUECAT_ENTITLEMENT_NAME"
     private static let revenueCatDefaultOfferingIDInfoPlistKey = "REVENUECAT_DEFAULT_OFFERING_ID"
@@ -16,10 +19,15 @@ enum AppEnvironment {
     // Open-source builds should provide an explicit relay instead of silently
     // pointing at a hosted service the user does not control.
     static let defaultRelayURLString = ""
+    // This local-first fork ships unlocked and does not require hosted subscription checks.
+    static let requiresProSubscription = false
+    static let repositoryURL = URL(string: "https://github.com/helizaga/remodex")!
 
     static var relayBaseURL: String {
-        if let infoURL = resolvedString(forInfoPlistKey: defaultRelayURLInfoPlistKey) {
-            return infoURL
+        for key in defaultRelayURLInfoPlistKeys {
+            if let infoURL = resolvedString(forInfoPlistKey: key) {
+                return normalizedRelayURLString(infoURL)
+            }
         }
         return defaultRelayURLString
     }
@@ -42,10 +50,10 @@ enum AppEnvironment {
     // Legal links shown in the paywall footer and Settings.
     // Keep these pointed at a public source-of-truth until the website serves dedicated legal routes.
     static let privacyPolicyURL = URL(
-        string: "https://github.com/Emanuele-web04/remodex/blob/main/Legal/PRIVACY_POLICY.md"
+        string: "https://github.com/helizaga/remodex/blob/main/Legal/PRIVACY_POLICY.md"
     )!
     static let termsOfUseURL = URL(
-        string: "https://github.com/Emanuele-web04/remodex/blob/main/Legal/TERMS_OF_USE.md"
+        string: "https://github.com/helizaga/remodex/blob/main/Legal/TERMS_OF_USE.md"
     )!
 
     // Powers in-app feedback actions so every entry point targets the same inbox.
@@ -76,5 +84,13 @@ private extension AppEnvironment {
         }
 
         return trimmedValue
+    }
+
+    static func normalizedRelayURLString(_ rawValue: String) -> String {
+        if rawValue.hasSuffix("/ws") {
+            return "\(rawValue.dropLast(3))/relay"
+        }
+
+        return rawValue
     }
 }

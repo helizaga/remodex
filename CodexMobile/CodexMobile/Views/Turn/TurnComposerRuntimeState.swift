@@ -13,6 +13,7 @@ struct TurnComposerRuntimeState {
     let reasoningMenuDisabled: Bool
     let selectedServiceTier: CodexServiceTier?
 
+    @MainActor
     var selectedReasoningTitle: String {
         effectiveReasoningEffort.map(TurnComposerMetaMapper.reasoningTitle(for:)) ?? "Select reasoning"
     }

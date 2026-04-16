@@ -62,6 +62,49 @@ final class DesktopHandoffServiceTests: XCTestCase {
         XCTAssertEqual(capturedMethods, ["desktop/wakeDisplay"])
     }
 
+    func testWakeDisplayFallsBackToSavedSessionWhenTrustedResolveCannotFindLiveSession() async throws {
+        let service = makeService()
+        let macDeviceID = "mac-\(UUID().uuidString)"
+        let relayURL = "ws://macbook-pro-di-emanuele.local:8080/ws"
+        service.relayUrl = relayURL
+        service.relaySessionId = "session-123"
+        service.lastTrustedMacDeviceId = macDeviceID
+        service.trustedMacRegistry.records[macDeviceID] = CodexTrustedMacRecord(
+            macDeviceId: macDeviceID,
+            macIdentityPublicKey: Data(repeating: 7, count: 32).base64EncodedString(),
+            lastPairedAt: Date(),
+            relayURL: relayURL
+        )
+        service.trustedSessionResolverOverride = {
+            throw CodexTrustedSessionResolveError.macOffline(
+                "The relay could not find a live session for your trusted Mac right now."
+            )
+        }
+
+        var capturedURL: String?
+        var capturedMethods: [String] = []
+        service.requestTransportOverride = { method, params in
+            capturedMethods.append(method)
+            XCTAssertEqual(params?.objectValue?.isEmpty, true)
+            return RPCMessage(
+                id: .string(UUID().uuidString),
+                result: .object(["success": .bool(true)]),
+                includeJSONRPC: false
+            )
+        }
+        let handoff = DesktopHandoffService(
+            codex: service,
+            savedPairConnector: { reconnectURL in
+                capturedURL = reconnectURL
+            }
+        )
+
+        try await handoff.wakeDisplay()
+
+        XCTAssertEqual(capturedURL, "\(relayURL)/session-123")
+        XCTAssertEqual(capturedMethods, ["desktop/wakeDisplay"])
+    }
+
     func testWakeDisplayRequiresSavedPairWhenDisconnected() async {
         let service = makeService()
         let handoff = DesktopHandoffService(codex: service)
@@ -83,6 +126,13 @@ final class DesktopHandoffServiceTests: XCTestCase {
         let suiteName = "DesktopHandoffServiceTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard
         defaults.removePersistentDomain(forName: suiteName)
-        return CodexService(defaults: defaults)
+        return CodexService(
+            defaults: defaults,
+            messagePersistence: .disabled,
+            aiChangeSetPersistence: .disabled,
+            userNotificationCenter: CodexNoopUserNotificationCenter(),
+            remoteNotificationRegistrar: CodexNoopRemoteNotificationRegistrar(),
+            secureStateBootstrap: .ephemeral
+        )
     }
 }

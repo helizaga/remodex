@@ -9,6 +9,11 @@ import Foundation
 struct TurnDiffLineTotals {
     var additions: Int = 0
     var deletions: Int = 0
+
+    nonisolated init(additions: Int = 0, deletions: Int = 0) {
+        self.additions = additions
+        self.deletions = deletions
+    }
 }
 
 enum TurnFileChangeAction: String, Hashable {
@@ -17,7 +22,7 @@ enum TurnFileChangeAction: String, Hashable {
     case deleted = "Deleted"
     case renamed = "Renamed"
 
-    static func fromInlineVerb(_ verb: String) -> TurnFileChangeAction? {
+    nonisolated static func fromInlineVerb(_ verb: String) -> TurnFileChangeAction? {
         switch verb.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "edited", "updated":
             return .edited
@@ -32,7 +37,7 @@ enum TurnFileChangeAction: String, Hashable {
         }
     }
 
-    static func fromKind(_ kind: String) -> TurnFileChangeAction? {
+    nonisolated static func fromKind(_ kind: String) -> TurnFileChangeAction? {
         switch kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "add", "added", "create", "created":
             return .added
@@ -54,9 +59,16 @@ struct TurnFileChangeSummaryEntry: Identifiable, Hashable {
     var deletions: Int
     var action: TurnFileChangeAction?
 
-    var id: String { path }
+    nonisolated init(path: String, additions: Int, deletions: Int, action: TurnFileChangeAction?) {
+        self.path = path
+        self.additions = additions
+        self.deletions = deletions
+        self.action = action
+    }
 
-    var compactPath: String {
+    nonisolated var id: String { path }
+
+    nonisolated var compactPath: String {
         if let lastComponent = path.split(separator: "/").last {
             return String(lastComponent)
         }
@@ -66,11 +78,15 @@ struct TurnFileChangeSummaryEntry: Identifiable, Hashable {
 
 struct TurnFileChangeSummary {
     let entries: [TurnFileChangeSummaryEntry]
+
+    nonisolated init(entries: [TurnFileChangeSummaryEntry]) {
+        self.entries = entries
+    }
 }
 
 enum TurnFileChangeSummaryParser {
     // Extracts per-file +/- totals from file-change prose + fenced diff blocks.
-    static func parse(from text: String) -> TurnFileChangeSummary? {
+    nonisolated static func parse(from text: String) -> TurnFileChangeSummary? {
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         var lineIndex = 0
         var currentPath: String?
@@ -230,7 +246,7 @@ enum TurnFileChangeSummaryParser {
         return TurnFileChangeSummary(entries: consolidatedEntries)
     }
 
-    static func dedupeKey(from text: String) -> String? {
+    nonisolated static func dedupeKey(from text: String) -> String? {
         guard let summary = parse(from: text) else {
             return nil
         }
@@ -252,7 +268,7 @@ enum TurnFileChangeSummaryParser {
         return parts.joined(separator: "||")
     }
 
-    private static func parsePathLine(_ line: String) -> String? {
+    private nonisolated static func parsePathLine(_ line: String) -> String? {
         guard line.lowercased().hasPrefix("path:") else { return nil }
         let value = line.dropFirst("Path:".count).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return nil }
@@ -261,19 +277,19 @@ enum TurnFileChangeSummaryParser {
         return normalized
     }
 
-    private static func parseKindLine(_ line: String) -> String? {
+    private nonisolated static func parseKindLine(_ line: String) -> String? {
         guard line.lowercased().hasPrefix("kind:") else { return nil }
         let value = line.dropFirst("Kind:".count).trimmingCharacters(in: .whitespacesAndNewlines)
         return value.isEmpty ? nil : value
     }
 
-    private static func parseTotalsLine(_ line: String) -> TurnDiffLineTotals? {
+    private nonisolated static func parseTotalsLine(_ line: String) -> TurnDiffLineTotals? {
         guard line.lowercased().hasPrefix("totals:") else { return nil }
         let value = line.dropFirst("Totals:".count).trimmingCharacters(in: .whitespacesAndNewlines)
         return parseInlineTotals(from: value)
     }
 
-    private static func parseInlineFileEntry(
+    private nonisolated static func parseInlineFileEntry(
         from line: String
     ) -> (path: String, inlineTotals: TurnDiffLineTotals?, action: TurnFileChangeAction?)? {
         var candidate = line
@@ -318,7 +334,7 @@ enum TurnFileChangeSummaryParser {
         return (path: normalizedPath, inlineTotals: totals, action: nil)
     }
 
-    private static func parseInlineActionEntry(
+    private nonisolated static func parseInlineActionEntry(
         from line: String
     ) -> (action: TurnFileChangeAction, path: String)? {
         guard let regex = TurnMessageRegexCache.inlineAction else { return nil }
@@ -339,7 +355,7 @@ enum TurnFileChangeSummaryParser {
         return (action: action, path: path)
     }
 
-    private static func parseInlineTotals(from line: String) -> TurnDiffLineTotals? {
+    private nonisolated static func parseInlineTotals(from line: String) -> TurnDiffLineTotals? {
         // Accept ASCII and common Unicode plus/minus glyphs used by rich text renderers.
         guard let regex = TurnMessageRegexCache.inlineTotals else { return nil }
         let nsLine = line as NSString
@@ -358,7 +374,7 @@ enum TurnFileChangeSummaryParser {
         return TurnDiffLineTotals(additions: plus, deletions: minus)
     }
 
-    private static func stripInlineTotals(from line: String) -> String {
+    private nonisolated static func stripInlineTotals(from line: String) -> String {
         guard let regex = TurnMessageRegexCache.trailingInlineTotals else {
             return line
         }
@@ -366,7 +382,7 @@ enum TurnFileChangeSummaryParser {
         return regex.stringByReplacingMatches(in: line, range: fullRange, withTemplate: "")
     }
 
-    private static func normalizeInlinePath(_ rawToken: String) -> String {
+    private nonisolated static func normalizeInlinePath(_ rawToken: String) -> String {
         var token = rawToken.trimmingCharacters(in: .whitespacesAndNewlines)
 
         token = token.replacingOccurrences(of: "\"", with: "")
@@ -403,7 +419,7 @@ enum TurnFileChangeSummaryParser {
         return token
     }
 
-    private static func looksLikePath(_ token: String) -> Bool {
+    private nonisolated static func looksLikePath(_ token: String) -> Bool {
         guard !token.isEmpty else { return false }
 
         if token.contains("/") || token.hasPrefix("./") || token.hasPrefix("../") {
@@ -418,11 +434,11 @@ enum TurnFileChangeSummaryParser {
         return regex.firstMatch(in: token, range: range) != nil
     }
 
-    private static func parseMarkdownLink(from token: String) -> (label: String, destination: String)? {
+    private nonisolated static func parseMarkdownLink(from token: String) -> (label: String, destination: String)? {
         TurnMessageRegexCache.parseMarkdownLink(from: token)
     }
 
-    private static func normalizeLinkDestination(_ destination: String) -> String {
+    private nonisolated static func normalizeLinkDestination(_ destination: String) -> String {
         var normalized = destination.trimmingCharacters(in: .whitespacesAndNewlines)
         if let queryIndex = normalized.firstIndex(of: "?") {
             normalized = String(normalized[..<queryIndex])
@@ -443,7 +459,7 @@ enum TurnFileChangeSummaryParser {
         return normalized
     }
 
-    private static func parsePathFromDiff(lines: [String]) -> String? {
+    private nonisolated static func parsePathFromDiff(lines: [String]) -> String? {
         for line in lines {
             if line.hasPrefix("+++ ") {
                 let candidate = normalizeDiffPath(String(line.dropFirst(4)))
@@ -462,7 +478,7 @@ enum TurnFileChangeSummaryParser {
         return nil
     }
 
-    private static func normalizeDiffPath(_ rawValue: String) -> String {
+    private nonisolated static func normalizeDiffPath(_ rawValue: String) -> String {
         let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed != "/dev/null" else { return "" }
 
@@ -473,7 +489,7 @@ enum TurnFileChangeSummaryParser {
         return trimmed
     }
 
-    private static func countDiffLines(in lines: [String]) -> TurnDiffLineTotals {
+    private nonisolated static func countDiffLines(in lines: [String]) -> TurnDiffLineTotals {
         var totals = TurnDiffLineTotals()
 
         for line in lines {
@@ -495,7 +511,7 @@ enum TurnFileChangeSummaryParser {
         return totals
     }
 
-    private static func parseDiffBodyEvidence(in lines: [String]) -> TurnDiffLineTotals? {
+    private nonisolated static func parseDiffBodyEvidence(in lines: [String]) -> TurnDiffLineTotals? {
         let totals = countDiffLines(in: lines)
         if totals.additions > 0 || totals.deletions > 0 {
             return totals
@@ -504,7 +520,7 @@ enum TurnFileChangeSummaryParser {
     }
 
     // Matches CodexMonitor counting behavior: ignore metadata and count only patch body +/- rows.
-    private static func isDiffMetadataLine(_ line: String) -> Bool {
+    private nonisolated static func isDiffMetadataLine(_ line: String) -> Bool {
         let metadataPrefixes = [
             "+++",
             "---",
@@ -523,7 +539,7 @@ enum TurnFileChangeSummaryParser {
     }
 
     // Removes one-line edit recap rows so we can render them as dedicated UI blocks.
-    static func removingInlineEditingRows(from text: String) -> String {
+    nonisolated static func removingInlineEditingRows(from text: String) -> String {
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         let filtered = lines.filter { !isInlineEditingRow($0) }
         let joined = filtered.joined(separator: "\n")
@@ -535,7 +551,7 @@ enum TurnFileChangeSummaryParser {
         return collapsed.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static func isInlineEditingRow(_ line: String) -> Bool {
+    private nonisolated static func isInlineEditingRow(_ line: String) -> Bool {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
 
@@ -545,7 +561,7 @@ enum TurnFileChangeSummaryParser {
         return regex.firstMatch(in: trimmed, range: range) != nil
     }
 
-    private static func replaceMatches(
+    private nonisolated static func replaceMatches(
         in text: String,
         regex: NSRegularExpression?,
         template: String
@@ -553,25 +569,26 @@ enum TurnFileChangeSummaryParser {
         TurnMessageRegexCache.replaceMatches(in: text, regex: regex, template: template)
     }
 
-    private static func consolidate(entries: [TurnFileChangeSummaryEntry]) -> [TurnFileChangeSummaryEntry] {
-        var orderedPaths: [String] = []
-        var entriesByPath: [String: TurnFileChangeSummaryEntry] = [:]
+    private nonisolated static func consolidate(entries: [TurnFileChangeSummaryEntry]) -> [TurnFileChangeSummaryEntry] {
+        var aggregates: [TurnFileChangeSummaryEntry] = []
 
         for entry in entries {
-            if var existing = entriesByPath[entry.path] {
-                existing.additions += entry.additions
-                existing.deletions += entry.deletions
-                if existing.action == nil {
-                    existing.action = entry.action
-                }
-                entriesByPath[entry.path] = existing
+            if let existingIndex = aggregates.firstIndex(where: {
+                FileChangePathIdentity.representsSameFile($0.path, entry.path)
+            }) {
+                let existing = aggregates[existingIndex]
+                aggregates[existingIndex] = TurnFileChangeSummaryEntry(
+                    path: FileChangePathIdentity.preferredDisplayPath(existing.path, entry.path),
+                    additions: existing.additions + entry.additions,
+                    deletions: existing.deletions + entry.deletions,
+                    action: existing.action ?? entry.action
+                )
                 continue
             }
 
-            orderedPaths.append(entry.path)
-            entriesByPath[entry.path] = entry
+            aggregates.append(entry)
         }
 
-        return orderedPaths.compactMap { entriesByPath[$0] }
+        return aggregates
     }
 }

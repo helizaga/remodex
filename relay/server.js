@@ -27,16 +27,17 @@ function createRelayServer({
 } = {}) {
   const pushEnabled = Boolean(enablePushService || pushSessionService);
   const resolvedPushSessionService = pushEnabled
-    ? (pushSessionService || createPushSessionService({
-      // The first registration must match the live bridge's secret, not just the session id.
-      canRegisterSession({ sessionId, notificationSecret }) {
-        return hasAuthenticatedMacSession(sessionId, notificationSecret);
-      },
-      // Completion pushes are only valid while the Mac side of that relay session is still live.
-      canNotifyCompletion({ sessionId, notificationSecret }) {
-        return hasAuthenticatedMacSession(sessionId, notificationSecret);
-      },
-    }))
+    ? pushSessionService ||
+      createPushSessionService({
+        // The first registration must match the live bridge's secret, not just the session id.
+        canRegisterSession({ sessionId, notificationSecret }) {
+          return hasAuthenticatedMacSession(sessionId, notificationSecret);
+        },
+        // Completion pushes are only valid while the Mac side of that relay session is still live.
+        canNotifyCompletion({ sessionId, notificationSecret }) {
+          return hasAuthenticatedMacSession(sessionId, notificationSecret);
+        },
+      })
     : createDisabledPushSessionService();
 
   const server = http.createServer((req, res) => {
@@ -56,8 +57,8 @@ function createRelayServer({
     const pathname = safePathname(req.url);
     const loggedPathname = redactRelayPathname(pathname);
     console.log(
-      `[relay] upgrade request path=${loggedPathname} remote=${clientAddressKey(req, { trustProxy })} `
-      + `role=${readHeaderString(req.headers["x-role"]) || "missing"}`
+      `[relay] upgrade request path=${loggedPathname} remote=${clientAddressKey(req, { trustProxy })} ` +
+        `role=${readHeaderString(req.headers["x-role"]) || "missing"}`
     );
     if (!pathname.startsWith("/relay/")) {
       console.log(`[relay] rejecting upgrade for non-relay path: ${loggedPathname}`);
@@ -68,9 +69,7 @@ function createRelayServer({
     if (!upgradeRateLimiter.allow(clientAddressKey(req, { trustProxy }))) {
       console.log(`[relay] rejecting upgrade due to rate limit: ${loggedPathname}`);
       socket.write(
-        "HTTP/1.1 429 Too Many Requests\r\n" +
-        "Connection: close\r\n" +
-        "Retry-After: 60\r\n\r\n"
+        "HTTP/1.1 429 Too Many Requests\r\n" + "Connection: close\r\n" + "Retry-After: 60\r\n\r\n"
       );
       socket.destroy();
       return;
@@ -88,14 +87,18 @@ function createRelayServer({
   };
 }
 
-async function handleHTTPRequest(req, res, {
-  exposeDetailedHealth,
-  httpRateLimiter,
-  pushEnabled,
-  pushRateLimiter,
-  pushSessionService,
-  trustProxy,
-}) {
+async function handleHTTPRequest(
+  req,
+  res,
+  {
+    exposeDetailedHealth,
+    httpRateLimiter,
+    pushEnabled,
+    pushRateLimiter,
+    pushSessionService,
+    trustProxy,
+  }
+) {
   const pathname = safePathname(req.url);
   if (req.method === "GET" && pathname === "/health") {
     return writeJSON(
@@ -174,21 +177,33 @@ function readJSONBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let totalSize = 0;
+    let didReject = false;
 
     req.on("data", (chunk) => {
+      if (didReject) {
+        return;
+      }
+
       totalSize += chunk.length;
       if (totalSize > 64 * 1024) {
-        reject(Object.assign(new Error("Request body too large"), {
-          status: 413,
-          code: "body_too_large",
-        }));
-        req.destroy();
+        didReject = true;
+        req.removeAllListeners("data");
+        req.resume();
+        reject(
+          Object.assign(new Error("Request body too large"), {
+            status: 413,
+            code: "body_too_large",
+          })
+        );
         return;
       }
       chunks.push(chunk);
     });
 
     req.on("end", () => {
+      if (didReject) {
+        return;
+      }
       const rawBody = Buffer.concat(chunks).toString("utf8");
       if (!rawBody.trim()) {
         resolve({});
@@ -198,10 +213,12 @@ function readJSONBody(req) {
       try {
         resolve(JSON.parse(rawBody));
       } catch {
-        reject(Object.assign(new Error("Invalid JSON body"), {
-          status: 400,
-          code: "invalid_json",
-        }));
+        reject(
+          Object.assign(new Error("Invalid JSON body"), {
+            status: 400,
+            code: "invalid_json",
+          })
+        );
       }
     });
 
@@ -356,9 +373,8 @@ function createFixedWindowRateLimiter({ windowMs, maxRequests, now = () => Date.
 if (require.main === module) {
   const port = Number(process.env.PORT || 9000);
   const trustProxy = readOptionalBooleanEnv(["REMODEX_TRUST_PROXY", "PHODEX_TRUST_PROXY"]) ?? false;
-  const enablePushService = readOptionalBooleanEnv(
-    ["REMODEX_ENABLE_PUSH_SERVICE", "PHODEX_ENABLE_PUSH_SERVICE"]
-  ) ?? false;
+  const enablePushService =
+    readOptionalBooleanEnv(["REMODEX_ENABLE_PUSH_SERVICE", "PHODEX_ENABLE_PUSH_SERVICE"]) ?? false;
   const { server } = createRelayServer({ enablePushService, trustProxy });
   server.listen(port, () => {
     console.log(`[relay] listening on :${port}`);

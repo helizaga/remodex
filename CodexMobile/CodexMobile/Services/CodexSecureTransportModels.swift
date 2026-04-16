@@ -63,7 +63,7 @@ struct CodexTrustedMacRegistry: Codable, Sendable {
     static let empty = CodexTrustedMacRegistry(records: [:])
 }
 
-struct SecureClientHello: Codable, Sendable {
+struct SecureClientHello: Encodable, Sendable {
     let kind = "clientHello"
     let protocolVersion: Int
     let sessionId: String
@@ -89,7 +89,7 @@ struct SecureServerHello: Codable, Sendable {
     let clientNonce: String?
 }
 
-struct SecureClientAuth: Codable, Sendable {
+struct SecureClientAuth: Encodable, Sendable {
     let kind = "clientAuth"
     let sessionId: String
     let phoneDeviceId: String
@@ -104,7 +104,7 @@ struct SecureReadyMessage: Codable, Sendable {
     let macDeviceId: String
 }
 
-struct SecureResumeState: Codable, Sendable {
+struct SecureResumeState: Encodable, Sendable {
     let kind = "resumeState"
     let sessionId: String
     let keyEpoch: Int
@@ -327,6 +327,25 @@ func codexSecureFingerprint(for publicKeyBase64: String) -> String {
     return digest.compactMap { String(format: "%02x", $0) }.joined().prefix(12).uppercased()
 }
 
+private let codexAutomatedTestPhoneIdentityState = CodexPhoneIdentityState(
+    phoneDeviceId: "codex-automated-test-phone",
+    phoneIdentityPrivateKey: "OwDAed4itJbPgqHYZBuQmsEnz7OdXqx7nyJF5AtaaNw=",
+    phoneIdentityPublicKey: "+uu/Z1BrlkFQEDAOFl34oJLoEijqPf4DTb1VfrkoQlg="
+)
+
+func codexEphemeralPhoneIdentityState() -> CodexPhoneIdentityState {
+    if CodexRuntimeEnvironment.isRunningAutomatedTests {
+        return codexAutomatedTestPhoneIdentityState
+    }
+
+    let privateKey = Curve25519.Signing.PrivateKey()
+    return CodexPhoneIdentityState(
+        phoneDeviceId: UUID().uuidString,
+        phoneIdentityPrivateKey: privateKey.rawRepresentation.base64EncodedString(),
+        phoneIdentityPublicKey: privateKey.publicKey.rawRepresentation.base64EncodedString()
+    )
+}
+
 func codexPhoneIdentityStateFromSecureStore() -> CodexPhoneIdentityState {
     if let existing: CodexPhoneIdentityState = SecureStore.readCodable(
         CodexPhoneIdentityState.self,
@@ -335,12 +354,7 @@ func codexPhoneIdentityStateFromSecureStore() -> CodexPhoneIdentityState {
         return existing
     }
 
-    let privateKey = Curve25519.Signing.PrivateKey()
-    let next = CodexPhoneIdentityState(
-        phoneDeviceId: UUID().uuidString,
-        phoneIdentityPrivateKey: privateKey.rawRepresentation.base64EncodedString(),
-        phoneIdentityPublicKey: privateKey.publicKey.rawRepresentation.base64EncodedString()
-    )
+    let next = codexEphemeralPhoneIdentityState()
     SecureStore.writeCodable(next, for: CodexSecureKeys.phoneIdentityState)
     return next
 }

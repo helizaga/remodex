@@ -7,7 +7,7 @@
 import CoreGraphics
 import Foundation
 
-enum TurnAutoScrollMode {
+enum TurnAutoScrollMode: Equatable, Sendable {
     case followBottom
     case anchorAssistantResponse
     case manual

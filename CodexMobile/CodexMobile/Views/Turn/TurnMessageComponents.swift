@@ -907,6 +907,7 @@ struct MessageRow: View, Equatable {
         return attributed
     }
 
+    @MainActor
     private func assistantView(text: String, renderModel: MessageRowRenderModel) -> some View {
         let commentContent = renderModel.codeCommentContent
         let bodyText = commentContent?.fallbackText ?? text
@@ -1115,14 +1116,6 @@ struct MessageRow: View, Equatable {
     }
 
     private func fileChangeSystemView(text: String, renderModel: MessageRowRenderModel) -> some View {
-        let renderState = renderModel.fileChangeState ?? FileChangeRenderState(
-            summary: nil,
-            actionEntries: [],
-            bodyText: text
-        )
-        let actionEntries = renderState.actionEntries
-        let hasActionRows = !actionEntries.isEmpty
-        let allEntries = hasActionRows ? actionEntries : (renderState.summary?.entries ?? [])
         let grouped = renderModel.fileChangeGroups
 
         return VStack(alignment: .leading, spacing: 8) {

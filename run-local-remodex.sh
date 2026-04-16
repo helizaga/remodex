@@ -1,328 +1,650 @@
 #!/usr/bin/env bash
-
-# FILE: run-local-remodex.sh
-# Purpose: Starts a local relay plus the public bridge for OSS and self-host workflows.
-# Layer: developer utility
-# Exports: none
-# Depends on: node, npm, curl, relay/server.js, phodex-bridge/bin/remodex.js
-
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BRIDGE_DIR="${ROOT_DIR}/phodex-bridge"
-RELAY_DIR="${ROOT_DIR}/relay"
-RELAY_SERVER_MODULE="${RELAY_DIR}/server.js"
+ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+BRIDGE_DIR="$ROOT_DIR/phodex-bridge"
+PORT="${REMODEX_LOCAL_PORT:-9000}"
+BIND_HOST="${REMODEX_LOCAL_BIND_HOST:-127.0.0.1}"
+REFRESH_ENABLED="${REMODEX_REFRESH_ENABLED:-false}"
+EXPLICIT_RELAY_URL="${REMODEX_RELAY:-${PHODEX_RELAY:-}}"
+TUNNEL_MODE_RAW="${REMODEX_TUNNEL_MODE:-ngrok}"
+STATE_DIR="${HOME}/.remodex-local"
+BRIDGE_PID_FILE="${STATE_DIR}/bridge.pid"
+RELAY_PID_FILE="${STATE_DIR}/relay.pid"
+TUNNEL_PID_FILE="${STATE_DIR}/tunnel.pid"
+NGROK_LOG_FILE="${STATE_DIR}/ngrok.log"
+BRIDGE_LOG_FILE="${STATE_DIR}/bridge.log"
+RELAY_LOG_FILE="${STATE_DIR}/relay.log"
+NGROK_BIN="${NGROK_BIN:-$(command -v ngrok 2>/dev/null || printf 'ngrok')}"
+LOCAL_RELAY_URL="ws://127.0.0.1:${PORT}/relay"
+RELAY_URL=""
 
-RELAY_BIND_HOST="${RELAY_BIND_HOST:-0.0.0.0}"
-RELAY_PORT="${RELAY_PORT:-9000}"
-RELAY_HOSTNAME="${RELAY_HOSTNAME:-}"
-RELAY_BRIDGE_HOST=""
-RELAY_PID=""
-BRIDGE_SERVICE_STARTED="false"
-
-log() {
-  echo "[run-local-remodex] $*"
-}
-
-die() {
-  echo "[run-local-remodex] $*" >&2
-  exit 1
-}
-
-usage() {
-  cat <<'EOF'
-Usage: ./run-local-remodex.sh [options]
-
-Options:
-  --hostname HOSTNAME   Hostname or IP the iPhone should use to reach the relay
-  --bind-host HOST      Interface/address the local relay should listen on
-  --port PORT           Relay port to listen on
-  --help                Show this help text
-
-Defaults:
-  --bind-host           0.0.0.0
-  --port                9000
-  --hostname            macOS LocalHostName.local, then hostname, then localhost
-EOF
-}
-
-require_value() {
-  local flag_name="$1"
-  local remaining_args="$2"
-  [[ "${remaining_args}" -ge 2 ]] || die "${flag_name} requires a value."
-}
-
-parse_args() {
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --hostname)
-        require_value "--hostname" "$#"
-        RELAY_HOSTNAME="$2"
-        shift 2
-        ;;
-      --bind-host)
-        require_value "--bind-host" "$#"
-        RELAY_BIND_HOST="$2"
-        shift 2
-        ;;
-      --port)
-        require_value "--port" "$#"
-        RELAY_PORT="$2"
-        shift 2
-        ;;
-      --help)
-        usage
-        exit 0
-        ;;
-      *)
-        usage >&2
-        die "Unknown argument: $1"
-        ;;
-    esac
-  done
-}
-
-default_hostname() {
-  if [[ -n "${RELAY_HOSTNAME}" ]]; then
-    printf '%s\n' "${RELAY_HOSTNAME}"
-    return
+stop_pid_file() {
+  local label="$1"
+  local pid_file="$2"
+  if [[ ! -f "$pid_file" ]]; then
+    echo "[remodex-local] ${label} not running"
+    return 0
   fi
 
-  if command -v scutil >/dev/null 2>&1; then
-    local local_host_name
-    local_host_name="$(scutil --get LocalHostName 2>/dev/null || true)"
-    local_host_name="${local_host_name//[$'\r\n']}"
-    if [[ -n "${local_host_name}" ]]; then
-      printf '%s.local\n' "${local_host_name}"
-      return
+  local pid
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  if [[ -z "$pid" ]]; then
+    rm -f "$pid_file"
+    echo "[remodex-local] ${label} not running"
+    return 0
+  fi
+
+  if kill -0 "$pid" 2>/dev/null; then
+    terminate_pid "$pid"
+    echo "[remodex-local] stopped ${label} (pid ${pid})"
+  else
+    echo "[remodex-local] ${label} not running"
+  fi
+
+  rm -f "$pid_file"
+}
+
+terminate_pid() {
+  local pid="$1"
+  local attempts=10
+
+  kill "$pid" 2>/dev/null || true
+  for ((i=1; i<=attempts; i++)); do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      return 0
     fi
-  fi
+    sleep 0.2
+  done
 
-  local host_name
-  host_name="$(hostname 2>/dev/null || true)"
-  host_name="${host_name//[$'\r\n']}"
-  if [[ -n "${host_name}" ]]; then
-    printf '%s\n' "${host_name}"
-    return
-  fi
-
-  printf 'localhost\n'
+  kill -9 "$pid" 2>/dev/null || true
 }
 
-healthcheck_host() {
-  case "${RELAY_BIND_HOST}" in
-    ""|"0.0.0.0")
-      printf '127.0.0.1\n'
-      ;;
-    "::")
-      printf '[::1]\n'
-      ;;
-    *)
-      printf '%s\n' "${RELAY_BIND_HOST}"
-      ;;
-  esac
+find_repo_launcher_pids() {
+  {
+    pgrep -f "${ROOT_DIR}/run-local-remodex.sh up" 2>/dev/null || true
+    pgrep -f '(^|.*/)run-local-remodex\.sh up($| )' 2>/dev/null || true
+  } | awk 'NF' | sort -u
 }
 
-cleanup() {
-  if [[ "${BRIDGE_SERVICE_STARTED}" == "true" ]]; then
-    (
-      cd "${BRIDGE_DIR}"
-      node ./bin/remodex.js stop >/dev/null 2>&1 || true
-    )
+cleanup_repo_launcher_orphans() {
+  local action_label="$1"
+  local pid
+  while IFS= read -r pid; do
+    [[ -z "$pid" ]] && continue
+    [[ "$pid" == "$$" ]] && continue
+    if kill -0 "$pid" 2>/dev/null; then
+      terminate_pid "$pid"
+      echo "[remodex-local] stopped stale launcher during ${action_label} (pid ${pid})"
+    fi
+  done < <(find_repo_launcher_pids)
+}
+
+find_repo_worker_pids() {
+  {
+    pgrep -f "${ROOT_DIR}/relay/local-server.js" 2>/dev/null || true
+    pgrep -f "node ${BRIDGE_DIR}/bin/remodex\\.js up" 2>/dev/null || true
+    pgrep -f "${NGROK_BIN} http http://$(ngrok_upstream_host):${PORT}" 2>/dev/null || true
+  } | awk 'NF' | sort -u
+}
+
+cleanup_repo_worker_orphans() {
+  local action_label="$1"
+  local pid
+  while IFS= read -r pid; do
+    [[ -z "$pid" ]] && continue
+    if kill -0 "$pid" 2>/dev/null; then
+      terminate_pid "$pid"
+      echo "[remodex-local] stopped stale worker during ${action_label} (pid ${pid})"
+    fi
+  done < <(find_repo_worker_pids)
+}
+
+read_live_pid() {
+  local pid_file="$1"
+  if [[ ! -f "$pid_file" ]]; then
+    return 1
   fi
 
-  if [[ -n "${RELAY_PID}" ]] && kill -0 "${RELAY_PID}" 2>/dev/null; then
-    kill "${RELAY_PID}" 2>/dev/null || true
-    wait "${RELAY_PID}" 2>/dev/null || true
+  local pid
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  if [[ -z "$pid" ]]; then
+    rm -f "$pid_file"
+    return 1
   fi
+
+  if kill -0 "$pid" 2>/dev/null; then
+    printf '%s' "$pid"
+    return 0
+  fi
+
+  rm -f "$pid_file"
+  return 1
 }
 
 require_command() {
   local command_name="$1"
-  command -v "${command_name}" >/dev/null 2>&1 || die "Missing required command: ${command_name}"
+  local install_hint="$2"
+
+  if command -v "$command_name" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  echo "[remodex-local] missing required command: $command_name" >&2
+  echo "[remodex-local] $install_hint" >&2
+  exit 1
 }
 
-ensure_node_version() {
-  local node_version
-  local node_major
+spawn_detached() {
+  local pid_file="$1"
+  local log_file="$2"
+  shift 2
 
-  node_version="$(node -p 'process.versions.node' 2>/dev/null || true)"
-  [[ -n "${node_version}" ]] || die "Unable to determine the installed Node.js version."
+  node - "$pid_file" "$log_file" "$@" <<'NODE'
+const fs = require("fs");
+const { spawn } = require("child_process");
 
-  node_major="${node_version%%.*}"
-  [[ "${node_major}" =~ ^[0-9]+$ ]] || die "Unable to parse the installed Node.js version: ${node_version}"
-  (( node_major >= 18 )) || die "Please use Node.js 18 or newer."
-}
-
-ensure_prerequisites() {
-  require_command node
-  require_command npm
-  require_command curl
-  ensure_node_version
-}
-
-# Validates the advertised host before boot so the QR cannot point at another machine by mistake.
-ensure_hostname_belongs_to_this_mac() {
-  node -e '
-const dns = require("node:dns");
-const os = require("node:os");
-
-const hostname = process.argv[1];
-const localAddresses = new Set(["127.0.0.1", "::1"]);
-for (const addresses of Object.values(os.networkInterfaces())) {
-  for (const address of addresses || []) {
-    if (address && typeof address.address === "string" && address.address) {
-      localAddresses.add(address.address);
-    }
-  }
-}
-
-dns.lookup(hostname, { all: true }, (error, records) => {
-  if (error || !Array.isArray(records) || records.length === 0) {
-    process.exit(1);
-    return;
-  }
-
-  const isLocal = records.some((record) => localAddresses.has(record.address));
-  process.exit(isLocal ? 0 : 1);
-});
-' "${RELAY_HOSTNAME}" || die "The advertised hostname '${RELAY_HOSTNAME}' does not resolve back to this Mac.
-Pass --hostname with a LAN hostname or IP address that points to this machine so the iPhone can connect."
-}
-
-package_dependencies_installed() {
-  local package_dir="$1"
-
-  node -e '
-const { createRequire } = require("node:module");
-const fs = require("node:fs");
-const path = require("node:path");
-
-const packageDir = process.argv[1];
-const packageJsonPath = path.join(packageDir, "package.json");
-if (!fs.existsSync(packageJsonPath)) {
+const [, , pidFile, logFile, ...cmd] = process.argv;
+if (cmd.length === 0) {
   process.exit(1);
 }
 
-const pkg = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
-const dependencyNames = Object.keys(pkg.dependencies || {});
-const requireFromPackage = createRequire(packageJsonPath);
-
-for (const dependencyName of dependencyNames) {
-  try {
-    requireFromPackage.resolve(`${dependencyName}/package.json`);
-  } catch {
-    process.exit(1);
-  }
+const logFd = fs.openSync(logFile, "a");
+const child = spawn(cmd[0], cmd.slice(1), {
+  detached: true,
+  stdio: ["ignore", logFd, logFd],
+});
+fs.writeFileSync(pidFile, `${child.pid}`);
+console.log(child.pid);
+child.unref();
+NODE
 }
 
-process.exit(0);
-' "${package_dir}"
+normalize_tunnel_mode() {
+  local raw_value="${1:-off}"
+  raw_value="$(printf '%s' "$raw_value" | tr '[:upper:]' '[:lower:]')"
+
+  case "$raw_value" in
+    ngrok)
+      printf 'ngrok\n'
+      ;;
+    *)
+      printf 'off\n'
+      ;;
+  esac
 }
 
-ensure_package_dependencies() {
-  local package_dir="$1"
-  if package_dependencies_installed "${package_dir}"; then
-    return
+should_use_ngrok_tunnel() {
+  local explicit_relay_url="${1:-}"
+  local tunnel_mode
+  tunnel_mode="$(normalize_tunnel_mode "${2:-off}")"
+
+  [[ -z "$explicit_relay_url" && "$tunnel_mode" == "ngrok" ]]
+}
+
+ngrok_upstream_host() {
+  case "${BIND_HOST:-127.0.0.1}" in
+    ""|"0.0.0.0"|"::")
+      printf '127.0.0.1\n'
+      ;;
+    *)
+      printf '%s\n' "$BIND_HOST"
+      ;;
+  esac
+}
+
+preflight_up() {
+  require_command "node" "Install Node.js and make sure 'node' is in your PATH."
+  if should_use_ngrok_tunnel "$EXPLICIT_RELAY_URL" "$TUNNEL_MODE"; then
+    require_command "ngrok" "Install ngrok and make sure 'ngrok' is in your PATH."
   fi
 
-  log "Installing dependencies in ${package_dir}"
-  (cd "${package_dir}" && npm install)
-}
-
-ensure_port_available() {
-  if command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP:"${RELAY_PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
-    die "Port ${RELAY_PORT} is already in use. Stop the existing listener or rerun with --port."
+  if [[ -z "${REMODEX_CODEX_ENDPOINT:-}" && -z "${PHODEX_CODEX_ENDPOINT:-}" ]]; then
+    require_command "codex" "Install the Codex CLI or set REMODEX_CODEX_ENDPOINT to an existing app-server URL."
   fi
 }
 
 wait_for_relay() {
-  local attempt
-  local probe_host
+  local attempts=20
+  local delay_s=0.25
 
-  probe_host="$(healthcheck_host)"
-  for attempt in {1..20}; do
-    if [[ -n "${RELAY_PID}" ]] && ! kill -0 "${RELAY_PID}" 2>/dev/null; then
-      die "Relay process exited before becoming healthy."
+  for ((i=1; i<=attempts; i++)); do
+    if curl -fsS "http://${BIND_HOST}:${PORT}/health" >/dev/null 2>&1; then
+      return 0
     fi
-    if curl --silent --fail "http://${probe_host}:${RELAY_PORT}/health" >/dev/null 2>&1; then
-      return
-    fi
-    sleep 0.5
+    sleep "$delay_s"
   done
 
-  die "Relay did not become healthy on port ${RELAY_PORT}."
+  return 1
 }
 
-start_embedded_relay() {
-  log "Starting relay on ${RELAY_BIND_HOST}:${RELAY_PORT}"
+wait_for_ngrok() {
+  local attempts=40
+  local delay_s=0.25
 
-  RELAY_BIND_HOST="${RELAY_BIND_HOST}" \
-  RELAY_PORT="${RELAY_PORT}" \
-  RELAY_SERVER_MODULE="${RELAY_SERVER_MODULE}" \
-  node <<'NODE' &
-const { createRelayServer } = require(process.env.RELAY_SERVER_MODULE);
+  for ((i=1; i<=attempts; i++)); do
+    if [[ -f "$NGROK_LOG_FILE" ]] && grep -q '"msg":"started tunnel"' "$NGROK_LOG_FILE" 2>/dev/null; then
+      return 0
+    fi
+    if [[ -f "$NGROK_LOG_FILE" ]] && grep -q 'ERR_NGROK_' "$NGROK_LOG_FILE" 2>/dev/null; then
+      return 1
+    fi
+    sleep "$delay_s"
+  done
 
-const host = process.env.RELAY_BIND_HOST || "0.0.0.0";
-const port = Number.parseInt(process.env.RELAY_PORT || "9000", 10);
-const { server } = createRelayServer();
+  return 1
+}
 
-server.listen(port, host, () => {
-  console.log(`[relay] listening on http://${host}:${port}`);
+discover_ngrok_relay_url() {
+  # shellcheck disable=SC2016
+  node -e '
+const fs = require("fs");
+const logPath = process.argv[1];
+for (const line of fs.readFileSync(logPath, "utf8").split(/\n+/)) {
+  if (!line.trim()) continue;
+  let obj;
+  try {
+    obj = JSON.parse(line);
+  } catch {
+    continue;
+  }
+  if (obj.msg === "started tunnel" && typeof obj.url === "string" && obj.url.startsWith("https://")) {
+    process.stdout.write(`${obj.url.replace(/^https:/, "wss:")}/relay`);
+    process.exit(0);
+  }
+}
+process.exit(1);
+' "$NGROK_LOG_FILE"
+}
+
+ngrok_log_contains() {
+  local pattern="$1"
+  [[ -f "$NGROK_LOG_FILE" ]] && grep -q "$pattern" "$NGROK_LOG_FILE" 2>/dev/null
+}
+
+cleanup_ngrok_state() {
+  if [[ -f "$TUNNEL_PID_FILE" ]]; then
+    stop_pid_file "tunnel" "$TUNNEL_PID_FILE"
+  fi
+
+  rm -f "$NGROK_LOG_FILE"
+}
+
+extract_ngrok_collision_endpoint() {
+  if [[ ! -f "$NGROK_LOG_FILE" ]]; then
+    return 1
+  fi
+
+  node -e '
+const fs = require("fs");
+const logPath = process.argv[1];
+for (const line of fs.readFileSync(logPath, "utf8").split(/\n+/)) {
+  if (!line.trim()) continue;
+  let obj;
+  try {
+    obj = JSON.parse(line);
+  } catch {
+    continue;
+  }
+  const err = typeof obj.err === "string" ? obj.err : "";
+  const match = err.match(/The endpoint '"'"'([^'"'"']+)'"'"' is already online/);
+  if (match) {
+    process.stdout.write(match[1]);
+    process.exit(0);
+  }
+}
+process.exit(1);
+' "$NGROK_LOG_FILE"
+}
+
+extract_ngrok_tunnel_session_ids_for_endpoint() {
+  local endpoint_json="$1"
+  local endpoint_url="$2"
+
+  printf '%s' "$endpoint_json" | node -e '
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { input += chunk; });
+process.stdin.on("end", () => {
+  let parsed;
+  try {
+    parsed = JSON.parse(input);
+  } catch {
+    process.exit(1);
+  }
+  const endpoints = Array.isArray(parsed?.endpoints) ? parsed.endpoints : [];
+  const ids = endpoints
+    .filter((endpoint) => endpoint?.url === process.argv[1] || endpoint?.public_url === process.argv[1])
+    .map((endpoint) => endpoint?.tunnel_session?.id)
+    .filter((value) => typeof value === "string" && value.length > 0);
+  if (ids.length === 0) {
+    process.exit(2);
+  }
+  process.stdout.write(ids.join("\n"));
 });
-
-function shutdown(signal) {
-  console.log(`[relay] shutting down (${signal})`);
-  server.close(() => process.exit(0));
-  setTimeout(() => process.exit(1), 5_000).unref();
+' "$endpoint_url"
 }
 
-process.on("SIGINT", () => shutdown("SIGINT"));
-process.on("SIGTERM", () => shutdown("SIGTERM"));
+auto_clear_ngrok_collision() {
+  local endpoint_url="$1"
+  local api_key="${NGROK_API_KEY:-}"
+
+  if [[ -z "$endpoint_url" || -z "$api_key" ]]; then
+    return 1
+  fi
+
+  echo "[remodex-local] attempting automatic ngrok recovery for: $endpoint_url" >&2
+
+  local endpoint_json
+  if ! endpoint_json="$(curl -fsS \
+    --url "https://api.ngrok.com/endpoints" \
+    --header "Authorization: Bearer ${api_key}" \
+    --header "ngrok-version: 2" \
+    --header "Content-Type: application/json")"; then
+    echo "[remodex-local] could not query ngrok endpoints API for automatic recovery" >&2
+    return 1
+  fi
+
+  local session_ids
+  local parser_status=0
+  if session_ids="$(extract_ngrok_tunnel_session_ids_for_endpoint "$endpoint_json" "$endpoint_url")"; then
+    parser_status=0
+  else
+    parser_status=$?
+  fi
+  if [[ $parser_status -eq 2 ]]; then
+    echo "[remodex-local] ngrok API does not currently report an active tunnel session for that endpoint; waiting for release" >&2
+    sleep 2
+    return 0
+  fi
+  if [[ $parser_status -ne 0 || -z "$session_ids" ]]; then
+    echo "[remodex-local] could not parse ngrok endpoint metadata for automatic recovery" >&2
+    return 1
+  fi
+
+  local stopped_any=0
+  local session_id
+  while IFS= read -r session_id; do
+    [[ -z "$session_id" ]] && continue
+    echo "[remodex-local] stopping conflicting ngrok tunnel session: $session_id" >&2
+    if curl -fsS \
+      --request POST \
+      --url "https://api.ngrok.com/tunnel_sessions/${session_id}/stop" \
+      --header "Authorization: Bearer ${api_key}" \
+      --header "ngrok-version: 2" \
+      --header "Content-Type: application/json" \
+      --data "{\"id\":\"${session_id}\"}" >/dev/null; then
+      stopped_any=1
+    fi
+  done <<< "$session_ids"
+
+  if [[ $stopped_any -eq 0 ]]; then
+    echo "[remodex-local] automatic ngrok recovery could not stop the conflicting session" >&2
+    return 1
+  fi
+
+  echo "[remodex-local] waiting for ngrok to release the endpoint" >&2
+  sleep 2
+  return 0
+}
+
+recover_ngrok_collision() {
+  local endpoint_url="$1"
+  local max_attempts=6
+  local attempt=1
+
+  while (( attempt <= max_attempts )); do
+    if [[ -n "$endpoint_url" ]]; then
+      auto_clear_ngrok_collision "$endpoint_url" || true
+    fi
+
+    if (( attempt < max_attempts )); then
+      echo "[remodex-local] waiting for ngrok endpoint release (${attempt}/${max_attempts})" >&2
+      sleep 5
+    fi
+
+    start_ngrok_tunnel
+    if wait_for_ngrok; then
+      return 0
+    fi
+
+    if ! ngrok_log_contains 'ERR_NGROK_334'; then
+      return 1
+    fi
+
+    endpoint_url="$(extract_ngrok_collision_endpoint 2>/dev/null || printf '%s' "$endpoint_url")"
+    attempt=$((attempt + 1))
+  done
+
+  return 1
+}
+
+start_ngrok_tunnel() {
+  cleanup_ngrok_state
+  tunnel_pid="$(spawn_detached "$TUNNEL_PID_FILE" "$NGROK_LOG_FILE" \
+    "$NGROK_BIN" http "http://$(ngrok_upstream_host):${PORT}" --log=stdout --log-format=json)"
+  started_tunnel=1
+}
+
+report_ngrok_failure() {
+  if [[ ! -f "$NGROK_LOG_FILE" ]]; then
+    echo "[remodex-local] ngrok exited before writing a log file." >&2
+    return
+  fi
+
+  if grep -q 'ERR_NGROK_334' "$NGROK_LOG_FILE" 2>/dev/null; then
+    endpoint="$(extract_ngrok_collision_endpoint 2>/dev/null || true)"
+    echo "[remodex-local] ngrok endpoint is already online${endpoint:+: $endpoint}" >&2
+    if [[ -n "${NGROK_API_KEY:-}" ]]; then
+      echo "[remodex-local] automatic recovery using NGROK_API_KEY did not succeed; free the endpoint in ngrok or retry later." >&2
+    else
+      echo "[remodex-local] set NGROK_API_KEY to allow automatic cloud-session cleanup, or free the endpoint in ngrok and retry." >&2
+    fi
+    return
+  fi
+
+  echo "[remodex-local] ngrok failed to start. Recent log output:" >&2
+  tail -20 "$NGROK_LOG_FILE" >&2 || true
+}
+
+ensure_local_relay() {
+  if curl -fsS "http://${BIND_HOST}:${PORT}/health" >/dev/null 2>&1; then
+    echo "[remodex-local] reusing existing local relay on :$PORT"
+    return 0
+  fi
+
+  rm -f "$RELAY_LOG_FILE"
+  relay_pid="$(spawn_detached "$RELAY_PID_FILE" "$RELAY_LOG_FILE" \
+    /usr/bin/env "NODE_PATH=$BRIDGE_DIR/node_modules" \
+    node "$ROOT_DIR/relay/local-server.js" --host "$BIND_HOST" --port "$PORT")"
+  started_relay=1
+
+  if ! wait_for_relay; then
+    echo "[remodex-local] failed to start local relay on :$PORT" >&2
+    exit 1
+  fi
+}
+
+write_bridge_status() {
+  local state="$1"
+  local connection_status="$2"
+  local last_error="$3"
+  local diagnostic_code="${4:-}"
+  local diagnostic_message="${5:-}"
+
+  node - "$BRIDGE_DIR" "$state" "$connection_status" "$last_error" "$diagnostic_code" "$diagnostic_message" <<'NODE'
+const path = require("path");
+const [bridgeDir, state, connectionStatus, lastError, diagnosticCode, diagnosticMessage] = process.argv.slice(2);
+const { writeBridgeStatus } = require(path.join(bridgeDir, "src", "daemon-state"));
+
+const latestReconnectDiagnostic = diagnosticCode
+  ? {
+      code: diagnosticCode,
+      message: diagnosticMessage || lastError || "No reconnect diagnostic available.",
+      isPermanent: true,
+    }
+  : null;
+
+const lastPermanentReconnectReason = latestReconnectDiagnostic
+  ? {
+      code: latestReconnectDiagnostic.code,
+      message: latestReconnectDiagnostic.message,
+    }
+  : null;
+
+writeBridgeStatus({
+  state,
+  connectionStatus,
+  pid: null,
+  lastError,
+  latestReconnectDiagnostic,
+  lastPermanentReconnectReason,
+});
 NODE
-
-  RELAY_PID=$!
 }
 
-print_summary() {
-  cat <<EOF
-[run-local-remodex] Configuration
-  Relay bind host : ${RELAY_BIND_HOST}
-  Relay port      : ${RELAY_PORT}
-  Relay hostname  : ${RELAY_HOSTNAME}
-  Bridge host     : ${RELAY_BRIDGE_HOST}
-  Relay URL       : ws://${RELAY_HOSTNAME}:${RELAY_PORT}/relay
-EOF
+cleanup() {
+  local status=$?
+  rm -f "$BRIDGE_PID_FILE"
+  if [[ -n "${tunnel_pid:-}" ]] && kill -0 "$tunnel_pid" 2>/dev/null; then
+    kill "$tunnel_pid" 2>/dev/null || true
+    wait "$tunnel_pid" 2>/dev/null || true
+  fi
+  if [[ -n "${relay_pid:-}" ]] && kill -0 "$relay_pid" 2>/dev/null; then
+    kill "$relay_pid" 2>/dev/null || true
+    wait "$relay_pid" 2>/dev/null || true
+  fi
+  if [[ -n "${started_tunnel:-}" ]]; then
+    rm -f "$TUNNEL_PID_FILE"
+    rm -f "$NGROK_LOG_FILE"
+  fi
+  if [[ -n "${started_relay:-}" ]]; then
+    rm -f "$RELAY_PID_FILE"
+  fi
+  exit "$status"
 }
 
-start_bridge() {
-  log "Starting bridge"
-  cd "${BRIDGE_DIR}"
-  # The bridge bakes REMODEX_RELAY into the pairing QR, so advertise the host
-  # the iPhone can actually reach instead of the loopback health-check host.
-  REMODEX_RELAY="ws://${RELAY_HOSTNAME}:${RELAY_PORT}/relay" node ./bin/remodex.js up
-  BRIDGE_SERVICE_STARTED="true"
+preserve_runtime_after_successful_up() {
+  trap - EXIT INT TERM
+  rm -f "$BRIDGE_PID_FILE"
 }
 
-hold_open() {
-  log "Local relay is ready. Keep this terminal open while testing."
-  log "Press Ctrl+C to stop both the local relay and the Remodex bridge service."
-  wait "${RELAY_PID}"
+main() {
+  local command="${1:-up}"
+  TUNNEL_MODE="$(normalize_tunnel_mode "$TUNNEL_MODE_RAW")"
+
+  if [[ "$command" != "up" && "$command" != "stop" ]]; then
+    echo "Usage: ./run-local-remodex.sh [up|stop]" >&2
+    exit 1
+  fi
+
+  mkdir -p "$STATE_DIR"
+
+  if [[ "$command" == "stop" ]]; then
+    if [[ "$OSTYPE" == darwin* ]]; then
+      (
+        cd "$BRIDGE_DIR"
+        node ./bin/remodex.js stop
+      ) || true
+    fi
+    cleanup_repo_launcher_orphans "stop"
+    cleanup_repo_worker_orphans "stop"
+    stop_pid_file "bridge" "$BRIDGE_PID_FILE"
+    stop_pid_file "tunnel" "$TUNNEL_PID_FILE"
+    stop_pid_file "relay" "$RELAY_PID_FILE"
+    exit 0
+  fi
+
+  if [[ ! -d "$BRIDGE_DIR/node_modules" ]]; then
+    echo "[remodex-local] installing bridge dependencies"
+    (cd "$BRIDGE_DIR" && npm install)
+  fi
+
+  trap cleanup EXIT INT TERM
+
+  echo "[remodex-local] bind host: $BIND_HOST"
+  echo "[remodex-local] desktop refresh: $REFRESH_ENABLED"
+  echo "[remodex-local] tunnel mode: $TUNNEL_MODE"
+  if [[ -n "$EXPLICIT_RELAY_URL" ]]; then
+    echo "[remodex-local] mode: explicit relay override"
+  elif should_use_ngrok_tunnel "$EXPLICIT_RELAY_URL" "$TUNNEL_MODE"; then
+    echo "[remodex-local] mode: opt-in remote tunnel"
+  else
+    echo "[remodex-local] mode: local relay only"
+  fi
+
+  preflight_up
+
+  cleanup_repo_launcher_orphans "startup"
+  cleanup_repo_worker_orphans "startup"
+
+  if existing_bridge_pid="$(read_live_pid "$BRIDGE_PID_FILE")"; then
+    echo "[remodex-local] bridge already running (pid ${existing_bridge_pid})"
+    echo "[remodex-local] stop the existing session before starting a new one"
+    exit 1
+  fi
+
+  echo "$$" > "$BRIDGE_PID_FILE"
+
+  if [[ -n "$EXPLICIT_RELAY_URL" ]]; then
+    RELAY_URL="$EXPLICIT_RELAY_URL"
+    if [[ "$RELAY_URL" == "$LOCAL_RELAY_URL" || "$RELAY_URL" == "ws://localhost:${PORT}/relay" ]]; then
+      ensure_local_relay
+      echo "[remodex-local] local relay url: $LOCAL_RELAY_URL"
+    fi
+    echo "[remodex-local] relay url: $RELAY_URL"
+  else
+    ensure_local_relay
+    echo "[remodex-local] local relay url: $LOCAL_RELAY_URL"
+
+    if should_use_ngrok_tunnel "$EXPLICIT_RELAY_URL" "$TUNNEL_MODE"; then
+      rm -f "$NGROK_LOG_FILE"
+      start_ngrok_tunnel
+
+      if ! wait_for_ngrok; then
+        if ngrok_log_contains 'ERR_NGROK_334'; then
+          echo "[remodex-local] ngrok endpoint collision detected; retrying after local cleanup" >&2
+          collision_endpoint="$(extract_ngrok_collision_endpoint 2>/dev/null || true)"
+          if ! recover_ngrok_collision "$collision_endpoint"; then
+            echo "[remodex-local] failed to start ngrok tunnel" >&2
+            report_ngrok_failure
+            exit 1
+          fi
+        else
+          echo "[remodex-local] failed to start ngrok tunnel" >&2
+          report_ngrok_failure
+          exit 1
+        fi
+      fi
+
+      RELAY_URL="$(discover_ngrok_relay_url)"
+      echo "[remodex-local] relay url: $RELAY_URL"
+    else
+      write_bridge_status \
+        "idle" \
+        "not_configured" \
+        "No iPhone-reachable relay URL is configured." \
+        "relay_url_required" \
+        "Set REMODEX_RELAY to your self-hosted relay URL, or rerun with REMODEX_TUNNEL_MODE=ngrok."
+      preserve_runtime_after_successful_up
+      echo "[remodex-local] local relay is running, but no iPhone-reachable relay URL is configured."
+      echo "[remodex-local] next step: set REMODEX_RELAY to your self-hosted relay URL, or rerun with REMODEX_TUNNEL_MODE=ngrok."
+      echo "[remodex-local] no pairing QR was generated because the default local-only path should fail closed."
+      return 0
+    fi
+  fi
+
+  cd "$BRIDGE_DIR"
+  echo "[remodex-local] bridge log: $BRIDGE_LOG_FILE"
+  rm -f "$BRIDGE_LOG_FILE"
+  REMODEX_RELAY="$RELAY_URL" \
+  REMODEX_REFRESH_ENABLED="$REFRESH_ENABLED" \
+  node "$BRIDGE_DIR/bin/remodex.js" up 2>&1 | tee -a "$BRIDGE_LOG_FILE"
+
+  preserve_runtime_after_successful_up
+  echo "[remodex-local] bridge service is up; use remodex stop to stop the local relay, tunnel, and macOS bridge service"
 }
 
-trap cleanup EXIT INT TERM
-
-parse_args "$@"
-RELAY_HOSTNAME="$(default_hostname)"
-RELAY_BRIDGE_HOST="$(healthcheck_host)"
-
-ensure_prerequisites
-ensure_package_dependencies "${BRIDGE_DIR}"
-ensure_package_dependencies "${RELAY_DIR}"
-ensure_hostname_belongs_to_this_mac
-ensure_port_available
-print_summary
-start_embedded_relay
-wait_for_relay
-start_bridge
-hold_open
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

@@ -349,6 +349,7 @@ private struct FileChangeBlockAggregate {
     var action: TurnFileChangeAction?
     var diffSections: [String]
     var lastTotalsSourceIndex: Int
+    var totalsAreAuthoritative: Bool
 }
 
 private struct RawFileChangeDiffSection {
@@ -357,6 +358,16 @@ private struct RawFileChangeDiffSection {
     let additions: Int
     let deletions: Int
     let diffCode: String
+}
+
+private struct MessageFileChangeContribution {
+    var path: String
+    var additions: Int
+    var deletions: Int
+    var action: TurnFileChangeAction?
+    var diffSections: [String]
+    var hasDiffSection: Bool
+    var hasAuthoritativeTotals: Bool
 }
 
 // Builds one per-file diff model from raw file-change messages so Totals stay authoritative
@@ -371,18 +382,18 @@ enum FileChangeBlockPresentationBuilder {
         aggregates.reserveCapacity(messages.count)
 
         for (messageIndex, message) in messages.enumerated() {
-            let parsedEntries = TurnFileChangeSummaryParser.parse(from: message.text)?.entries ?? []
+            let parsedEntries = parsedSummaryEntries(from: message.text)
             let diffSections = RawFileChangeDiffSectionParser.parse(
                 bodyText: message.text,
                 fallbackPaths: parsedEntries.map(\.path)
             )
+            let contributions = aggregateMessageContributions(
+                parsedEntries: parsedEntries,
+                diffSections: diffSections
+            )
 
-            for section in diffSections {
-                mergeDiffSection(section, sourceIndex: messageIndex, into: &aggregates)
-            }
-
-            for entry in parsedEntries {
-                mergeSummaryEntry(entry, sourceIndex: messageIndex, into: &aggregates)
+            for contribution in contributions {
+                mergeMessageContribution(contribution, sourceIndex: messageIndex, into: &aggregates)
             }
         }
 
@@ -420,23 +431,50 @@ enum FileChangeBlockPresentationBuilder {
         return FileChangeBlockPresentation(entries: entries, bodyText: bodyText)
     }
 
-    private static func mergeSummaryEntry(
-        _ entry: TurnFileChangeSummaryEntry,
+    private static func mergeMessageContribution(
+        _ contribution: MessageFileChangeContribution,
         sourceIndex: Int,
         into aggregates: inout [FileChangeBlockAggregate]
     ) {
         if let existingIndex = aggregates.firstIndex(where: {
-            FileChangePathIdentity.representsSameFile($0.path, entry.path)
+            FileChangePathIdentity.representsSameFile($0.path, contribution.path)
         }) {
             let existing = aggregates[existingIndex]
             var updated = existing
-            updated.path = FileChangePathIdentity.preferredDisplayPath(existing.path, entry.path)
-            updated.action = mergedFileChangeAction(existing: existing.action, incoming: entry.action)
+            updated.path = FileChangePathIdentity.preferredDisplayPath(existing.path, contribution.path)
+            updated.action = mergedFileChangeAction(existing: existing.action, incoming: contribution.action)
 
-            if sourceIndex >= existing.lastTotalsSourceIndex {
-                updated.additions = entry.additions
-                updated.deletions = entry.deletions
+            let newDiffSections = contribution.diffSections.filter { !updated.diffSections.contains($0) }
+            let shouldAccumulateDistinctSnapshotTotals = contribution.hasAuthoritativeTotals
+                && contribution.hasDiffSection
+                && !existing.diffSections.isEmpty
+                && !newDiffSections.isEmpty
+            if contribution.hasAuthoritativeTotals {
+                if shouldAccumulateDistinctSnapshotTotals {
+                    updated.additions += contribution.additions
+                    updated.deletions += contribution.deletions
+                    updated.lastTotalsSourceIndex = max(existing.lastTotalsSourceIndex, sourceIndex)
+                    updated.totalsAreAuthoritative = true
+                } else if sourceIndex >= existing.lastTotalsSourceIndex || !existing.totalsAreAuthoritative {
+                    updated.additions = contribution.additions
+                    updated.deletions = contribution.deletions
+                    updated.lastTotalsSourceIndex = sourceIndex
+                    updated.totalsAreAuthoritative = true
+                }
+            } else if contribution.hasDiffSection
+                && !updated.totalsAreAuthoritative
+                && !newDiffSections.isEmpty {
+                updated.additions += contribution.additions
+                updated.deletions += contribution.deletions
+                updated.lastTotalsSourceIndex = max(existing.lastTotalsSourceIndex, sourceIndex)
+            } else if sourceIndex >= existing.lastTotalsSourceIndex && !existing.totalsAreAuthoritative {
+                updated.additions = contribution.additions
+                updated.deletions = contribution.deletions
                 updated.lastTotalsSourceIndex = sourceIndex
+            }
+
+            for diffSection in newDiffSections {
+                updated.diffSections.append(diffSection)
             }
 
             aggregates[existingIndex] = updated
@@ -445,59 +483,13 @@ enum FileChangeBlockPresentationBuilder {
 
         aggregates.append(
             FileChangeBlockAggregate(
-                path: entry.path,
-                additions: entry.additions,
-                deletions: entry.deletions,
-                action: entry.action,
-                diffSections: [],
-                lastTotalsSourceIndex: sourceIndex
-            )
-        )
-    }
-
-    private static func mergeDiffSection(
-        _ section: RawFileChangeDiffSection,
-        sourceIndex: Int,
-        into aggregates: inout [FileChangeBlockAggregate]
-    ) {
-        let normalizedDiff = section.diffCode.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalizedDiff.isEmpty else {
-            return
-        }
-
-        if let existingIndex = aggregates.firstIndex(where: {
-            FileChangePathIdentity.representsSameFile($0.path, section.path)
-        }) {
-            var existing = aggregates[existingIndex]
-            existing.path = FileChangePathIdentity.preferredDisplayPath(existing.path, section.path)
-            existing.action = mergedFileChangeAction(existing: existing.action, incoming: section.action)
-
-            if existing.diffSections.contains(normalizedDiff) {
-                aggregates[existingIndex] = existing
-                return
-            }
-
-            if existing.diffSections.isEmpty {
-                existing.additions = section.additions
-                existing.deletions = section.deletions
-            } else {
-                existing.additions += section.additions
-                existing.deletions += section.deletions
-            }
-            existing.lastTotalsSourceIndex = max(existing.lastTotalsSourceIndex, sourceIndex)
-            existing.diffSections.append(normalizedDiff)
-            aggregates[existingIndex] = existing
-            return
-        }
-
-        aggregates.append(
-            FileChangeBlockAggregate(
-                path: section.path,
-                additions: section.additions,
-                deletions: section.deletions,
-                action: section.action,
-                diffSections: [normalizedDiff],
-                lastTotalsSourceIndex: sourceIndex
+                path: contribution.path,
+                additions: contribution.additions,
+                deletions: contribution.deletions,
+                action: contribution.action,
+                diffSections: contribution.diffSections,
+                lastTotalsSourceIndex: sourceIndex,
+                totalsAreAuthoritative: contribution.hasAuthoritativeTotals
             )
         )
     }
@@ -524,6 +516,169 @@ enum FileChangeBlockPresentationBuilder {
         case (nil, nil):
             return nil
         }
+    }
+
+    private static func aggregateMessageContributions(
+        parsedEntries: [TurnFileChangeSummaryEntry],
+        diffSections: [RawFileChangeDiffSection]
+    ) -> [MessageFileChangeContribution] {
+        var contributions: [MessageFileChangeContribution] = []
+
+        for entry in parsedEntries {
+            if let existingIndex = contributions.firstIndex(where: {
+                FileChangePathIdentity.representsSameFile($0.path, entry.path)
+            }) {
+                var existing = contributions[existingIndex]
+                existing.path = FileChangePathIdentity.preferredDisplayPath(existing.path, entry.path)
+                existing.additions = entry.additions
+                existing.deletions = entry.deletions
+                existing.action = mergedFileChangeAction(existing: existing.action, incoming: entry.action)
+                existing.hasAuthoritativeTotals = true
+                contributions[existingIndex] = existing
+                continue
+            }
+
+            contributions.append(
+                MessageFileChangeContribution(
+                    path: entry.path,
+                    additions: entry.additions,
+                    deletions: entry.deletions,
+                    action: entry.action,
+                    diffSections: [],
+                    hasDiffSection: false,
+                    hasAuthoritativeTotals: true
+                )
+            )
+        }
+
+        for section in diffSections {
+            let normalizedDiff = section.diffCode.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalizedDiff.isEmpty else {
+                continue
+            }
+
+            if let existingIndex = contributions.firstIndex(where: {
+                FileChangePathIdentity.representsSameFile($0.path, section.path)
+            }) {
+                var existing = contributions[existingIndex]
+                existing.path = FileChangePathIdentity.preferredDisplayPath(existing.path, section.path)
+                existing.action = mergedFileChangeAction(existing: existing.action, incoming: section.action)
+                if !existing.diffSections.contains(normalizedDiff) {
+                    existing.diffSections.append(normalizedDiff)
+                    if !existing.hasAuthoritativeTotals {
+                        existing.additions += section.additions
+                        existing.deletions += section.deletions
+                    }
+                }
+                existing.hasDiffSection = true
+                contributions[existingIndex] = existing
+                continue
+            }
+
+            contributions.append(
+                MessageFileChangeContribution(
+                    path: section.path,
+                    additions: section.additions,
+                    deletions: section.deletions,
+                    action: section.action,
+                    diffSections: [normalizedDiff],
+                    hasDiffSection: true,
+                    hasAuthoritativeTotals: false
+                )
+            )
+        }
+
+        return contributions
+    }
+
+    private static func parsedSummaryEntries(from text: String) -> [TurnFileChangeSummaryEntry] {
+        let parsedEntries = TurnFileChangeSummaryParser.parse(from: text)?.entries ?? []
+        if !parsedEntries.isEmpty {
+            return parsedEntries
+        }
+
+        return fallbackStructuredSummaryEntries(from: text)
+    }
+
+    private static func fallbackStructuredSummaryEntries(from text: String) -> [TurnFileChangeSummaryEntry] {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var entries: [TurnFileChangeSummaryEntry] = []
+        var currentPath: String?
+        var currentAction: TurnFileChangeAction?
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.hasPrefix("**Path:**") || trimmed.hasPrefix("Path:") {
+                currentPath = trimmed
+                    .replacingOccurrences(of: "**Path:**", with: "")
+                    .replacingOccurrences(of: "Path:", with: "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "`"))
+                currentAction = nil
+                continue
+            }
+
+            if trimmed.lowercased().hasPrefix("kind:") {
+                let value = trimmed.dropFirst("Kind:".count).trimmingCharacters(in: .whitespacesAndNewlines)
+                currentAction = TurnFileChangeAction.fromKind(value)
+                continue
+            }
+
+            guard trimmed.lowercased().hasPrefix("totals:"),
+                  let currentPath,
+                  let totals = fallbackTotals(from: trimmed) else {
+                continue
+            }
+
+            entries.append(
+                TurnFileChangeSummaryEntry(
+                    path: currentPath,
+                    additions: totals.additions,
+                    deletions: totals.deletions,
+                    action: currentAction
+                )
+            )
+        }
+
+        guard !entries.isEmpty else {
+            return []
+        }
+
+        var consolidated: [TurnFileChangeSummaryEntry] = []
+        for entry in entries {
+            if let existingIndex = consolidated.firstIndex(where: {
+                FileChangePathIdentity.representsSameFile($0.path, entry.path)
+            }) {
+                let existing = consolidated[existingIndex]
+                consolidated[existingIndex] = TurnFileChangeSummaryEntry(
+                    path: FileChangePathIdentity.preferredDisplayPath(existing.path, entry.path),
+                    additions: entry.additions,
+                    deletions: entry.deletions,
+                    action: existing.action ?? entry.action
+                )
+            } else {
+                consolidated.append(entry)
+            }
+        }
+        return consolidated
+    }
+
+    private static func fallbackTotals(from line: String) -> TurnDiffLineTotals? {
+        guard let regex = TurnMessageRegexCache.inlineTotals else {
+            return nil
+        }
+
+        let value = line.dropFirst("Totals:".count).trimmingCharacters(in: .whitespacesAndNewlines)
+        let nsValue = value as NSString
+        let range = NSRange(location: 0, length: nsValue.length)
+        guard let match = regex.firstMatch(in: value, range: range),
+              match.numberOfRanges == 3,
+              let additions = Int(nsValue.substring(with: match.range(at: 1))),
+              let deletions = Int(nsValue.substring(with: match.range(at: 2))) else {
+            return nil
+        }
+
+        return TurnDiffLineTotals(additions: additions, deletions: deletions)
     }
 }
 
@@ -762,7 +917,7 @@ struct PerFileDiffChunk: Identifiable {
 enum FileChangePathIdentity {
     // Treats absolute-vs-relative references to the same repo file as one identity,
     // while keeping same-named files in different directories separate.
-    static func representsSameFile(_ lhs: String, _ rhs: String) -> Bool {
+    nonisolated static func representsSameFile(_ lhs: String, _ rhs: String) -> Bool {
         let normalizedLHS = normalizedPath(lhs)
         let normalizedRHS = normalizedPath(rhs)
 
@@ -788,7 +943,7 @@ enum FileChangePathIdentity {
         return absolutePath.hasSuffix("/" + relativePath)
     }
 
-    static func preferredDisplayPath(_ lhs: String, _ rhs: String) -> String {
+    nonisolated static func preferredDisplayPath(_ lhs: String, _ rhs: String) -> String {
         let trimmedLHS = lhs.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedRHS = rhs.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -801,7 +956,7 @@ enum FileChangePathIdentity {
         return trimmedLHS
     }
 
-    static func normalizedPath(_ rawPath: String) -> String {
+    nonisolated static func normalizedPath(_ rawPath: String) -> String {
         var normalized = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
         if normalized.hasPrefix("a/") || normalized.hasPrefix("b/") {
             normalized = String(normalized.dropFirst(2))
@@ -815,7 +970,7 @@ enum FileChangePathIdentity {
         return normalized.lowercased()
     }
 
-    private static func isAbsolutePath(_ rawPath: String) -> Bool {
+    private nonisolated static func isAbsolutePath(_ rawPath: String) -> Bool {
         rawPath.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("/")
     }
 }

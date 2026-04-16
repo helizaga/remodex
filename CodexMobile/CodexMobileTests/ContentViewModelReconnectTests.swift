@@ -11,7 +11,6 @@ import XCTest
 
 @MainActor
 final class ContentViewModelReconnectTests: XCTestCase {
-    private static var retainedServices: [CodexService] = []
 
     override func setUp() {
         super.setUp()
@@ -70,7 +69,10 @@ final class ContentViewModelReconnectTests: XCTestCase {
         let reconnectURL = await viewModel.preferredReconnectURL(codex: service)
 
         XCTAssertNil(reconnectURL)
-        XCTAssertEqual(service.lastErrorMessage, "Your trusted Mac is offline right now.")
+        XCTAssertEqual(
+            service.lastErrorMessage,
+            "Reconnect could not find your Mac's live session. Wake the screen or try reconnecting."
+        )
     }
 
     func testForegroundReconnectKeepsRetryIntentArmedAfterRetryableFailures() async {
@@ -398,8 +400,14 @@ final class ContentViewModelReconnectTests: XCTestCase {
         let suiteName = "ContentViewModelReconnectTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard
         defaults.removePersistentDomain(forName: suiteName)
-        let service = CodexService(defaults: defaults)
-        Self.retainedServices.append(service)
+        let service = CodexService(
+            defaults: defaults,
+            messagePersistence: .disabled,
+            aiChangeSetPersistence: .disabled,
+            userNotificationCenter: CodexNoopUserNotificationCenter(),
+            remoteNotificationRegistrar: CodexNoopRemoteNotificationRegistrar(),
+            secureStateBootstrap: .ephemeral
+        )
         return service
     }
 

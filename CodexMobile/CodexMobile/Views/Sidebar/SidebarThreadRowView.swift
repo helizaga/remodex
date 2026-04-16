@@ -251,10 +251,12 @@ private struct SidebarSubagentNameLabel: View {
     @Environment(CodexService.self) private var codex
 
     var body: some View {
-        let _ = codex.subagentIdentityVersion
-        let source = thread.preferredSubagentLabel
-            ?? codex.resolvedSubagentDisplayLabel(threadId: thread.id, agentId: thread.agentId)
-            ?? "Subagent"
+        let source = {
+            _ = codex.subagentIdentityVersion
+            return thread.preferredSubagentLabel
+                ?? codex.resolvedSubagentDisplayLabel(threadId: thread.id, agentId: thread.agentId)
+                ?? "Subagent"
+        }()
         let parsed = SubagentLabelParser.parse(source)
         let nickname = parsed.nickname.isEmpty || CodexThread.isGenericPlaceholderTitle(parsed.nickname) ? "Subagent" : parsed.nickname
         SubagentLabelParser.styledText(nickname: nickname, roleSuffix: parsed.roleSuffix)
@@ -267,7 +269,7 @@ private struct SidebarSubagentNameLabel: View {
 // MARK: - Preview
 
 private enum SidebarRowPreviewFixtures {
-    static let now = Date()
+    nonisolated static let now = Date()
 
     // Two project groups worth of threads with subagent hierarchies
     static let allThreads: [CodexThread] = [
@@ -316,7 +318,7 @@ private enum SidebarRowPreviewFixtures {
         "t3": TurnSessionDiffTotals(additions: 120, deletions: 55, distinctDiffCount: 12),
     ]
 
-    static func timingLabel(for thread: CodexThread) -> String? {
+    nonisolated static func timingLabel(for thread: CodexThread) -> String? {
         guard let updated = thread.updatedAt else { return nil }
         let seconds = Int(now.timeIntervalSince(updated))
         if seconds < 60 { return "\(seconds)s" }
