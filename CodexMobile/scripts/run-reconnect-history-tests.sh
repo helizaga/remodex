@@ -105,7 +105,12 @@ fi
 echo "[codexmobile-ci] derived-data: $DERIVED_DATA_PATH"
 if [[ -n "$SIMULATOR_UDID" ]]; then
   echo "[codexmobile-ci] simulator-udid: $SIMULATOR_UDID"
-  echo "[codexmobile-ci] simulator: $(xcrun simctl list devices available | rg "$SIMULATOR_UDID" -m 1 || true)"
+  if command -v rg >/dev/null 2>&1; then
+    simulator_line="$(xcrun simctl list devices available | rg "$SIMULATOR_UDID" -m 1 || true)"
+  else
+    simulator_line="$(xcrun simctl list devices available | grep -m 1 "$SIMULATOR_UDID" || true)"
+  fi
+  echo "[codexmobile-ci] simulator: $simulator_line"
 fi
 if [[ -n "$CLONED_SOURCE_PACKAGES_DIR" ]]; then
   echo "[codexmobile-ci] source-packages: $CLONED_SOURCE_PACKAGES_DIR"
