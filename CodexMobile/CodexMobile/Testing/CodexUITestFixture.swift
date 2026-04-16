@@ -225,9 +225,22 @@ struct CodexUITestLaunchFixture {
         try? await Task.sleep(nanoseconds: 300_000_000)
         guard !Task.isCancelled else { return }
 
+        var didStartTurn = false
+        var didCompleteTurn = false
+        defer {
+            if didStartTurn {
+                if !didCompleteTurn {
+                    service.recordTurnTerminalState(threadId: threadID, turnId: turnID, state: .stopped)
+                }
+                service.setActiveTurnID(nil, for: threadID)
+                service.clearRunningState(for: threadID)
+            }
+        }
+
         service.markThreadAsRunning(threadID)
         service.setActiveTurnID(turnID, for: threadID)
         service.beginAssistantMessage(threadId: threadID, turnId: turnID, itemId: itemID)
+        didStartTurn = true
 
         for chunk in chunks {
             try? await Task.sleep(nanoseconds: 220_000_000)
@@ -242,8 +255,7 @@ struct CodexUITestLaunchFixture {
             text: chunks.joined()
         )
         service.recordTurnTerminalState(threadId: threadID, turnId: turnID, state: .completed)
-        service.setActiveTurnID(nil, for: threadID)
-        service.clearRunningState(for: threadID)
+        didCompleteTurn = true
     }
 }
 
