@@ -230,9 +230,10 @@ extension CodexService {
                 await self?.syncBridgeKeepMacAwakePreferenceIfNeeded()
             }
         } catch {
-            let shouldResetSavedSession = recordTrustedReconnectFailureIfNeeded(
-                isTrustedReconnectAttempt: isTrustedReconnectAttempt
-            )
+            let shouldResetSavedSession =
+                isTrustedReconnectAttempt && shouldCountTrustedReconnectFailure(error)
+                ? recordTrustedReconnectFailureIfNeeded(isTrustedReconnectAttempt: true)
+                : false
             presentConnectionErrorIfNeeded(error)
             // Keep foreground auto-recovery armed across internal reconnect failures.
             await disconnect(preserveReconnectIntent: shouldAutoReconnectOnForeground)
@@ -712,6 +713,7 @@ extension CodexService {
         releaseTransportResourcesForTeardown()
         cancelConnectionWorkForDeinit()
         releaseTimelineResourcesForDeinit()
+        endBackgroundRunGraceTask(reason: "deinit")
     }
 
     private func cancelConnectionWorkForDeinit() {
@@ -776,6 +778,26 @@ extension CodexService {
         shouldAutoReconnectOnForeground = false
         connectionRecoveryState = .idle
         return true
+    }
+
+    // Only stale secure reconnect failures should consume the saved-session recovery budget.
+    func shouldCountTrustedReconnectFailure(_ error: Error) -> Bool {
+        if reconnectIssue(for: error) == .savedSessionUnavailable {
+            return true
+        }
+
+        guard let secureTransportError = error as? CodexSecureTransportError else {
+            return false
+        }
+
+        switch secureTransportError {
+        case .invalidHandshake, .decryptFailed, .timedOut:
+            return true
+        case .secureError:
+            return secureConnectionState != .rePairRequired && secureConnectionState != .updateRequired
+        case .incompatibleVersion, .invalidQR:
+            return false
+        }
     }
 
     // Drops only the stale saved relay session after repeated secure reconnect failures.

@@ -43,6 +43,7 @@ expand_user_path() {
 }
 
 CLONED_SOURCE_PACKAGES_DIR="$(expand_user_path "$CLONED_SOURCE_PACKAGES_DIR")"
+DERIVED_DATA_PATH="$(expand_user_path "$DERIVED_DATA_PATH")"
 RESULT_BUNDLE_PATH="$(expand_user_path "$RESULT_BUNDLE_PATH")"
 CRASH_ARTIFACTS_DIR="$(expand_user_path "$CRASH_ARTIFACTS_DIR")"
 

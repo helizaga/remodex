@@ -88,9 +88,6 @@ struct CodexMobileApp: App {
         } else {
             ContentView()
                 .task {
-                    guard !shouldSkipAppBootstrap else {
-                        return
-                    }
                     await subscriptionService.bootstrap()
                 }
         }

@@ -15,6 +15,7 @@ TUNNEL_PID_FILE="${STATE_DIR}/tunnel.pid"
 NGROK_LOG_FILE="${STATE_DIR}/ngrok.log"
 BRIDGE_LOG_FILE="${STATE_DIR}/bridge.log"
 RELAY_LOG_FILE="${STATE_DIR}/relay.log"
+NGROK_BIN="${NGROK_BIN:-$(command -v ngrok 2>/dev/null || printf 'ngrok')}"
 LOCAL_RELAY_URL="ws://127.0.0.1:${PORT}/relay"
 RELAY_URL=""
 
@@ -82,8 +83,8 @@ cleanup_repo_launcher_orphans() {
 find_repo_worker_pids() {
   {
     pgrep -f "${ROOT_DIR}/relay/local-server.js" 2>/dev/null || true
-    pgrep -f 'node ./bin/remodex\.js up' 2>/dev/null || true
-    pgrep -f "ngrok http http://127.0.0.1:${PORT}" 2>/dev/null || true
+    pgrep -f "node ${BRIDGE_DIR}/bin/remodex\\.js up" 2>/dev/null || true
+    pgrep -f "${NGROK_BIN} http http://$(ngrok_upstream_host):${PORT}" 2>/dev/null || true
   } | awk 'NF' | sort -u
 }
 
@@ -179,6 +180,17 @@ should_use_ngrok_tunnel() {
   tunnel_mode="$(normalize_tunnel_mode "${2:-off}")"
 
   [[ -z "$explicit_relay_url" && "$tunnel_mode" == "ngrok" ]]
+}
+
+ngrok_upstream_host() {
+  case "${BIND_HOST:-127.0.0.1}" in
+    ""|"0.0.0.0"|"::")
+      printf '127.0.0.1\n'
+      ;;
+    *)
+      printf '%s\n' "$BIND_HOST"
+      ;;
+  esac
 }
 
 preflight_up() {
@@ -333,9 +345,12 @@ auto_clear_ngrok_collision() {
   fi
 
   local session_ids
-  session_ids="$(extract_ngrok_tunnel_session_ids_for_endpoint "$endpoint_json" "$endpoint_url")"
-
-  local parser_status=$?
+  local parser_status=0
+  if session_ids="$(extract_ngrok_tunnel_session_ids_for_endpoint "$endpoint_json" "$endpoint_url")"; then
+    parser_status=0
+  else
+    parser_status=$?
+  fi
   if [[ $parser_status -eq 2 ]]; then
     echo "[remodex-local] ngrok API does not currently report an active tunnel session for that endpoint; waiting for release" >&2
     sleep 2
@@ -406,7 +421,7 @@ recover_ngrok_collision() {
 start_ngrok_tunnel() {
   cleanup_ngrok_state
   tunnel_pid="$(spawn_detached "$TUNNEL_PID_FILE" "$NGROK_LOG_FILE" \
-    ngrok http "http://127.0.0.1:${PORT}" --log=stdout --log-format=json)"
+    "$NGROK_BIN" http "http://$(ngrok_upstream_host):${PORT}" --log=stdout --log-format=json)"
   started_tunnel=1
 }
 
@@ -522,11 +537,6 @@ main() {
     exit 1
   fi
 
-  if [[ ! -d "$BRIDGE_DIR/node_modules" ]]; then
-    echo "[remodex-local] installing bridge dependencies"
-    (cd "$BRIDGE_DIR" && npm install)
-  fi
-
   mkdir -p "$STATE_DIR"
 
   if [[ "$command" == "stop" ]]; then
@@ -542,6 +552,11 @@ main() {
     stop_pid_file "tunnel" "$TUNNEL_PID_FILE"
     stop_pid_file "relay" "$RELAY_PID_FILE"
     exit 0
+  fi
+
+  if [[ ! -d "$BRIDGE_DIR/node_modules" ]]; then
+    echo "[remodex-local] installing bridge dependencies"
+    (cd "$BRIDGE_DIR" && npm install)
   fi
 
   trap cleanup EXIT INT TERM
@@ -623,7 +638,7 @@ main() {
   rm -f "$BRIDGE_LOG_FILE"
   REMODEX_RELAY="$RELAY_URL" \
   REMODEX_REFRESH_ENABLED="$REFRESH_ENABLED" \
-  node ./bin/remodex.js up 2>&1 | tee -a "$BRIDGE_LOG_FILE"
+  node "$BRIDGE_DIR/bin/remodex.js" up 2>&1 | tee -a "$BRIDGE_LOG_FILE"
 
   preserve_runtime_after_successful_up
   echo "[remodex-local] bridge service is up; use remodex stop to stop the local relay, tunnel, and macOS bridge service"

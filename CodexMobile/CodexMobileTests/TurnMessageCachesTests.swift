@@ -291,6 +291,62 @@ final class TurnMessageCachesTests: XCTestCase {
         XCTAssertEqual(summary?.entries.first?.deletions, 3)
     }
 
+    func testFileChangeRenderCacheFallbackPathResetsActionWhenKindIsMissing() {
+        let summary = FileChangeSystemRenderCache.renderState(
+            messageID: "fallback-action-reset",
+            sourceText: """
+            Status: completed
+
+            Path: Sources/Added.swift
+            Kind: add
+            Totals: +1 -0
+
+            Path: Sources/Unknown.swift
+            Totals: +2 -0
+            """
+        ).summary
+
+        XCTAssertEqual(summary?.entries.count, 2)
+        XCTAssertEqual(summary?.entries[0].action, .added)
+        XCTAssertNil(summary?.entries[1].action)
+    }
+
+    func testFileChangeRenderCacheAuthoritativeTotalsReplaceEarlierSnapshotTotals() {
+        let summary = FileChangeSystemRenderCache.renderState(
+            messageID: "authoritative-totals-replace",
+            sourceText: """
+            Status: completed
+
+            Path: Sources/App.swift
+            Kind: update
+            Totals: +1 -0
+
+            ```diff
+            @@ -1,0 +1,1 @@
+            +first change
+            ```
+
+            Path: Sources/App.swift
+            Kind: update
+            Totals: +2 -0
+
+            ```diff
+            @@ -5,0 +5,2 @@
+            +second change
+            +third change
+            ```
+            """,
+            parsedEntries: [
+                TurnFileChangeSummaryEntry(path: "Sources/App.swift", additions: 1, deletions: 0, action: .edited),
+                TurnFileChangeSummaryEntry(path: "Sources/App.swift", additions: 2, deletions: 0, action: .edited),
+            ]
+        ).summary
+
+        XCTAssertEqual(summary?.entries.count, 1)
+        XCTAssertEqual(summary?.entries.first?.additions, 2)
+        XCTAssertEqual(summary?.entries.first?.deletions, 0)
+    }
+
     private func fileChangeText(path: String) -> String {
         """
         Status: completed

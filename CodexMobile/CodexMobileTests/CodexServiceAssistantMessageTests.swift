@@ -9,16 +9,6 @@ import XCTest
 
 @MainActor
 final class CodexServiceAssistantMessageTests: XCTestCase {
-    override func setUp() {
-        super.setUp()
-        clearStoredSecureRelayState()
-    }
-
-    override func tearDown() {
-        clearStoredSecureRelayState()
-        super.tearDown()
-    }
-
     func testAssistantStreamingKeepsSeparateBlocksWhenItemChangesWithinTurn() {
         let service = makeService()
         let threadID = "thread-\(UUID().uuidString)"
