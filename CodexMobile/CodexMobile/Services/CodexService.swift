@@ -256,7 +256,6 @@ struct TurnTimelineRenderSnapshot: Equatable {
     }
 }
 
-@MainActor
 @Observable
 final class ThreadTimelineState {
     let threadID: String
