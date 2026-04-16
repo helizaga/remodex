@@ -280,6 +280,8 @@ final class ThreadTimelineState {
         self.repoRefreshSignal = nil
         self.renderSnapshot = TurnTimelineRenderSnapshot.empty(threadID: threadID)
     }
+
+    nonisolated deinit {}
 }
 
 struct AssistantRevertStateCacheEntry {
@@ -330,6 +332,8 @@ final class TurnTimelineStore {
         busyRepoRoots.removeAll()
         busyRepoRootsRevision = 0
     }
+
+    nonisolated deinit {}
 }
 
 @MainActor
