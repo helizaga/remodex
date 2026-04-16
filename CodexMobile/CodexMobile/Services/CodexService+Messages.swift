@@ -146,15 +146,33 @@ extension CodexService {
         cancelAllPerThreadRefreshWork()
     }
 
+    private func drainTimelineStore(_ store: TurnTimelineStore) {
+        store.removeAllTimelineState()
+    }
+
+    private func swapOutTimelineStore() -> TurnTimelineStore {
+        let retiringStore = timelineStore
+        timelineStore = TurnTimelineStore()
+        return retiringStore
+    }
+
     // Shrinks timeline-owned object graphs before CodexService deallocation so teardown
     // does not have to release the whole store and its snapshots in one final pass.
     func releaseTimelineResourcesForDeinit() {
-        removeAllThreadTimelineState()
+        let retiringStore = swapOutTimelineStore()
+        threadsNeedingCanonicalHistoryReconcile.removeAll()
+        threadsWithSatisfiedDeferredHistoryHydration.removeAll()
+        canonicalHistoryReconcileTaskByThreadID.values.forEach { $0.cancel() }
+        canonicalHistoryReconcileTaskByThreadID.removeAll()
+        canonicalHistoryReconcileRetryTaskByThreadID.values.forEach { $0.cancel() }
+        canonicalHistoryReconcileRetryTaskByThreadID.removeAll()
+        cancelAllPerThreadRefreshWork()
         timelineRefreshInProgressThreadIDs.removeAll()
         threadsPendingCompletionHaptic.removeAll()
         protectedRunningFallbackThreadIDs.removeAll()
         runningThreadIDs.removeAll()
         activeTurnIdByThread.removeAll()
+        drainTimelineStore(retiringStore)
     }
 
     // Refreshes the derived output cache and bumps the thread timeline revision.
