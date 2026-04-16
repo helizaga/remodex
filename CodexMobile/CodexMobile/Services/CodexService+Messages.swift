@@ -121,9 +121,16 @@ extension CodexService {
         return state
     }
 
+    // Returns the observed render snapshot for a thread while keeping the backing cache lazy.
+    func renderSnapshot(for threadId: String) -> TurnTimelineRenderSnapshot {
+        let state = timelineState(for: threadId)
+        return timelineRenderSnapshotsByThread[threadId] ?? state.renderSnapshot
+    }
+
     // Prunes service-owned render caches so removed/archived threads do not keep stale snapshots alive.
     func removeThreadTimelineState(for threadId: String) {
         timelineStore.removeTimelineState(for: threadId)
+        timelineRenderSnapshotsByThread.removeValue(forKey: threadId)
         threadsPendingCompletionHaptic.remove(threadId)
         threadsNeedingCanonicalHistoryReconcile.remove(threadId)
         threadsWithSatisfiedDeferredHistoryHydration.remove(threadId)
@@ -137,6 +144,7 @@ extension CodexService {
     // Clears every service-owned timeline cache during global teardown.
     func removeAllThreadTimelineState() {
         timelineStore.removeAllTimelineState()
+        timelineRenderSnapshotsByThread.removeAll()
         threadsNeedingCanonicalHistoryReconcile.removeAll()
         threadsWithSatisfiedDeferredHistoryHydration.removeAll()
         canonicalHistoryReconcileTaskByThreadID.values.forEach { $0.cancel() }
@@ -160,6 +168,7 @@ extension CodexService {
     // does not have to release the whole store and its snapshots in one final pass.
     func releaseTimelineResourcesForDeinit() {
         let retiringStore = swapOutTimelineStore()
+        timelineRenderSnapshotsByThread.removeAll()
         threadsNeedingCanonicalHistoryReconcile.removeAll()
         threadsWithSatisfiedDeferredHistoryHydration.removeAll()
         canonicalHistoryReconcileTaskByThreadID.values.forEach { $0.cancel() }
@@ -236,6 +245,7 @@ extension CodexService {
             assistantRevertStatesByMessageID: state.renderSnapshot.assistantRevertStatesByMessageID,
             repoRefreshSignal: state.renderSnapshot.repoRefreshSignal
         )
+        timelineRenderSnapshotsByThread[threadId] = state.renderSnapshot
     }
 
     // Returns the currently running turn id for a specific thread, if any.
@@ -3106,6 +3116,7 @@ extension CodexService {
             assistantRevertStatesByMessageID: assistantRevertStates,
             repoRefreshSignal: repoRefreshSignal
         )
+        timelineRenderSnapshotsByThread[threadId] = state.renderSnapshot
     }
 
     // Bounds expensive render-only projection work to the recent transcript tail.

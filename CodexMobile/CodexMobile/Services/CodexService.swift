@@ -256,24 +256,15 @@ struct TurnTimelineRenderSnapshot: Equatable {
     }
 }
 
-@Observable
 final class ThreadTimelineState {
     let threadID: String
-    @ObservationIgnored
     var messages: [CodexMessage]
-    @ObservationIgnored
     var messageRevision: Int
-    @ObservationIgnored
     var activeTurnID: String?
-    @ObservationIgnored
     var isThreadRunning: Bool
-    @ObservationIgnored
     var latestTurnTerminalState: CodexTurnTerminalState?
-    @ObservationIgnored
     var completedTurnIDs: Set<String>
-    @ObservationIgnored
     var stoppedTurnIDs: Set<String>
-    @ObservationIgnored
     var repoRefreshSignal: String?
     var renderSnapshot: TurnTimelineRenderSnapshot
 
@@ -583,6 +574,7 @@ final class CodexService {
     var repoRootByWorkingDirectory: [String: String] = [:]
     var knownRepoRoots: Set<String> = []
     // Service-owned per-thread UI state is delegated into a dedicated timeline store.
+    var timelineRenderSnapshotsByThread: [String: TurnTimelineRenderSnapshot] = [:]
     @ObservationIgnored var timelineStore = TurnTimelineStore()
     @ObservationIgnored var forkedFromThreadIDByThreadID: [String: String] = [:]
     @ObservationIgnored var renamedThreadNameByThreadID: [String: String] = [:]
