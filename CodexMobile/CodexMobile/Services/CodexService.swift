@@ -299,7 +299,6 @@ struct AssistantRevertStateCacheEntry {
     let statesByMessageID: [String: AssistantRevertPresentation]
 }
 
-@MainActor
 final class TurnTimelineStore {
     var stateByThread: [String: ThreadTimelineState] = [:]
     var stoppedTurnIDsByThread: [String: Set<String>] = [:]
