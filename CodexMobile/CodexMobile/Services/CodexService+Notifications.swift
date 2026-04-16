@@ -66,6 +66,8 @@ final class CodexNoopUserNotificationCenter: CodexUserNotificationCentering {
     func authorizationStatus() async -> UNAuthorizationStatus {
         .notDetermined
     }
+
+    nonisolated deinit {}
 }
 
 extension UNUserNotificationCenter: CodexUserNotificationCentering {
