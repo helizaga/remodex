@@ -27,6 +27,8 @@ protocol CodexRemoteNotificationRegistering: AnyObject {
 @MainActor
 final class CodexNoopRemoteNotificationRegistrar: CodexRemoteNotificationRegistering {
     func registerForRemoteNotifications() {}
+
+    nonisolated deinit {}
 }
 
 @MainActor
