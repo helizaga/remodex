@@ -324,6 +324,47 @@ test("findRolloutFileForThread skips retryable stat races during full-tree scan"
   );
 });
 
+test("findRolloutFileForThread ignores substring rollout names for other threads", () => {
+  const file = (name) => ({
+    name,
+    isDirectory: () => false,
+    isFile: () => true,
+  });
+  const directory = (name) => ({
+    name,
+    isDirectory: () => true,
+    isFile: () => false,
+  });
+  const fsModule = {
+    existsSync(root) {
+      return root === "/sessions";
+    },
+    readdirSync(current) {
+      if (current === "/sessions") {
+        return [directory("thread-a")];
+      }
+      if (current === "/sessions/thread-a") {
+        return [file("rollout-older-thread-a-2.jsonl"), file("rollout-newer-thread-a.jsonl")];
+      }
+      throw new Error(`unexpected readdirSync path: ${current}`);
+    },
+    statSync(filePath) {
+      if (filePath.endsWith("rollout-older-thread-a-2.jsonl")) {
+        return { mtimeMs: 300 };
+      }
+      if (filePath.endsWith("rollout-newer-thread-a.jsonl")) {
+        return { mtimeMs: 200 };
+      }
+      throw new Error(`unexpected statSync path: ${filePath}`);
+    },
+  };
+
+  assert.equal(
+    findRolloutFileForThread("/sessions", "thread-a", { fsModule }),
+    "/sessions/thread-a/rollout-newer-thread-a.jsonl"
+  );
+});
+
 function makeTemporarySessionsHome() {
   const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "rollout-watch-"));
   const threadDir = path.join(homeDir, "sessions", "2026", "03", "12");

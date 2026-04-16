@@ -460,8 +460,9 @@ function startBridge({
       recordRelayCloseDiagnostic(code, reason);
       if (code !== 1000 || reason) {
         const detail = [`code ${code}`];
-        if (reason) {
-          detail.push(`reason: ${reason}`);
+        const redactedReason = redactedRelayCloseReason(reason);
+        if (redactedReason) {
+          detail.push(`reason: ${redactedReason}`);
         }
         console.log(`[remodex] relay closed (${detail.join(", ")})`);
       }
@@ -1861,6 +1862,14 @@ function persistBridgePreferences(
   });
 }
 
+function redactedRelayCloseReason(reasonText) {
+  if (typeof reasonText !== "string") {
+    return "";
+  }
+
+  return reasonText.trim() ? "[redacted]" : "";
+}
+
 module.exports = {
   buildHeartbeatBridgeStatus,
   createMacOSBridgeWakeAssertion,
@@ -1868,6 +1877,7 @@ module.exports = {
   isActiveRelaySocket,
   nextRelayReconnectDelayMs,
   persistBridgePreferences,
+  redactedRelayCloseReason,
   relayCloseDiagnostic,
   shouldShutdownOnRelayCloseCode,
   sanitizeThreadHistoryImagesForRelay,

@@ -81,7 +81,8 @@ ONLY_TESTING_ARGS=()
 if [[ -n "$ONLY_TESTING" ]]; then
   IFS=',' read -r -a requested_specs <<<"$ONLY_TESTING"
   for spec in "${requested_specs[@]}"; do
-    spec="$(xargs <<<"$spec")"
+    spec="${spec#"${spec%%[![:space:]]*}"}"
+    spec="${spec%"${spec##*[![:space:]]}"}"
     if [[ -n "$spec" ]]; then
       ONLY_TESTING_ARGS+=("-only-testing:${spec}")
     fi

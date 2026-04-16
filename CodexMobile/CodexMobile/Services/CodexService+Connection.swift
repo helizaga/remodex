@@ -792,7 +792,7 @@ extension CodexService {
 
         switch secureTransportError {
         case .invalidHandshake, .decryptFailed, .timedOut:
-            return true
+            return false
         case .secureError:
             return secureConnectionState != .rePairRequired && secureConnectionState != .updateRequired
         case .incompatibleVersion, .invalidQR:

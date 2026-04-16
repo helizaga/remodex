@@ -264,6 +264,15 @@ function findRolloutFileForThread(root, threadId, { fsModule = fs } = {}) {
   return findNewestRolloutFileForThread(root, threadId, { fsModule });
 }
 
+function isThreadScopedRolloutFileName(fileName, threadId) {
+  return (
+    typeof fileName === "string" &&
+    typeof threadId === "string" &&
+    fileName.startsWith("rollout-") &&
+    fileName.endsWith(`-${threadId}.jsonl`)
+  );
+}
+
 // Keeps the fast "recent files first" path, but falls back to a full-tree scan
 // so older valid thread rollouts still recover after many newer sessions exist.
 function findPreferredRolloutFileForThread(root, candidates, threadId, { fsModule = fs } = {}) {
@@ -284,7 +293,10 @@ function findMostRecentRolloutFileForThread(candidates, threadId) {
 
   let newestMatch = null;
   for (const candidate of candidates) {
-    if (!candidate?.filePath || !path.basename(candidate.filePath).includes(threadId)) {
+    if (
+      !candidate?.filePath ||
+      !isThreadScopedRolloutFileName(path.basename(candidate.filePath), threadId)
+    ) {
       continue;
     }
 
@@ -321,11 +333,7 @@ function findNewestRolloutFileForThread(root, threadId, { fsModule = fs } = {}) 
         continue;
       }
 
-      if (
-        entry.name.includes(threadId) &&
-        entry.name.startsWith("rollout-") &&
-        entry.name.endsWith(".jsonl")
-      ) {
+      if (isThreadScopedRolloutFileName(entry.name, threadId)) {
         let stat;
         try {
           stat = fsModule.statSync(fullPath);

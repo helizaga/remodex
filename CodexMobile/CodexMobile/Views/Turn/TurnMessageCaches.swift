@@ -967,7 +967,7 @@ enum FileChangePathIdentity {
         if let range = normalized.range(of: #":\d+(?::\d+)?$"#, options: .regularExpression) {
             normalized.removeSubrange(range)
         }
-        return normalized
+        return normalized.lowercased()
     }
 
     private nonisolated static func isAbsolutePath(_ rawPath: String) -> Bool {

@@ -35,6 +35,13 @@ test("empty relay session ids are rejected", () => {
   assert.equal(readPersistedRelaySessionId({ stateDir }), null);
 });
 
+test("relay session ids are trimmed before persisting", () => {
+  const stateDir = makeStateDir();
+
+  assert.equal(rememberRelaySessionId("  session-123  ", { stateDir }), true);
+  assert.equal(readPersistedRelaySessionId({ stateDir }), "session-123");
+});
+
 test("corrupted relay session state is treated as missing", () => {
   const stateDir = makeStateDir();
   fs.mkdirSync(stateDir, { recursive: true });

@@ -8,6 +8,7 @@ const {
   isActiveRelaySocket,
   nextRelayReconnectDelayMs,
   persistBridgePreferences,
+  redactedRelayCloseReason,
   relayCloseDiagnostic,
   shouldShutdownOnRelayCloseCode,
   sanitizeThreadHistoryImagesForRelay,
@@ -69,6 +70,14 @@ test("relayCloseDiagnostic classifies saved-session and permanent reconnect fail
     message: "The relay or network is temporarily unavailable.",
     isPermanent: false,
   });
+});
+
+test("redactedRelayCloseReason hides non-empty relay close reasons from logs", () => {
+  assert.equal(redactedRelayCloseReason("sessionId=abc123"), "[redacted]");
+  assert.equal(redactedRelayCloseReason("   relay rejected   "), "[redacted]");
+  assert.equal(redactedRelayCloseReason(""), "");
+  assert.equal(redactedRelayCloseReason("   "), "");
+  assert.equal(redactedRelayCloseReason(null), "");
 });
 
 test("hasRelayConnectionGoneStale returns true once the relay silence crosses the timeout", () => {

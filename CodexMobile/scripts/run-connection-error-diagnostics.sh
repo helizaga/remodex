@@ -6,9 +6,17 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUNNER_PATH="$ROOT_DIR/scripts/run-reconnect-history-tests.sh"
+if [[ ! -f "$RUNNER_PATH" ]]; then
+  echo "Runner is missing: $RUNNER_PATH" >&2
+  exit 1
+fi
+if [[ ! -x "$RUNNER_PATH" ]]; then
+  echo "Runner is not executable: $RUNNER_PATH" >&2
+  exit 1
+fi
 
 MODE="${DIAGNOSTIC_MODE:-baseline}"
-TEST_IDENTIFIER="${TEST_IDENTIFIER:-CodexMobileTests/CodexServiceConnectionErrorTests}"
+TEST_IDENTIFIER="${TEST_IDENTIFIER:-${ONLY_TESTING:-CodexMobileTests/CodexServiceConnectionErrorTests}}"
 TEST_ITERATIONS="${TEST_ITERATIONS:-}"
 RESULT_BUNDLE_PATH="${RESULT_BUNDLE_PATH:-/tmp/remodex-connection-error-diagnostics.xcresult}"
 DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-/tmp/remodex-connection-error-diagnostics-derived}"

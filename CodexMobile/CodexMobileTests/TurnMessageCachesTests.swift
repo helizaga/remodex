@@ -335,11 +335,7 @@ final class TurnMessageCachesTests: XCTestCase {
             +second change
             +third change
             ```
-            """,
-            parsedEntries: [
-                TurnFileChangeSummaryEntry(path: "Sources/App.swift", additions: 1, deletions: 0, action: .edited),
-                TurnFileChangeSummaryEntry(path: "Sources/App.swift", additions: 2, deletions: 0, action: .edited),
-            ]
+            """
         ).summary
 
         XCTAssertEqual(summary?.entries.count, 1)

@@ -25,8 +25,11 @@ enum CodexUITestHarness {
 
         let service = CodexService(
             defaults: defaults,
+            messagePersistence: .disabled,
+            aiChangeSetPersistence: .disabled,
             userNotificationCenter: CodexNoopUserNotificationCenter(),
-            remoteNotificationRegistrar: CodexNoopRemoteNotificationRegistrar()
+            remoteNotificationRegistrar: CodexNoopRemoteNotificationRegistrar(),
+            secureStateBootstrap: .ephemeral
         )
         let subscriptions = SubscriptionService(defaults: defaults)
         let fixture = configureFixture(options: options, service: service)
