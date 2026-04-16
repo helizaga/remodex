@@ -13,6 +13,7 @@ MAX_REGRESSION_PERCENT="${MAX_REGRESSION_PERCENT:-}"
 DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-/tmp/remodex-turnview-performance-derived}"
 RESULT_BUNDLE_PATH="${RESULT_BUNDLE_PATH:-}"
 
+# shellcheck source=CodexMobile/scripts/xcode-test-helpers.sh
 source "$HELPERS_PATH"
 
 DESTINATION="${DESTINATION:-$(pick_ios_simulator_destination "$PROJECT_PATH" "$SCHEME" \

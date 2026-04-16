@@ -1490,7 +1490,7 @@ extension CodexService {
     // Native/requested plan threads should rely on official requestUserInput events,
     // not on heuristics over assistant prose.
     func allowsAssistantPlanFallbackRecovery(for threadId: String, turnId: String?) -> Bool {
-        let _ = turnId
+        _ = turnId
         return currentPlanSessionSource(for: threadId) == .compatibilityFallback
     }
 

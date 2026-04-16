@@ -90,19 +90,13 @@ test("watcher prefers the newest rollout when the same thread has multiple files
     tokensUsed: 111,
     tokenLimit: 1_000,
   });
-  setFileMTime(
-    path.join(threadDir, "rollout-2026-03-05T13-23-27-thread-a.jsonl"),
-    nowMs - 120_000
-  );
+  setFileMTime(path.join(threadDir, "rollout-2026-03-05T13-23-27-thread-a.jsonl"), nowMs - 120_000);
   writeRolloutFile(path.join(threadDir, "rollout-2026-03-05T13-25-27-thread-a.jsonl"), {
     turnId: "turn-a-new",
     tokensUsed: 333,
     tokenLimit: 1_000,
   });
-  setFileMTime(
-    path.join(threadDir, "rollout-2026-03-05T13-25-27-thread-a.jsonl"),
-    nowMs - 60_000
-  );
+  setFileMTime(path.join(threadDir, "rollout-2026-03-05T13-25-27-thread-a.jsonl"), nowMs - 60_000);
 
   const usages = [];
   const watcher = createThreadRolloutActivityWatcher({
@@ -139,7 +133,7 @@ test("watcher falls back to an older thread rollout outside the recent lookback 
     tokensUsed: 555,
     tokenLimit: 1_000,
   });
-  setFileMTime(oldRolloutPath, nowMs - (24 * 60 * 60 * 1000));
+  setFileMTime(oldRolloutPath, nowMs - 24 * 60 * 60 * 1000);
 
   const newerOtherPath = path.join(threadDir, "rollout-2026-03-12T13-29-00-thread-b.jsonl");
   writeRolloutFile(newerOtherPath, {
@@ -305,10 +299,7 @@ test("findRolloutFileForThread skips retryable stat races during full-tree scan"
         return [directory("thread-a")];
       }
       if (current === "/sessions/thread-a") {
-        return [
-          file("rollout-older-thread-a.jsonl"),
-          file("rollout-newer-thread-a.jsonl"),
-        ];
+        return [file("rollout-older-thread-a.jsonl"), file("rollout-newer-thread-a.jsonl")];
       }
       throw new Error(`unexpected readdirSync path: ${current}`);
     },

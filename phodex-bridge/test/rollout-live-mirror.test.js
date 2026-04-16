@@ -47,12 +47,14 @@ test("desktop-origin active runs replay thinking and exec command activity on re
   });
   t.after(() => controller.stopAll());
 
-  controller.observeInbound(JSON.stringify({
-    method: "thread/resume",
-    params: {
-      threadId: "thread-desktop",
-    },
-  }));
+  controller.observeInbound(
+    JSON.stringify({
+      method: "thread/resume",
+      params: {
+        threadId: "thread-desktop",
+      },
+    })
+  );
 
   await wait(30);
 
@@ -100,12 +102,14 @@ test("desktop-origin bootstrap replays the pending user message and final assist
   });
   t.after(() => controller.stopAll());
 
-  controller.observeInbound(JSON.stringify({
-    method: "thread/resume",
-    params: {
-      threadId: "thread-chat",
-    },
-  }));
+  controller.observeInbound(
+    JSON.stringify({
+      method: "thread/resume",
+      params: {
+        threadId: "thread-chat",
+      },
+    })
+  );
 
   await wait(30);
 
@@ -152,12 +156,14 @@ test("phone-origin rollouts do not emit mirrored updates", async (t) => {
   });
   t.after(() => controller.stopAll());
 
-  controller.observeInbound(JSON.stringify({
-    method: "thread/read",
-    params: {
-      threadId: "thread-phone",
-    },
-  }));
+  controller.observeInbound(
+    JSON.stringify({
+      method: "thread/read",
+      params: {
+        threadId: "thread-phone",
+      },
+    })
+  );
 
   await wait(30);
 
@@ -188,12 +194,14 @@ test("desktop-origin idle watchers stream new rollout growth after the phone reo
   });
   t.after(() => controller.stopAll());
 
-  controller.observeInbound(JSON.stringify({
-    method: "thread/resume",
-    params: {
-      threadId: "thread-grow",
-    },
-  }));
+  controller.observeInbound(
+    JSON.stringify({
+      method: "thread/resume",
+      params: {
+        threadId: "thread-grow",
+      },
+    })
+  );
   await wait(20);
 
   appendRolloutLines(rolloutPath, [
@@ -204,11 +212,7 @@ test("desktop-origin idle watchers stream new rollout growth after the phone reo
 
   assert.deepEqual(
     outbound.map((message) => message.method),
-    [
-      "turn/started",
-      "item/reasoning/textDelta",
-      "codex/event/background_event",
-    ]
+    ["turn/started", "item/reasoning/textDelta", "codex/event/background_event"]
   );
   assert.equal(outbound[2].params.message, "Applying patch");
 });

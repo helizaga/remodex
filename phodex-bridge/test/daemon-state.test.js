@@ -30,12 +30,18 @@ const {
 test("daemon-state stores config, pairing payloads, and status under the remodex state dir", () => {
   withTempDaemonEnv(({ rootDir }) => {
     writeDaemonConfig({ relayUrl: "ws://127.0.0.1:9000/relay" });
-    writePairingSession({ sessionId: "session-1" }, {
-      now: () => 1_710_000_000_000,
-    });
-    writeBridgeStatus({ state: "running", connectionStatus: "connected" }, {
-      now: () => 1_710_000_100_000,
-    });
+    writePairingSession(
+      { sessionId: "session-1" },
+      {
+        now: () => 1_710_000_000_000,
+      }
+    );
+    writeBridgeStatus(
+      { state: "running", connectionStatus: "connected" },
+      {
+        now: () => 1_710_000_100_000,
+      }
+    );
 
     assert.equal(resolveRemodexStateDir(), rootDir);
     assert.deepEqual(readDaemonConfig(), { relayUrl: "ws://127.0.0.1:9000/relay" });

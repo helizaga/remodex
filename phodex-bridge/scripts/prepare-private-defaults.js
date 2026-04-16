@@ -15,10 +15,14 @@ if (!relayUrl && !pushServiceUrl) {
 fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 fs.writeFileSync(
   outputPath,
-  `${JSON.stringify({
-    relayUrl,
-    pushServiceUrl,
-  }, null, 2)}\n`,
+  `${JSON.stringify(
+    {
+      relayUrl,
+      pushServiceUrl,
+    },
+    null,
+    2
+  )}\n`,
   { encoding: "utf8", mode: 0o600 }
 );
 

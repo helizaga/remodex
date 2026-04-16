@@ -19,13 +19,16 @@ struct SubagentActionCard: View {
     @State private var selectedAgentDetails: CodexSubagentThreadPresentation?
 
     var body: some View {
-        let _ = codex.subagentIdentityVersion
+        let agentRows = {
+            _ = codex.subagentIdentityVersion
+            return action.agentRows
+        }()
         VStack(alignment: .leading, spacing: 0) {
             headerRow
 
-            if isExpanded, !action.agentRows.isEmpty {
+            if isExpanded, !agentRows.isEmpty {
                 VStack(alignment: .leading, spacing: agentRowSpacing) {
-                    ForEach(action.agentRows) { agent in
+                    ForEach(agentRows) { agent in
                         agentRowView(agent)
                     }
                 }
@@ -34,10 +37,10 @@ struct SubagentActionCard: View {
 
             if isStreaming {
                 TypingIndicator()
-                    .padding(.top, action.agentRows.isEmpty ? 2 : 3)
+                    .padding(.top, agentRows.isEmpty ? 2 : 3)
             }
         }
-        .task(id: action.agentRows.map(\.threadId)) {
+        .task(id: agentRows.map(\.threadId)) {
             await hydrateChildThreadMetadata()
         }
         .sheet(item: $selectedAgentDetails) { agent in

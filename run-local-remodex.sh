@@ -236,6 +236,7 @@ wait_for_ngrok() {
 }
 
 discover_ngrok_relay_url() {
+  # shellcheck disable=SC2016
   node -e '
 const fs = require("fs");
 const logPath = process.argv[1];

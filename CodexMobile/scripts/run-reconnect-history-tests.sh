@@ -26,6 +26,7 @@ DUMP_SIMULATOR_CRASH_LOGS_ON_FAILURE="${DUMP_SIMULATOR_CRASH_LOGS_ON_FAILURE:-1}
 ONLY_TESTING="${ONLY_TESTING:-}"
 HELPERS_PATH="$ROOT_DIR/scripts/xcode-test-helpers.sh"
 
+# shellcheck source=CodexMobile/scripts/xcode-test-helpers.sh
 source "$HELPERS_PATH"
 
 expand_user_path() {
@@ -35,7 +36,7 @@ expand_user_path() {
     printf '%s\n' ""
   elif [[ "$path" == "~" ]]; then
     printf '%s\n' "$HOME"
-  elif [[ "$path" == "~/"* ]]; then
+  elif [[ $path == \~/* ]]; then
     printf '%s\n' "$HOME/${path#~/}"
   else
     printf '%s\n' "$path"

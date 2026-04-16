@@ -1,0 +1,71 @@
+name: Hygiene Check
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".editorconfig"
+      - ".prettierignore"
+      - ".prettierrc.json"
+      - ".github/workflows/**"
+      - "eslint.config.cjs"
+      - "lefthook.yml"
+      - "package.json"
+      - "package-lock.json"
+      - "phodex-bridge/**"
+      - "relay/**"
+      - "run-local-remodex.sh"
+      - "scripts/**"
+      - "CodexMobile/scripts/**"
+  pull_request:
+    paths:
+      - ".editorconfig"
+      - ".prettierignore"
+      - ".prettierrc.json"
+      - ".github/workflows/**"
+      - "eslint.config.cjs"
+      - "lefthook.yml"
+      - "package.json"
+      - "package-lock.json"
+      - "phodex-bridge/**"
+      - "relay/**"
+      - "run-local-remodex.sh"
+      - "scripts/**"
+      - "CodexMobile/scripts/**"
+
+jobs:
+  hygiene-check:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: hygiene-check-${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install repo tooling
+        run: npm ci
+
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Install actionlint
+        run: |
+          ACTIONLINT_VERSION=v1.7.7
+          curl -fsSL "https://github.com/rhysd/actionlint/releases/download/${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION#v}_linux_amd64.tar.gz" \
+            | tar -xz actionlint
+          sudo mv actionlint /usr/local/bin/actionlint
+
+      - name: Run hygiene checks
+        run: npm run lint

@@ -3166,7 +3166,7 @@ extension CodexService {
             uniqueKeysWithValues: threads.map { ($0.id, $0.gitWorkingDirectory) }
         )
         for threadId in threadTimelineStateByThread.keys {
-            let workingDir = workingDirByThread[threadId] ?? nil
+            let workingDir = workingDirByThread[threadId].flatMap { $0 }
             let repoId = canonicalRepoIdentifier(for: workingDir) ?? workingDir
             guard let repoId, changedRoots.contains(repoId) else { continue }
             refreshThreadTimelineState(for: threadId)

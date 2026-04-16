@@ -52,13 +52,8 @@ test("remodex restart reuses the macOS service start flow", async () => {
     },
   });
 
-  assert.deepEqual(calls, [
-    "read-config",
-    ["start-service", { waitForPairing: false }],
-  ]);
-  assert.deepEqual(messages, [
-    "[remodex] macOS bridge service restarted.",
-  ]);
+  assert.deepEqual(calls, ["read-config", ["start-service", { waitForPairing: false }]]);
+  assert.deepEqual(messages, ["[remodex] macOS bridge service restarted."]);
 });
 
 test("remodex status --json exposes daemon metadata for companion apps", async () => {

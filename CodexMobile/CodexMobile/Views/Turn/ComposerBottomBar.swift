@@ -297,7 +297,6 @@ struct ComposerBottomBar: View {
         .foregroundStyle(Color(.plan))
     }
 
-
     private var queueBadge: some View {
         HStack(spacing: 3) {
             if isQueuePaused {

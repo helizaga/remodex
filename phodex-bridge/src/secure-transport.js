@@ -17,10 +17,7 @@ const {
   sign,
   verify,
 } = require("crypto");
-const {
-  getTrustedPhonePublicKey,
-  rememberTrustedPhone,
-} = require("./secure-device-state");
+const { getTrustedPhonePublicKey, rememberTrustedPhone } = require("./secure-device-state");
 
 const PAIRING_QR_VERSION = 2;
 const SECURE_PROTOCOL_VERSION = 1;
@@ -76,29 +73,31 @@ function createBridgeSecureTransport({
     const kind = normalizeNonEmptyString(parsed.kind);
     if (!kind) {
       if (parsed.method || parsed.id != null) {
-        sendControlMessage(createSecureError({
-          code: "update_required",
-          message: "This bridge requires the latest Remodex iPhone app for secure pairing.",
-        }));
+        sendControlMessage(
+          createSecureError({
+            code: "update_required",
+            message: "This bridge requires the latest Remodex iPhone app for secure pairing.",
+          })
+        );
         return true;
       }
       return false;
     }
 
     switch (kind) {
-    case "clientHello":
-      handleClientHello(parsed, sendControlMessage);
-      return true;
-    case "clientAuth":
-      handleClientAuth(parsed, sendControlMessage);
-      return true;
-    case "resumeState":
-      handleResumeState(parsed);
-      return true;
-    case "encryptedEnvelope":
-      return handleEncryptedEnvelope(parsed, sendControlMessage, onApplicationMessage);
-    default:
-      return false;
+      case "clientHello":
+        handleClientHello(parsed, sendControlMessage);
+        return true;
+      case "clientAuth":
+        handleClientAuth(parsed, sendControlMessage);
+        return true;
+      case "resumeState":
+        handleResumeState(parsed);
+        return true;
+      case "encryptedEnvelope":
+        return handleEncryptedEnvelope(parsed, sendControlMessage, onApplicationMessage);
+      default:
+        return false;
     }
   }
 
@@ -119,9 +118,8 @@ function createBridgeSecureTransport({
     trimOutboundBuffer();
 
     const liveSessionSender = activeSession?.sendWireMessage;
-    const effectiveSendWireMessage = typeof liveSessionSender === "function"
-      ? liveSessionSender
-      : sendWireMessage;
+    const effectiveSendWireMessage =
+      typeof liveSessionSender === "function" ? liveSessionSender : sendWireMessage;
     if (activeSession?.isResumed && typeof effectiveSendWireMessage === "function") {
       sendBufferedEntry(bufferEntry, effectiveSendWireMessage);
     }
@@ -141,61 +139,84 @@ function createBridgeSecureTransport({
     const clientNonceBase64 = normalizeNonEmptyString(message.clientNonce);
 
     if (protocolVersion !== SECURE_PROTOCOL_VERSION || incomingSessionId !== sessionId) {
-      sendControlMessage(createSecureError({
-        code: "update_required",
-        message: "The bridge and iPhone are not using the same secure transport version.",
-      }));
+      sendControlMessage(
+        createSecureError({
+          code: "update_required",
+          message: "The bridge and iPhone are not using the same secure transport version.",
+        })
+      );
       return;
     }
 
-    if (!phoneDeviceId || !phoneIdentityPublicKey || !phoneEphemeralPublicKey || !clientNonceBase64) {
-      sendControlMessage(createSecureError({
-        code: "invalid_client_hello",
-        message: "The iPhone handshake is missing required secure fields.",
-      }));
+    if (
+      !phoneDeviceId ||
+      !phoneIdentityPublicKey ||
+      !phoneEphemeralPublicKey ||
+      !clientNonceBase64
+    ) {
+      sendControlMessage(
+        createSecureError({
+          code: "invalid_client_hello",
+          message: "The iPhone handshake is missing required secure fields.",
+        })
+      );
       return;
     }
 
-    if (handshakeMode !== HANDSHAKE_MODE_QR_BOOTSTRAP && handshakeMode !== HANDSHAKE_MODE_TRUSTED_RECONNECT) {
-      sendControlMessage(createSecureError({
-        code: "invalid_handshake_mode",
-        message: "The iPhone requested an unknown secure pairing mode.",
-      }));
+    if (
+      handshakeMode !== HANDSHAKE_MODE_QR_BOOTSTRAP &&
+      handshakeMode !== HANDSHAKE_MODE_TRUSTED_RECONNECT
+    ) {
+      sendControlMessage(
+        createSecureError({
+          code: "invalid_handshake_mode",
+          message: "The iPhone requested an unknown secure pairing mode.",
+        })
+      );
       return;
     }
 
     if (handshakeMode === HANDSHAKE_MODE_QR_BOOTSTRAP && Date.now() > currentPairingExpiresAt) {
-      sendControlMessage(createSecureError({
-        code: "pairing_expired",
-        message: "The pairing QR code has expired. Generate a new QR code from the bridge.",
-      }));
+      sendControlMessage(
+        createSecureError({
+          code: "pairing_expired",
+          message: "The pairing QR code has expired. Generate a new QR code from the bridge.",
+        })
+      );
       return;
     }
 
     const trustedPhonePublicKey = getTrustedPhonePublicKey(currentDeviceState, phoneDeviceId);
     if (handshakeMode === HANDSHAKE_MODE_TRUSTED_RECONNECT) {
       if (!trustedPhonePublicKey) {
-        sendControlMessage(createSecureError({
-          code: "phone_not_trusted",
-          message: "This iPhone is not trusted by the current bridge session. Scan a fresh QR code to pair again.",
-        }));
+        sendControlMessage(
+          createSecureError({
+            code: "phone_not_trusted",
+            message:
+              "This iPhone is not trusted by the current bridge session. Scan a fresh QR code to pair again.",
+          })
+        );
         return;
       }
       if (trustedPhonePublicKey !== phoneIdentityPublicKey) {
-        sendControlMessage(createSecureError({
-          code: "phone_identity_changed",
-          message: "The trusted iPhone identity does not match this reconnect attempt.",
-        }));
+        sendControlMessage(
+          createSecureError({
+            code: "phone_identity_changed",
+            message: "The trusted iPhone identity does not match this reconnect attempt.",
+          })
+        );
         return;
       }
     }
 
     const clientNonce = base64ToBuffer(clientNonceBase64);
     if (!clientNonce || clientNonce.length === 0) {
-      sendControlMessage(createSecureError({
-        code: "invalid_client_nonce",
-        message: "The iPhone secure nonce could not be decoded.",
-      }));
+      sendControlMessage(
+        createSecureError({
+          code: "invalid_client_nonce",
+          message: "The iPhone secure nonce could not be decoded.",
+        })
+      );
       return;
     }
 
@@ -204,9 +225,8 @@ function createBridgeSecureTransport({
     const publicJwk = ephemeral.publicKey.export({ format: "jwk" });
     const serverNonce = randomBytes(32);
     const keyEpoch = nextKeyEpoch;
-    const expiresAtForTranscript = handshakeMode === HANDSHAKE_MODE_QR_BOOTSTRAP
-      ? currentPairingExpiresAt
-      : 0;
+    const expiresAtForTranscript =
+      handshakeMode === HANDSHAKE_MODE_QR_BOOTSTRAP ? currentPairingExpiresAt : 0;
     const transcriptBytes = buildTranscriptBytes({
       sessionId,
       protocolVersion,
@@ -228,11 +248,11 @@ function createBridgeSecureTransport({
       transcriptBytes
     );
     debugSecureLog(
-      `serverHello mode=${handshakeMode} session=${shortId(sessionId)} keyEpoch=${keyEpoch} `
-      + `mac=${shortId(currentDeviceState.macDeviceId)} phone=${shortId(phoneDeviceId)} `
-      + `macKey=${shortFingerprint(currentDeviceState.macIdentityPublicKey)} `
-      + `phoneKey=${shortFingerprint(phoneIdentityPublicKey)} `
-      + `transcript=${transcriptDigest(transcriptBytes)}`
+      `serverHello mode=${handshakeMode} session=${shortId(sessionId)} keyEpoch=${keyEpoch} ` +
+        `mac=${shortId(currentDeviceState.macDeviceId)} phone=${shortId(phoneDeviceId)} ` +
+        `macKey=${shortFingerprint(currentDeviceState.macIdentityPublicKey)} ` +
+        `phoneKey=${shortFingerprint(phoneIdentityPublicKey)} ` +
+        `transcript=${transcriptDigest(transcriptBytes)}`
     );
 
     pendingHandshake = {
@@ -267,10 +287,12 @@ function createBridgeSecureTransport({
 
   function handleClientAuth(message, sendControlMessage) {
     if (!pendingHandshake) {
-      sendControlMessage(createSecureError({
-        code: "unexpected_client_auth",
-        message: "The bridge did not have a pending secure handshake to finalize.",
-      }));
+      sendControlMessage(
+        createSecureError({
+          code: "unexpected_client_auth",
+          message: "The bridge did not have a pending secure handshake to finalize.",
+        })
+      );
       return;
     }
 
@@ -279,16 +301,18 @@ function createBridgeSecureTransport({
     const keyEpoch = Number(message.keyEpoch);
     const phoneSignature = normalizeNonEmptyString(message.phoneSignature);
     if (
-      incomingSessionId !== pendingHandshake.sessionId
-      || phoneDeviceId !== pendingHandshake.phoneDeviceId
-      || keyEpoch !== pendingHandshake.keyEpoch
-      || !phoneSignature
+      incomingSessionId !== pendingHandshake.sessionId ||
+      phoneDeviceId !== pendingHandshake.phoneDeviceId ||
+      keyEpoch !== pendingHandshake.keyEpoch ||
+      !phoneSignature
     ) {
       pendingHandshake = null;
-      sendControlMessage(createSecureError({
-        code: "invalid_client_auth",
-        message: "The secure client authentication payload was invalid.",
-      }));
+      sendControlMessage(
+        createSecureError({
+          code: "invalid_client_auth",
+          message: "The secure client authentication payload was invalid.",
+        })
+      );
       return;
     }
 
@@ -303,10 +327,12 @@ function createBridgeSecureTransport({
     );
     if (!phoneVerified) {
       pendingHandshake = null;
-      sendControlMessage(createSecureError({
-        code: "invalid_phone_signature",
-        message: "The iPhone secure signature could not be verified.",
-      }));
+      sendControlMessage(
+        createSecureError({
+          code: "invalid_phone_signature",
+          message: "The iPhone secure signature could not be verified.",
+        })
+      );
       return;
     }
 
@@ -353,8 +379,8 @@ function createBridgeSecureTransport({
 
     nextKeyEpoch = pendingHandshake.keyEpoch + 1;
     if (
-      pendingHandshake.handshakeMode === HANDSHAKE_MODE_QR_BOOTSTRAP
-      || getTrustedPhonePublicKey(currentDeviceState, pendingHandshake.phoneDeviceId)
+      pendingHandshake.handshakeMode === HANDSHAKE_MODE_QR_BOOTSTRAP ||
+      getTrustedPhonePublicKey(currentDeviceState, pendingHandshake.phoneDeviceId)
     ) {
       // Lock the trusted phone identity so later reconnects can be verified cleanly.
       const previousTrustedPhonePublicKey = getTrustedPhonePublicKey(
@@ -407,10 +433,12 @@ function createBridgeSecureTransport({
 
   function handleEncryptedEnvelope(message, sendControlMessage, onApplicationMessage) {
     if (!activeSession) {
-      sendControlMessage(createSecureError({
-        code: "secure_channel_unavailable",
-        message: "The secure channel is not ready yet on the bridge.",
-      }));
+      sendControlMessage(
+        createSecureError({
+          code: "secure_channel_unavailable",
+          message: "The secure channel is not ready yet on the bridge.",
+        })
+      );
       return true;
     }
 
@@ -419,25 +447,34 @@ function createBridgeSecureTransport({
     const sender = normalizeNonEmptyString(message.sender);
     const counter = Number(message.counter);
     if (
-      incomingSessionId !== sessionId
-      || keyEpoch !== activeSession.keyEpoch
-      || sender !== SECURE_SENDER_IPHONE
-      || !Number.isInteger(counter)
-      || counter <= activeSession.lastInboundCounter
+      incomingSessionId !== sessionId ||
+      keyEpoch !== activeSession.keyEpoch ||
+      sender !== SECURE_SENDER_IPHONE ||
+      !Number.isInteger(counter) ||
+      counter <= activeSession.lastInboundCounter
     ) {
-      sendControlMessage(createSecureError({
-        code: "invalid_envelope",
-        message: "The bridge rejected an invalid or replayed secure envelope.",
-      }));
+      sendControlMessage(
+        createSecureError({
+          code: "invalid_envelope",
+          message: "The bridge rejected an invalid or replayed secure envelope.",
+        })
+      );
       return true;
     }
 
-    const plaintextBuffer = decryptEnvelopeBuffer(message, activeSession.phoneToMacKey, SECURE_SENDER_IPHONE, counter);
+    const plaintextBuffer = decryptEnvelopeBuffer(
+      message,
+      activeSession.phoneToMacKey,
+      SECURE_SENDER_IPHONE,
+      counter
+    );
     if (!plaintextBuffer) {
-      sendControlMessage(createSecureError({
-        code: "decrypt_failed",
-        message: "The bridge could not decrypt the iPhone secure payload.",
-      }));
+      sendControlMessage(
+        createSecureError({
+          code: "decrypt_failed",
+          message: "The bridge could not decrypt the iPhone secure payload.",
+        })
+      );
       return true;
     }
 
@@ -445,10 +482,12 @@ function createBridgeSecureTransport({
     const payloadObject = safeParseJSON(plaintextBuffer.toString("utf8"));
     const payloadText = normalizeNonEmptyString(payloadObject?.payloadText);
     if (!payloadText) {
-      sendControlMessage(createSecureError({
-        code: "invalid_payload",
-        message: "The secure payload did not contain a usable application message.",
-      }));
+      sendControlMessage(
+        createSecureError({
+          code: "invalid_payload",
+          message: "The secure payload did not contain a usable application message.",
+        })
+      );
       return true;
     }
 
@@ -466,8 +505,8 @@ function createBridgeSecureTransport({
 
   function trimOutboundBuffer() {
     while (
-      outboundBuffer.length > MAX_BRIDGE_OUTBOUND_MESSAGES
-      || outboundBufferBytes > MAX_BRIDGE_OUTBOUND_BYTES
+      outboundBuffer.length > MAX_BRIDGE_OUTBOUND_MESSAGES ||
+      outboundBufferBytes > MAX_BRIDGE_OUTBOUND_BYTES
     ) {
       const removed = outboundBuffer.shift();
       if (!removed) {
@@ -506,9 +545,7 @@ function createBridgeSecureTransport({
   }
 
   function replayableOutboundEntries(lastAppliedBridgeOutboundSeq) {
-    return outboundBuffer.filter(
-      (entry) => entry.bridgeOutboundSeq > lastAppliedBridgeOutboundSeq
-    );
+    return outboundBuffer.filter((entry) => entry.bridgeOutboundSeq > lastAppliedBridgeOutboundSeq);
   }
 
   // Replays from the last phone ack instead of local socket writes, so a relay
@@ -590,10 +627,7 @@ function decryptEnvelopeBuffer(envelope, key, sender, counter) {
     const nonce = nonceForDirection(sender, counter);
     const decipher = createDecipheriv("aes-256-gcm", key, nonce);
     decipher.setAuthTag(base64ToBuffer(envelope.tag));
-    return Buffer.concat([
-      decipher.update(base64ToBuffer(envelope.ciphertext)),
-      decipher.final(),
-    ]);
+    return Buffer.concat([decipher.update(base64ToBuffer(envelope.ciphertext)), decipher.final()]);
   } catch {
     return null;
   }

@@ -134,15 +134,15 @@ struct CodexRateLimitBucket: Identifiable, Equatable, Sendable {
         let weekMinutes = 7 * 24 * 60
         let dayMinutes = 24 * 60
 
-        if minutes % weekMinutes == 0 {
+        if minutes.isMultiple(of: weekMinutes) {
             return minutes == weekMinutes ? "Weekly" : "\(minutes / weekMinutes)w"
         }
 
-        if minutes % dayMinutes == 0 {
+        if minutes.isMultiple(of: dayMinutes) {
             return "\(minutes / dayMinutes)d"
         }
 
-        if minutes % 60 == 0 {
+        if minutes.isMultiple(of: 60) {
             return "\(minutes / 60)h"
         }
 

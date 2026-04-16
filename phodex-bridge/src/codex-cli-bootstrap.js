@@ -123,17 +123,13 @@ function ensureCodexCLI({
 }
 
 function shouldSkipCodexBootstrap(env = process.env) {
-  const raw = String(env[SKIP_BOOTSTRAP_ENV_NAME] || "").trim().toLowerCase();
+  const raw = String(env[SKIP_BOOTSTRAP_ENV_NAME] || "")
+    .trim()
+    .toLowerCase();
   return raw === "1" || raw === "true" || raw === "yes";
 }
 
-function readExecutableVersion({
-  executable,
-  args,
-  env,
-  platform,
-  execFileSyncImpl,
-}) {
+function readExecutableVersion({ executable, args, env, platform, execFileSyncImpl }) {
   try {
     const output = execFileSyncImpl(resolveExecutableName(executable, platform), args, {
       encoding: "utf8",

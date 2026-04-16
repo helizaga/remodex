@@ -251,10 +251,12 @@ private struct SidebarSubagentNameLabel: View {
     @Environment(CodexService.self) private var codex
 
     var body: some View {
-        let _ = codex.subagentIdentityVersion
-        let source = thread.preferredSubagentLabel
-            ?? codex.resolvedSubagentDisplayLabel(threadId: thread.id, agentId: thread.agentId)
-            ?? "Subagent"
+        let source = {
+            _ = codex.subagentIdentityVersion
+            return thread.preferredSubagentLabel
+                ?? codex.resolvedSubagentDisplayLabel(threadId: thread.id, agentId: thread.agentId)
+                ?? "Subagent"
+        }()
         let parsed = SubagentLabelParser.parse(source)
         let nickname = parsed.nickname.isEmpty || CodexThread.isGenericPlaceholderTitle(parsed.nickname) ? "Subagent" : parsed.nickname
         SubagentLabelParser.styledText(nickname: nickname, roleSuffix: parsed.roleSuffix)

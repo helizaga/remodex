@@ -8,9 +8,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { version: packageVersion } = require("../package.json");
 
-const {
-  createBridgePackageVersionStatusReader,
-} = require("../src/package-version-status");
+const { createBridgePackageVersionStatusReader } = require("../src/package-version-status");
 
 function createDeferred() {
   let resolve;

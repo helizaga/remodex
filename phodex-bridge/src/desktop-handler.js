@@ -44,14 +44,16 @@ function handleDesktopRequest(rawMessage, sendResponse, options = {}) {
     .catch((err) => {
       const errorCode = err.errorCode || "desktop_error";
       const message = err.userMessage || err.message || "Unknown desktop handoff error";
-      sendResponse(JSON.stringify({
-        id,
-        error: {
-          code: -32000,
-          message,
-          data: { errorCode },
-        },
-      }));
+      sendResponse(
+        JSON.stringify({
+          id,
+          error: {
+            code: -32000,
+            message,
+            data: { errorCode },
+          },
+        })
+      );
     });
 
   return true;
@@ -69,8 +71,10 @@ async function handleDesktopMethod(method, params, options = {}) {
   const sleepFn = options.sleepFn || sleep;
   const appBootWaitMs = options.appBootWaitMs ?? DEFAULT_APP_BOOT_WAIT_MS;
   const relaunchWaitMs = options.relaunchWaitMs ?? DEFAULT_RELAUNCH_WAIT_MS;
-  const threadMaterializeWaitMs = options.threadMaterializeWaitMs ?? DEFAULT_THREAD_MATERIALIZE_WAIT_MS;
-  const threadMaterializePollMs = options.threadMaterializePollMs ?? DEFAULT_THREAD_MATERIALIZE_POLL_MS;
+  const threadMaterializeWaitMs =
+    options.threadMaterializeWaitMs ?? DEFAULT_THREAD_MATERIALIZE_WAIT_MS;
+  const threadMaterializePollMs =
+    options.threadMaterializePollMs ?? DEFAULT_THREAD_MATERIALIZE_POLL_MS;
 
   if (platform !== "darwin") {
     throw desktopError(
@@ -131,9 +135,10 @@ async function continueOnMac(
 
   const targetUrl = `codex://threads/${threadId}`;
   const desktopKnown = isThreadLikelyKnownOnDesktop(threadId, { env, fsModule });
-  const appRunning = typeof isAppRunning === "function"
-    ? await isAppRunning(appPath)
-    : await detectRunningCodexApp(appPath, executor);
+  const appRunning =
+    typeof isAppRunning === "function"
+      ? await isAppRunning(appPath)
+      : await detectRunningCodexApp(appPath, executor);
 
   // If Codex.app is already open, explicit handoff should still feel like a
   // real device switch: close, reopen, then focus the requested thread.
@@ -155,11 +160,7 @@ async function continueOnMac(
         pollMs: threadMaterializePollMs,
       });
     } catch (error) {
-      throw desktopError(
-        "handoff_failed",
-        "Could not open Codex.app on this Mac.",
-        error
-      );
+      throw desktopError("handoff_failed", "Could not open Codex.app on this Mac.", error);
     }
 
     return {
@@ -188,11 +189,7 @@ async function continueOnMac(
         pollMs: threadMaterializePollMs,
       });
     } catch (error) {
-      throw desktopError(
-        "handoff_failed",
-        "Could not open Codex.app on this Mac.",
-        error
-      );
+      throw desktopError("handoff_failed", "Could not open Codex.app on this Mac.", error);
     }
 
     return {
@@ -247,15 +244,17 @@ async function wakeDisplay({ spawnImpl }) {
   return new Promise((resolve, reject) => {
     let child;
     try {
-      child = spawnImpl("/usr/bin/caffeinate", ["-d", "-u", "-t", String(DEFAULT_WAKE_DISPLAY_DURATION_SECONDS)], {
-        stdio: "ignore",
-      });
+      child = spawnImpl(
+        "/usr/bin/caffeinate",
+        ["-d", "-u", "-t", String(DEFAULT_WAKE_DISPLAY_DURATION_SECONDS)],
+        {
+          stdio: "ignore",
+        }
+      );
     } catch (error) {
-      reject(desktopError(
-        "wake_display_failed",
-        "Could not wake your Mac display right now.",
-        error
-      ));
+      reject(
+        desktopError("wake_display_failed", "Could not wake your Mac display right now.", error)
+      );
       return;
     }
 
@@ -265,11 +264,9 @@ async function wakeDisplay({ spawnImpl }) {
         return;
       }
       settled = true;
-      reject(desktopError(
-        "wake_display_failed",
-        "Could not wake your Mac display right now.",
-        error
-      ));
+      reject(
+        desktopError("wake_display_failed", "Could not wake your Mac display right now.", error)
+      );
     };
     const succeed = () => {
       if (settled) {
@@ -313,10 +310,7 @@ async function updateBridgePreferences(params, options = {}) {
   }
 
   if (!params || typeof params !== "object" || typeof params.keepMacAwake !== "boolean") {
-    throw desktopError(
-      "invalid_bridge_preferences",
-      "The bridge preference payload is invalid."
-    );
+    throw desktopError("invalid_bridge_preferences", "The bridge preference payload is invalid.");
   }
 
   return options.updateBridgePreferences({
@@ -329,10 +323,7 @@ function resolveThreadId(params) {
     return "";
   }
 
-  const candidates = [
-    params.threadId,
-    params.thread_id,
-  ];
+  const candidates = [params.threadId, params.thread_id];
 
   for (const candidate of candidates) {
     if (typeof candidate === "string" && candidate.trim()) {
@@ -451,9 +442,10 @@ async function waitForAppExit(appPath, executor, isAppRunning) {
   const deadline = Date.now() + HANDOFF_TIMEOUT_MS;
 
   while (Date.now() < deadline) {
-    const isRunning = typeof isAppRunning === "function"
-      ? await isAppRunning(appPath)
-      : await detectRunningCodexApp(appPath, executor);
+    const isRunning =
+      typeof isAppRunning === "function"
+        ? await isAppRunning(appPath)
+        : await detectRunningCodexApp(appPath, executor);
     if (!isRunning) {
       return;
     }

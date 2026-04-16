@@ -39,7 +39,10 @@ test("buildLaunchAgentPlist points launchd at run-service with remodex state pat
 
   assert.match(plist, /<string>com\.remodex\.bridge<\/string>/);
   assert.match(plist, /<string>run-service<\/string>/);
-  assert.match(plist, /<key>KeepAlive<\/key>\s*<dict>\s*<key>SuccessfulExit<\/key>\s*<false\/>\s*<\/dict>/);
+  assert.match(
+    plist,
+    /<key>KeepAlive<\/key>\s*<dict>\s*<key>SuccessfulExit<\/key>\s*<false\/>\s*<\/dict>/
+  );
   assert.match(plist, /<key>REMODEX_DEVICE_STATE_DIR<\/key>/);
 });
 
@@ -64,7 +67,9 @@ test("stopMacOSBridgeService clears stale pairing and status files", () => {
       execFileSyncImpl() {
         callCount += 1;
         const error = new Error(callCount === 1 ? "Input/output error" : "Could not find service");
-        error.stderr = Buffer.from(callCount === 1 ? "Boot-out failed: 5: Input/output error" : "Could not find service");
+        error.stderr = Buffer.from(
+          callCount === 1 ? "Boot-out failed: 5: Input/output error" : "Could not find service"
+        );
         throw error;
       },
     });
@@ -89,7 +94,11 @@ test("stopMacOSBridgeService tries plist-path bootout before falling back to the
     });
 
     assert.deepEqual(calls, [
-      ["bootout", `gui/${process.getuid()}`, path.join(rootDir, "Library", "LaunchAgents", "com.remodex.bridge.plist")],
+      [
+        "bootout",
+        `gui/${process.getuid()}`,
+        path.join(rootDir, "Library", "LaunchAgents", "com.remodex.bridge.plist"),
+      ],
       ["bootout", `gui/${process.getuid()}/com.remodex.bridge`],
     ]);
   });
@@ -118,7 +127,11 @@ test("resetMacOSBridgePairing stops the daemon before revoking persisted trust",
     });
 
     assert.deepEqual(stopCalls, [
-      ["bootout", `gui/${process.getuid()}`, path.join(rootDir, "Library", "LaunchAgents", "com.remodex.bridge.plist")],
+      [
+        "bootout",
+        `gui/${process.getuid()}`,
+        path.join(rootDir, "Library", "LaunchAgents", "com.remodex.bridge.plist"),
+      ],
       ["bootout", `gui/${process.getuid()}/com.remodex.bridge`],
     ]);
     assert.equal(resetCalls, 1);

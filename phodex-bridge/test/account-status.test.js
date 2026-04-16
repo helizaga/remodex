@@ -122,20 +122,23 @@ test("composeAccountStatus reports reauth when auth status explicitly requires C
 });
 
 test("redactAuthStatus strips token-bearing fields from the status snapshot", () => {
-  const status = redactAuthStatus({
-    authMethod: "chatgpt",
-    authToken: null,
-  }, {
-    accountRead: {
-      account: null,
-      requiresOpenaiAuth: true,
+  const status = redactAuthStatus(
+    {
+      authMethod: "chatgpt",
+      authToken: null,
     },
-    loginInFlight: true,
-    bridgeVersionInfo: {
-      bridgeVersion: bridgePackageVersion,
-      bridgeLatestVersion: "9.9.9",
-    },
-  });
+    {
+      accountRead: {
+        account: null,
+        requiresOpenaiAuth: true,
+      },
+      loginInFlight: true,
+      bridgeVersionInfo: {
+        bridgeVersion: bridgePackageVersion,
+        bridgeLatestVersion: "9.9.9",
+      },
+    }
+  );
 
   assert.deepEqual(status, {
     authMethod: "chatgpt",
@@ -305,14 +308,18 @@ test("composeSanitizedAuthStatusFromSettledResults propagates transportMode into
 });
 
 test("composeSanitizedAuthStatusFromSettledResults fails when both auth reads fail", () => {
-  assert.throws(() => composeSanitizedAuthStatusFromSettledResults({
-    accountReadResult: {
-      status: "rejected",
-      reason: new Error("account/read failed"),
-    },
-    authStatusResult: {
-      status: "rejected",
-      reason: new Error("getAuthStatus failed"),
-    },
-  }), (error) => error?.errorCode === "auth_status_unavailable");
+  assert.throws(
+    () =>
+      composeSanitizedAuthStatusFromSettledResults({
+        accountReadResult: {
+          status: "rejected",
+          reason: new Error("account/read failed"),
+        },
+        authStatusResult: {
+          status: "rejected",
+          reason: new Error("getAuthStatus failed"),
+        },
+      }),
+    (error) => error?.errorCode === "auth_status_unavailable"
+  );
 });

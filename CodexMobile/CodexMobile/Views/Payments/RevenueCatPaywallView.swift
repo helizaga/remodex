@@ -81,18 +81,18 @@ struct RevenueCatPaywallView: View {
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(spacing: 16) {
                         header
-                        
+
                         featureCard
                     }
                     .padding(.horizontal, 20)
-             
+
                     .padding(.bottom, 16)
                 }
 
                 Spacer(minLength: 0)
 
                 bottomSection
-                    
+
             }
             .opacity(appeared ? 1 : 0)
             .background(Color(.systemBackground))
@@ -151,7 +151,6 @@ struct RevenueCatPaywallView: View {
                 .scaledToFit()
                 .frame(width: 80, height: 80)
                 .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                
 
             Text("Unlock Remodex Pro")
                 .font(AppFont.system(size: 24, weight: .bold))
@@ -165,8 +164,6 @@ struct RevenueCatPaywallView: View {
     }
 
     // MARK: - Promo banner
-
-   
 
     // MARK: - Feature card
 
@@ -182,12 +179,12 @@ struct RevenueCatPaywallView: View {
                         .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(accent)
                         .frame(width: 28, height: 28)
-                    
+
                     Text(feature.title)
                         .font(AppFont.subheadline())
-                    
+
                     Spacer(minLength: 0)
-                    
+
                 }
             }
         }
@@ -226,7 +223,7 @@ struct RevenueCatPaywallView: View {
                     .background(colorScheme == .dark ? Color.white : Color.black)
                     .foregroundStyle(colorScheme == .dark ? Color.black : Color.white)
                     .clipShape(Capsule())
-                   
+
                 }
                 .disabled(subscriptions.isPurchasing || subscriptions.isRestoring)
             }
@@ -382,7 +379,7 @@ struct RevenueCatPaywallView: View {
                 }
             }
             .foregroundStyle(isSelected ? accentForeground : .primary)
-            
+
         }
         .buttonStyle(.plain)
     }

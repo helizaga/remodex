@@ -10,10 +10,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const {
-  createCodexLaunchPlans,
-  createCodexTransport,
-} = require("../src/codex-transport");
+const { createCodexLaunchPlans, createCodexTransport } = require("../src/codex-transport");
 
 class FakeWebSocket {
   static CONNECTING = 0;

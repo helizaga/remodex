@@ -6,16 +6,17 @@ const path = require("node:path");
 const launcherPath = path.resolve(__dirname, "..", "..", "run-local-remodex.sh");
 
 function runLauncherFunction(command) {
-  return execFileSync("bash", [
-    "-lc",
-    `source "${launcherPath}" >/dev/null 2>&1; set +e; ${command}`,
-  ], {
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      REMODEX_TUNNEL_MODE: "",
-    },
-  }).trim();
+  return execFileSync(
+    "bash",
+    ["-lc", `source "${launcherPath}" >/dev/null 2>&1; set +e; ${command}`],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        REMODEX_TUNNEL_MODE: "",
+      },
+    }
+  ).trim();
 }
 
 test("launcher defaults tunnel mode to ngrok", () => {
@@ -46,9 +47,7 @@ test("launcher parses ngrok tunnel session ids for the requested endpoint", () =
   assert.equal(
     runLauncherFunction(
       `extract_ngrok_tunnel_session_ids_for_endpoint '${JSON.stringify({
-        endpoints: [
-          { url: "https://foo.ngrok.app", tunnel_session: { id: "session-123" } },
-        ],
+        endpoints: [{ url: "https://foo.ngrok.app", tunnel_session: { id: "session-123" } }],
       })}' 'https://foo.ngrok.app'`
     ),
     "session-123"
@@ -59,9 +58,7 @@ test("launcher returns exit code 2 when no ngrok tunnel session matches the endp
   assert.equal(
     runLauncherFunction(
       `extract_ngrok_tunnel_session_ids_for_endpoint '${JSON.stringify({
-        endpoints: [
-          { url: "https://foo.ngrok.app", tunnel_session: { id: "session-123" } },
-        ],
+        endpoints: [{ url: "https://foo.ngrok.app", tunnel_session: { id: "session-123" } }],
       })}' 'https://bar.ngrok.app'; echo $?`
     ),
     "2"

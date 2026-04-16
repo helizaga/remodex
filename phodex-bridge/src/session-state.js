@@ -47,9 +47,7 @@ function readLastActiveThread({ stateDir = STATE_DIR } = {}) {
 
 function readPersistedRelaySessionId({ stateDir = STATE_DIR } = {}) {
   const state = readStateFile(relaySessionStateFilePath(stateDir));
-  const sessionId = typeof state?.sessionId === "string"
-    ? state.sessionId.trim()
-    : "";
+  const sessionId = typeof state?.sessionId === "string" ? state.sessionId.trim() : "";
   return sessionId || null;
 }
 
@@ -58,10 +56,14 @@ function rememberRelaySessionId(sessionId, { stateDir = STATE_DIR } = {}) {
     return false;
   }
 
-  writeStateFile(relaySessionStateFilePath(stateDir), {
-    sessionId,
-    updatedAt: new Date().toISOString(),
-  }, stateDir);
+  writeStateFile(
+    relaySessionStateFilePath(stateDir),
+    {
+      sessionId,
+      updatedAt: new Date().toISOString(),
+    },
+    stateDir
+  );
   return true;
 }
 

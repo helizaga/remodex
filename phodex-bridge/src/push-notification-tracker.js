@@ -4,9 +4,7 @@
 // Exports: createPushNotificationTracker
 // Depends on: ./push-notification-completion-dedupe
 
-const {
-  createPushNotificationCompletionDedupe,
-} = require("./push-notification-completion-dedupe");
+const { createPushNotificationCompletionDedupe } = require("./push-notification-completion-dedupe");
 
 const DEFAULT_PREVIEW_MAX_CHARS = 160;
 
@@ -39,7 +37,12 @@ function createPushNotificationTracker({
     }
 
     if (isAssistantCompletedMethod(message.method, message.params, message.eventObject)) {
-      recordAssistantCompletion(message.threadId, message.turnId, message.params, message.eventObject);
+      recordAssistantCompletion(
+        message.threadId,
+        message.turnId,
+        message.params,
+        message.eventObject
+      );
       return;
     }
 
@@ -99,7 +102,13 @@ function createPushNotificationTracker({
   }
 
   // Buckets turnless completions so repeated terminal events dedupe briefly instead of forever.
-  async function notifyCompletion(threadId, turnId, params, eventObject, { forcedResult = null } = {}) {
+  async function notifyCompletion(
+    threadId,
+    turnId,
+    params,
+    eventObject,
+    { forcedResult = null } = {}
+  ) {
     const resolvedThreadId = threadId || (turnId ? threadIdByTurnId.get(turnId) : null);
     if (!pushServiceClient?.hasConfiguredBaseUrl || !resolvedThreadId) {
       return;
@@ -111,11 +120,13 @@ function createPushNotificationTracker({
       return;
     }
 
-    if (completionDedupe.shouldSuppressThreadStatusFallback({
-      threadId: resolvedThreadId,
-      turnId,
-      result,
-    })) {
+    if (
+      completionDedupe.shouldSuppressThreadStatusFallback({
+        threadId: resolvedThreadId,
+        turnId,
+        result,
+      })
+    ) {
       cleanupTurnState(resolvedThreadId, turnId);
       return;
     }
@@ -178,7 +189,8 @@ function createPushNotificationTracker({
 
   function recordAssistantDelta(threadId, turnId, params, eventObject) {
     const resolvedTurnId = turnId || resolveTurnId("assistant", params, eventObject);
-    const resolvedThreadId = threadId || (resolvedTurnId ? threadIdByTurnId.get(resolvedTurnId) : null);
+    const resolvedThreadId =
+      threadId || (resolvedTurnId ? threadIdByTurnId.get(resolvedTurnId) : null);
     if (!resolvedThreadId || !resolvedTurnId) {
       return;
     }
@@ -189,12 +201,16 @@ function createPushNotificationTracker({
     }
 
     const state = ensureTurnState(resolvedThreadId, resolvedTurnId);
-    state.latestAssistantPreview = truncatePreview(`${state.latestAssistantPreview || ""}${delta}`, previewMaxChars);
+    state.latestAssistantPreview = truncatePreview(
+      `${state.latestAssistantPreview || ""}${delta}`,
+      previewMaxChars
+    );
   }
 
   function recordAssistantCompletion(threadId, turnId, params, eventObject) {
     const resolvedTurnId = turnId || resolveTurnId("assistant", params, eventObject);
-    const resolvedThreadId = threadId || (resolvedTurnId ? threadIdByTurnId.get(resolvedTurnId) : null);
+    const resolvedThreadId =
+      threadId || (resolvedTurnId ? threadIdByTurnId.get(resolvedTurnId) : null);
     if (!resolvedThreadId || !resolvedTurnId) {
       return;
     }
@@ -210,7 +226,8 @@ function createPushNotificationTracker({
 
   function recordFailure(threadId, turnId, params, eventObject) {
     const resolvedTurnId = turnId || resolveTurnId("failure", params, eventObject);
-    const resolvedThreadId = threadId || (resolvedTurnId ? threadIdByTurnId.get(resolvedTurnId) : null);
+    const resolvedThreadId =
+      threadId || (resolvedTurnId ? threadIdByTurnId.get(resolvedTurnId) : null);
     if (!resolvedThreadId || !resolvedTurnId) {
       return;
     }
@@ -360,7 +377,7 @@ function incomingItemObject(params, eventObject) {
 }
 
 function extractThreadTitle(params, eventObject) {
-  const threadObject = (params?.thread && typeof params.thread === "object") ? params.thread : null;
+  const threadObject = params?.thread && typeof params.thread === "object" ? params.thread : null;
   const candidates = [
     params?.threadName,
     params?.thread_name,
@@ -385,9 +402,11 @@ function extractThreadTitle(params, eventObject) {
 }
 
 function isAssistantDeltaMethod(method) {
-  return method === "item/agentMessage/delta"
-    || method === "codex/event/agent_message_content_delta"
-    || method === "codex/event/agent_message_delta";
+  return (
+    method === "item/agentMessage/delta" ||
+    method === "codex/event/agent_message_content_delta" ||
+    method === "codex/event/agent_message_delta"
+  );
 }
 
 function isAssistantCompletedMethod(method, params, eventObject) {
@@ -473,12 +492,10 @@ function extractFailureMessage(params, eventObject) {
 }
 
 function resolveCompletionResult(params, eventObject) {
-  const rawStatus = readString(
-    params?.turn?.status
-      || params?.status
-      || eventObject?.turn?.status
-      || eventObject?.status
-  ) || "completed";
+  const rawStatus =
+    readString(
+      params?.turn?.status || params?.status || eventObject?.turn?.status || eventObject?.status
+    ) || "completed";
 
   const normalizedStatus = rawStatus.toLowerCase();
   if (normalizedStatus.includes("fail") || normalizedStatus.includes("error")) {
@@ -502,16 +519,17 @@ function completionDedupeKey({ sessionId, threadId, turnId, result, now }) {
 
 // Mirrors the iOS terminal-state mapping so managed pushes fire on the same end states.
 function resolveThreadStatusResult(params, eventObject) {
-  const statusObject = objectValue(params?.status)
-    || objectValue(eventObject?.status)
-    || objectValue(params?.event?.status);
+  const statusObject =
+    objectValue(params?.status) ||
+    objectValue(eventObject?.status) ||
+    objectValue(params?.event?.status);
   const rawStatus = readString(
-    statusObject?.type
-      || statusObject?.statusType
-      || statusObject?.status_type
-      || params?.status
-      || eventObject?.status
-      || params?.event?.status
+    statusObject?.type ||
+      statusObject?.statusType ||
+      statusObject?.status_type ||
+      params?.status ||
+      eventObject?.status ||
+      params?.event?.status
   );
   const normalizedStatus = normalizeStatusToken(rawStatus);
   if (!normalizedStatus) {
@@ -519,10 +537,10 @@ function resolveThreadStatusResult(params, eventObject) {
   }
 
   if (
-    normalizedStatus.includes("cancel")
-    || normalizedStatus.includes("abort")
-    || normalizedStatus.includes("interrupt")
-    || normalizedStatus.includes("stopped")
+    normalizedStatus.includes("cancel") ||
+    normalizedStatus.includes("abort") ||
+    normalizedStatus.includes("interrupt") ||
+    normalizedStatus.includes("stopped")
   ) {
     return null;
   }
@@ -532,11 +550,11 @@ function resolveThreadStatusResult(params, eventObject) {
   }
 
   if (
-    normalizedStatus === "idle"
-    || normalizedStatus === "notloaded"
-    || normalizedStatus === "completed"
-    || normalizedStatus === "done"
-    || normalizedStatus === "finished"
+    normalizedStatus === "idle" ||
+    normalizedStatus === "notloaded" ||
+    normalizedStatus === "completed" ||
+    normalizedStatus === "done" ||
+    normalizedStatus === "finished"
   ) {
     return "completed";
   }
@@ -545,9 +563,11 @@ function resolveThreadStatusResult(params, eventObject) {
 }
 
 function isTerminalThreadStatusMethod(method) {
-  return method === "thread/status/changed"
-    || method === "thread/status"
-    || method === "codex/event/thread_status_changed";
+  return (
+    method === "thread/status/changed" ||
+    method === "thread/status" ||
+    method === "codex/event/thread_status_changed"
+  );
 }
 
 function isActiveThreadStatus(method, params, eventObject) {
@@ -555,25 +575,28 @@ function isActiveThreadStatus(method, params, eventObject) {
     return false;
   }
 
-  const statusObject = objectValue(params?.status)
-    || objectValue(eventObject?.status)
-    || objectValue(params?.event?.status);
+  const statusObject =
+    objectValue(params?.status) ||
+    objectValue(eventObject?.status) ||
+    objectValue(params?.event?.status);
   const rawStatus = readString(
-    statusObject?.type
-      || statusObject?.statusType
-      || statusObject?.status_type
-      || params?.status
-      || eventObject?.status
-      || params?.event?.status
+    statusObject?.type ||
+      statusObject?.statusType ||
+      statusObject?.status_type ||
+      params?.status ||
+      eventObject?.status ||
+      params?.event?.status
   );
   const normalizedStatus = normalizeStatusToken(rawStatus);
 
-  return normalizedStatus === "active"
-    || normalizedStatus === "running"
-    || normalizedStatus === "processing"
-    || normalizedStatus === "inprogress"
-    || normalizedStatus === "started"
-    || normalizedStatus === "pending";
+  return (
+    normalizedStatus === "active" ||
+    normalizedStatus === "running" ||
+    normalizedStatus === "processing" ||
+    normalizedStatus === "inprogress" ||
+    normalizedStatus === "started" ||
+    normalizedStatus === "pending"
+  );
 }
 
 function shouldIgnoreRetriableFailure(params, eventObject) {
@@ -591,12 +614,12 @@ function shouldIgnoreRetriableFailure(params, eventObject) {
 
 function buildNotificationBody({ result, state, params, eventObject, previewMaxChars }) {
   if (result === "failed") {
-    return truncatePreview(
-      state?.latestFailurePreview
-        || extractFailureMessage(params, eventObject)
-        || "Run failed",
-      previewMaxChars
-    ) || "Run failed";
+    return (
+      truncatePreview(
+        state?.latestFailurePreview || extractFailureMessage(params, eventObject) || "Run failed",
+        previewMaxChars
+      ) || "Run failed"
+    );
   }
 
   return "Response ready";
@@ -624,9 +647,7 @@ function normalizePreviewText(value) {
 }
 
 function normalizeStatusToken(value) {
-  return typeof value === "string"
-    ? value.toLowerCase().replace(/[_-\s]+/g, "")
-    : "";
+  return typeof value === "string" ? value.toLowerCase().replace(/[_-\s]+/g, "") : "";
 }
 
 function objectValue(value) {
@@ -660,15 +681,15 @@ function isAssistantMessageItem(itemObject) {
 
   const normalizedType = normalizeToken(itemObject.type);
   const normalizedRole = normalizeToken(itemObject.role);
-  return normalizedType === "agentmessage"
-    || normalizedType === "assistantmessage"
-    || normalizedRole === "assistant";
+  return (
+    normalizedType === "agentmessage" ||
+    normalizedType === "assistantmessage" ||
+    normalizedRole === "assistant"
+  );
 }
 
 function normalizeToken(value) {
-  return typeof value === "string"
-    ? value.toLowerCase().replace(/[_-\s]+/g, "")
-    : "";
+  return typeof value === "string" ? value.toLowerCase().replace(/[_-\s]+/g, "") : "";
 }
 
 function safeParseJSON(value) {

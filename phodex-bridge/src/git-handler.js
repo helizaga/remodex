@@ -128,7 +128,8 @@ async function gitStatus(cwd) {
   const { ahead, behind } = branchInfo;
   const detached = branchLine.includes("HEAD detached") || branchLine.includes("no branch");
   const noUpstream = tracking === null && !detached;
-  const publishedToRemote = !detached && !!branch && await remoteBranchExists(cwd, branch).catch(() => false);
+  const publishedToRemote =
+    !detached && !!branch && (await remoteBranchExists(cwd, branch).catch(() => false));
   const localOnlyCommitCount = await countLocalOnlyCommits(cwd, { detached }).catch(() => 0);
   const state = computeState(dirty, ahead, behind, detached, noUpstream);
   const canPush = (ahead > 0 || noUpstream) && !detached;
@@ -207,7 +208,7 @@ async function gitPush(cwd) {
 
     // Try normal push first; if no upstream, set it
     try {
-        await git(cwd, "push");
+      await git(cwd, "push");
     } catch (pushErr) {
       if (
         pushErr.message?.includes("no upstream") ||
@@ -259,12 +260,14 @@ async function gitBranches(cwd) {
     resolveLocalCheckoutRoot(cwd).catch(() => null),
   ]);
   const projectRelativePath = resolveProjectRelativePath(cwd, repoRoot);
-  const worktreePathByBranch = await gitWorktreePathByBranch(cwd, { projectRelativePath }).catch(() => ({}));
-  const localCheckoutPath = scopedLocalCheckoutPath(localCheckoutRoot || repoRoot, projectRelativePath);
-  const lines = output
-    .trim()
-    .split("\n")
-    .filter(Boolean);
+  const worktreePathByBranch = await gitWorktreePathByBranch(cwd, { projectRelativePath }).catch(
+    () => ({})
+  );
+  const localCheckoutPath = scopedLocalCheckoutPath(
+    localCheckoutRoot || repoRoot,
+    projectRelativePath
+  );
+  const lines = output.trim().split("\n").filter(Boolean);
 
   let current = "";
   const branchSet = new Set();
@@ -327,7 +330,10 @@ async function gitCheckout(cwd, params) {
         "Cannot switch branches: tracked local changes would be overwritten."
       );
     }
-    if (err.message?.includes("already used by worktree") || err.message?.includes("already checked out at")) {
+    if (
+      err.message?.includes("already used by worktree") ||
+      err.message?.includes("already checked out at")
+    ) {
       throw gitError(
         "checkout_branch_in_other_worktree",
         "Cannot switch branches: this branch is already open in another worktree."
@@ -346,12 +352,7 @@ async function gitCheckout(cwd, params) {
 // ─── Git Log ──────────────────────────────────────────────────
 
 async function gitLog(cwd) {
-  const output = await git(
-    cwd,
-    "log",
-    "-20",
-    "--format=%H%x00%s%x00%an%x00%aI"
-  );
+  const output = await git(cwd, "log", "-20", "--format=%H%x00%s%x00%an%x00%aI");
 
   const commits = output
     .trim()
@@ -380,7 +381,7 @@ async function gitCreateBranch(cwd, params) {
   await assertValidCreatedBranchName(cwd, name);
 
   // Keep create-branch local-first so we never fork history under a remote-only name.
-  if (!(await localBranchExists(cwd, name)) && await remoteBranchExists(cwd, name)) {
+  if (!(await localBranchExists(cwd, name)) && (await remoteBranchExists(cwd, name))) {
     throw gitError(
       "branch_exists",
       `Branch '${name}' already exists on origin. Check it out locally instead of creating a new branch.`
@@ -467,7 +468,10 @@ async function gitCreateWorktree(cwd, params) {
   try {
     if (canCarryLocalChanges) {
       if (changeTransfer === "copy") {
-        copiedLocalChangesPatch = await captureLocalChangesPatch(repoRoot, changeScope.pathspecArgs);
+        copiedLocalChangesPatch = await captureLocalChangesPatch(
+          repoRoot,
+          changeScope.pathspecArgs
+        );
       } else if (changeTransfer === "move") {
         handoffStashRef = await stashChangesForWorktreeHandoff(repoRoot, changeScope.pathspecArgs);
       }
@@ -499,7 +503,10 @@ async function gitCreateWorktree(cwd, params) {
     if (err.message?.includes("already exists")) {
       throw gitError("branch_exists", `Branch '${branch}' already exists.`);
     }
-    if (err.message?.includes("already used by worktree") || err.message?.includes("already checked out at")) {
+    if (
+      err.message?.includes("already used by worktree") ||
+      err.message?.includes("already checked out at")
+    ) {
       throw gitError(
         "branch_in_other_worktree",
         `Branch '${branch}' is already open in another worktree.`
@@ -553,7 +560,10 @@ async function gitCreateManagedWorktree(cwd, params) {
   try {
     if (canCarryLocalChanges) {
       if (changeTransfer === "copy") {
-        copiedLocalChangesPatch = await captureLocalChangesPatch(repoRoot, changeScope.pathspecArgs);
+        copiedLocalChangesPatch = await captureLocalChangesPatch(
+          repoRoot,
+          changeScope.pathspecArgs
+        );
       } else if (changeTransfer === "move") {
         handoffStashRef = await stashChangesForWorktreeHandoff(repoRoot, changeScope.pathspecArgs);
       }
@@ -613,12 +623,13 @@ async function gitTransferManagedHandoff(cwd, params) {
     );
   }
 
-  const [sourceRepoRoot, sourceLocalCheckoutRoot, targetRepoRoot, targetLocalCheckoutRoot] = await Promise.all([
-    resolveRepoRoot(cwd),
-    resolveLocalCheckoutRoot(cwd),
-    resolveRepoRoot(targetPath),
-    resolveLocalCheckoutRoot(targetPath),
-  ]);
+  const [sourceRepoRoot, sourceLocalCheckoutRoot, targetRepoRoot, targetLocalCheckoutRoot] =
+    await Promise.all([
+      resolveRepoRoot(cwd),
+      resolveLocalCheckoutRoot(cwd),
+      resolveRepoRoot(targetPath),
+      resolveLocalCheckoutRoot(targetPath),
+    ]);
 
   const sourceCheckoutRoot = sourceLocalCheckoutRoot || sourceRepoRoot;
   const targetCheckoutRoot = targetLocalCheckoutRoot || targetRepoRoot;
@@ -659,7 +670,10 @@ async function gitTransferManagedHandoff(cwd, params) {
     );
   }
 
-  const stashRef = await stashChangesForWorktreeHandoff(sourceRepoRoot, sourceChangeScope.pathspecArgs);
+  const stashRef = await stashChangesForWorktreeHandoff(
+    sourceRepoRoot,
+    sourceChangeScope.pathspecArgs
+  );
   if (!stashRef) {
     return {
       success: true,
@@ -692,7 +706,10 @@ async function gitRemoveWorktree(cwd, params) {
   const branch = typeof params.branch === "string" ? params.branch.trim() : "";
 
   if (!worktreeRootPath || !localCheckoutRoot) {
-    throw gitError("missing_working_directory", "Could not resolve the worktree roots for cleanup.");
+    throw gitError(
+      "missing_working_directory",
+      "Could not resolve the worktree roots for cleanup."
+    );
   }
   if (sameFilePath(worktreeRootPath, localCheckoutRoot)) {
     throw gitError("cannot_remove_local_checkout", "Cannot remove the main local checkout.");
@@ -702,7 +719,7 @@ async function gitRemoveWorktree(cwd, params) {
   }
 
   await cleanupManagedWorktree(localCheckoutRoot, worktreeRootPath, branch || null);
-  if (branch && await localBranchExists(localCheckoutRoot, branch)) {
+  if (branch && (await localBranchExists(localCheckoutRoot, branch))) {
     throw gitError(
       "worktree_cleanup_failed",
       `The temporary worktree was removed, but branch '${branch}' could not be deleted automatically.`
@@ -775,10 +792,7 @@ function parseOwnerRepo(remoteUrl) {
 // ─── Git Branches With Status ─────────────────────────────────
 
 async function gitBranchesWithStatus(cwd) {
-  const [branchResult, statusResult] = await Promise.all([
-    gitBranches(cwd),
-    gitStatus(cwd),
-  ]);
+  const [branchResult, statusResult] = await Promise.all([gitBranches(cwd), gitStatus(cwd)]);
   return { ...branchResult, status: statusResult };
 }
 
@@ -804,14 +818,24 @@ async function stashChangesForWorktreeHandoff(cwd, pathspecArgs = []) {
 
   const stashRef = await findStashRefByLabel(cwd, stashLabel);
   if (!stashRef) {
-    throw gitError("create_worktree_failed", "Could not prepare local changes for the worktree handoff.");
+    throw gitError(
+      "create_worktree_failed",
+      "Could not prepare local changes for the worktree handoff."
+    );
   }
 
   return stashRef;
 }
 
 async function captureLocalChangesPatch(cwd, pathspecArgs = []) {
-  const trackedPatch = await git(cwd, "diff", "--binary", "--find-renames", "HEAD", ...pathspecArgs);
+  const trackedPatch = await git(
+    cwd,
+    "diff",
+    "--binary",
+    "--find-renames",
+    "HEAD",
+    ...pathspecArgs
+  );
   const porcelain = await git(cwd, "status", "--porcelain=v1", ...pathspecArgs);
   const untrackedPaths = porcelain
     .trim()
@@ -866,7 +890,10 @@ async function applyCopiedLocalChangesToWorktree(cwd, patch) {
     return;
   }
 
-  const patchFilePath = path.join(os.tmpdir(), `remodex-worktree-copy-${randomBytes(6).toString("hex")}.patch`);
+  const patchFilePath = path.join(
+    os.tmpdir(),
+    `remodex-worktree-copy-${randomBytes(6).toString("hex")}.patch`
+  );
   fs.writeFileSync(patchFilePath, ensureTrailingNewline(patch), "utf8");
 
   try {
@@ -939,9 +966,8 @@ async function cleanupManagedWorktree(repoRoot, worktreeRootPath, branchName = n
 function parseWorktreePathByBranch(output, options = {}) {
   const worktreePathByBranch = {};
   const records = typeof output === "string" ? output.split("\n\n") : [];
-  const projectRelativePath = typeof options.projectRelativePath === "string"
-    ? options.projectRelativePath
-    : "";
+  const projectRelativePath =
+    typeof options.projectRelativePath === "string" ? options.projectRelativePath : "";
 
   for (const record of records) {
     const lines = record
@@ -1107,7 +1133,12 @@ function isManagedWorktreePath(candidatePath) {
   }
 
   const relativePath = path.relative(normalizedRoot, normalizedCandidate);
-  return !!relativePath && relativePath !== "." && !relativePath.startsWith("..") && !path.isAbsolute(relativePath);
+  return (
+    !!relativePath &&
+    relativePath !== "." &&
+    !relativePath.startsWith("..") &&
+    !path.isAbsolute(relativePath)
+  );
 }
 
 function resolveProjectRelativePath(cwd, repoRoot) {
@@ -1136,7 +1167,9 @@ function scopedWorktreePath(worktreeRootPath, projectRelativePath) {
   }
 
   const candidatePath = path.join(normalizedWorktreeRootPath, projectRelativePath);
-  return isExistingDirectory(candidatePath) ? normalizeExistingPath(candidatePath) ?? candidatePath : normalizedWorktreeRootPath;
+  return isExistingDirectory(candidatePath)
+    ? (normalizeExistingPath(candidatePath) ?? candidatePath)
+    : normalizedWorktreeRootPath;
 }
 
 // Resolves a Local checkout path only when the matching subpath actually exists there.
@@ -1150,7 +1183,9 @@ function scopedLocalCheckoutPath(checkoutRootPath, projectRelativePath) {
   }
 
   const candidatePath = path.join(normalizedCheckoutRootPath, projectRelativePath);
-  return isExistingDirectory(candidatePath) ? normalizeExistingPath(candidatePath) ?? candidatePath : null;
+  return isExistingDirectory(candidatePath)
+    ? (normalizeExistingPath(candidatePath) ?? candidatePath)
+    : null;
 }
 
 // Computes the local repo delta that still exists on this machine and is not on the remote.
@@ -1236,12 +1271,12 @@ async function countLocalOnlyCommits(cwd, context) {
   }
 
   const remoteRefs = await git(cwd, "for-each-ref", "--format=%(refname)", "refs/remotes");
-  const hasAnyRemoteRefs = remoteRefs
-    .trim()
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .length > 0;
+  const hasAnyRemoteRefs =
+    remoteRefs
+      .trim()
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean).length > 0;
 
   if (!hasAnyRemoteRefs) {
     return 0;
@@ -1287,10 +1322,7 @@ function resolveWorktreeChangeTransfer(rawValue) {
 async function scopedProjectChanges(repoRoot, projectRelativePath) {
   const pathspecArgs = gitPathspecArgs(projectRelativePath);
   const porcelain = await git(repoRoot, "status", "--porcelain=v1", ...pathspecArgs);
-  const fileLines = porcelain
-    .trim()
-    .split("\n")
-    .filter(Boolean);
+  const fileLines = porcelain.trim().split("\n").filter(Boolean);
 
   return {
     dirty: fileLines.length > 0,
@@ -1347,7 +1379,9 @@ async function diffPatchForUntrackedFiles(cwd, filePaths) {
     return "";
   }
 
-  const patches = await Promise.all(filePaths.map((filePath) => gitDiffNoIndexPatch(cwd, filePath)));
+  const patches = await Promise.all(
+    filePaths.map((filePath) => gitDiffNoIndexPatch(cwd, filePath))
+  );
   return patches.filter(Boolean).join("\n\n");
 }
 

@@ -1,0 +1,22 @@
+only_rules:
+  - duplicate_imports
+  - empty_count
+  - first_where
+  - joined_default_parameter
+  - legacy_multiple
+  - private_over_fileprivate
+  - redundant_discardable_let
+  - redundant_nil_coalescing
+  - trailing_newline
+  - trailing_whitespace
+  - unused_optional_binding
+  - vertical_whitespace
+
+included:
+  - CodexMobile/CodexMobile
+  - CodexMobile/CodexMobileTests
+  - CodexMobile/CodexMobileUITests
+  - CodexMobile/RemodexMenuBar
+
+excluded:
+  - CodexMobile/CodexMobile/Resources

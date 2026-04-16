@@ -53,7 +53,8 @@ test("relayCloseDiagnostic classifies saved-session and permanent reconnect fail
 
   assert.deepEqual(relayCloseDiagnostic(4005), {
     code: "re_pair_required",
-    message: "This saved relay session is no longer trusted by the Mac. Scan a new QR code to reconnect.",
+    message:
+      "This saved relay session is no longer trusted by the Mac. Scan a new QR code to reconnect.",
     isPermanent: true,
   });
 
@@ -171,9 +172,7 @@ test("sanitizeThreadHistoryImagesForRelay replaces inline history images with li
     },
   });
 
-  const sanitized = JSON.parse(
-    sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/read")
-  );
+  const sanitized = JSON.parse(sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/read"));
   const content = sanitized.result.thread.turns[0].items[0].content;
 
   assert.deepEqual(content[0], {
@@ -194,10 +193,7 @@ test("sanitizeThreadHistoryImagesForRelay leaves unrelated RPC payloads unchange
     },
   });
 
-  assert.equal(
-    sanitizeThreadHistoryImagesForRelay(rawMessage, "turn/start"),
-    rawMessage
-  );
+  assert.equal(sanitizeThreadHistoryImagesForRelay(rawMessage, "turn/start"), rawMessage);
 });
 
 test("createMacOSBridgeWakeAssertion spawns a macOS caffeinate idle-sleep assertion tied to the bridge pid", () => {
@@ -221,11 +217,13 @@ test("createMacOSBridgeWakeAssertion spawns a macOS caffeinate idle-sleep assert
   });
 
   assert.equal(assertion.active, true);
-  assert.deepEqual(spawnCalls, [{
-    command: "/usr/bin/caffeinate",
-    args: ["-i", "-w", "4242"],
-    options: { stdio: "ignore" },
-  }]);
+  assert.deepEqual(spawnCalls, [
+    {
+      command: "/usr/bin/caffeinate",
+      args: ["-i", "-w", "4242"],
+      options: { stdio: "ignore" },
+    },
+  ]);
 
   assertion.stop();
   assert.equal(fakeChild.killed, true);
@@ -302,11 +300,13 @@ test("persistBridgePreferences only saves the daemon preference field", () => {
     }
   );
 
-  assert.deepEqual(writes, [{
-    relayUrl: "ws://127.0.0.1:9000/relay",
-    refreshEnabled: true,
-    keepMacAwakeEnabled: false,
-  }]);
+  assert.deepEqual(writes, [
+    {
+      relayUrl: "ws://127.0.0.1:9000/relay",
+      refreshEnabled: true,
+      keepMacAwakeEnabled: false,
+    },
+  ]);
 });
 
 test("sanitizeThreadHistoryImagesForRelay strips bulky compaction replacement history", () => {
@@ -351,9 +351,7 @@ test("sanitizeThreadHistoryImagesForRelay strips bulky compaction replacement hi
     },
   });
 
-  const sanitized = JSON.parse(
-    sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/resume")
-  );
+  const sanitized = JSON.parse(sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/resume"));
   const items = sanitized.result.thread.turns[0].items;
 
   assert.deepEqual(items[0], {
@@ -394,9 +392,7 @@ test("sanitizeThreadHistoryImagesForRelay recursively elides inline image payloa
     },
   });
 
-  const sanitized = JSON.parse(
-    sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/read")
-  );
+  const sanitized = JSON.parse(sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/read"));
   const attachment = sanitized.result.thread.turns[0].items[0].attachment;
 
   assert.deepEqual(attachment, {
