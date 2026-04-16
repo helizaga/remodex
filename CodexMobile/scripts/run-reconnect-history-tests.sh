@@ -43,16 +43,64 @@ expand_user_path() {
   fi
 }
 
+resolve_existing_parent_dir() {
+  local path="$1"
+  local parent_dir="$path"
+
+  while [[ ! -d "$parent_dir" && "$parent_dir" != "/" ]]; do
+    parent_dir="$(dirname "$parent_dir")"
+  done
+
+  (
+    cd "$parent_dir"
+    pwd -P
+  )
+}
+
+assert_safe_removal_path() {
+  local raw_path="$1"
+  local purpose="$2"
+
+  if [[ -z "$raw_path" || "$raw_path" != /* ]]; then
+    echo "Refusing to remove unsafe ${purpose} path: $raw_path" >&2
+    exit 1
+  fi
+
+  local resolved_parent_dir
+  resolved_parent_dir="$(resolve_existing_parent_dir "$raw_path")"
+  local normalized_path
+  normalized_path="${resolved_parent_dir}/$(basename "$raw_path")"
+
+  case "$normalized_path" in
+    ""|/|/tmp|/private/tmp|/var|/var/folders|"$HOME"|"$ROOT_DIR")
+      echo "Refusing to remove unsafe ${purpose} path: $raw_path" >&2
+      exit 1
+      ;;
+  esac
+
+  case "$normalized_path" in
+    /tmp/*|/private/tmp/*|/var/folders/*|"$ROOT_DIR"/DerivedData/*|"$ROOT_DIR"/.derived-data/*|"$ROOT_DIR"/.tmp/*|"$ROOT_DIR"/tmp/*)
+      return 0
+      ;;
+    *)
+      echo "Refusing to remove unexpected ${purpose} path outside known scratch directories: $raw_path" >&2
+      exit 1
+      ;;
+  esac
+}
+
 CLONED_SOURCE_PACKAGES_DIR="$(expand_user_path "$CLONED_SOURCE_PACKAGES_DIR")"
 DERIVED_DATA_PATH="$(expand_user_path "$DERIVED_DATA_PATH")"
 RESULT_BUNDLE_PATH="$(expand_user_path "$RESULT_BUNDLE_PATH")"
 CRASH_ARTIFACTS_DIR="$(expand_user_path "$CRASH_ARTIFACTS_DIR")"
 
-DESTINATION="${DESTINATION:-$(pick_ios_simulator_destination "$PROJECT_PATH" "$SCHEME" \
-  "iPhone 17" \
-  "iPhone 17 Pro" \
-  "iPhone 16 Pro" \
-  "iPhone 16")}"
+if [[ -z "${DESTINATION:-}" ]]; then
+  DESTINATION="$(pick_ios_simulator_destination "$PROJECT_PATH" "$SCHEME" \
+    "iPhone 17" \
+    "iPhone 17 Pro" \
+    "iPhone 16 Pro" \
+    "iPhone 16" || true)"
+fi
 
 if [[ -z "$DESTINATION" ]]; then
   echo "Unable to locate an available iOS Simulator destination."
@@ -87,6 +135,10 @@ if [[ -n "$ONLY_TESTING" ]]; then
       ONLY_TESTING_ARGS+=("-only-testing:${spec}")
     fi
   done
+  if [[ ${#ONLY_TESTING_ARGS[@]} -eq 0 ]]; then
+    echo "ONLY_TESTING did not contain any valid test identifiers." >&2
+    exit 1
+  fi
 else
   for suite in "${TEST_SUITES[@]}"; do
     ONLY_TESTING_ARGS+=("-only-testing:CodexMobileTests/${suite}")
@@ -142,6 +194,7 @@ if [[ -n "$ENABLE_ADDRESS_SANITIZER" ]]; then
 fi
 
 if [[ "$CLEAN_DERIVED_DATA" == "1" ]]; then
+  assert_safe_removal_path "$DERIVED_DATA_PATH" "derived-data"
   rm -rf "$DERIVED_DATA_PATH"
 fi
 
@@ -239,6 +292,7 @@ run_xcodebuild_once() {
         result_bundle_path="${stem}.${iteration}.${extension}"
       fi
     fi
+    assert_safe_removal_path "$result_bundle_path" "result-bundle"
     rm -rf "$result_bundle_path"
     cmd+=(-resultBundlePath "$result_bundle_path")
   fi

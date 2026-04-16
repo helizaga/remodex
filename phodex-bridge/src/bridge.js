@@ -1446,6 +1446,7 @@ function normalizeNonEmptyString(value) {
 
 function relayCloseDiagnostic(closeCode, reasonText = "") {
   const normalizedReason = normalizeNonEmptyString(reasonText);
+  const diagnosticReason = redactedRelayCloseReason(normalizedReason);
 
   switch (closeCode) {
     case 4000:
@@ -1492,8 +1493,8 @@ function relayCloseDiagnostic(closeCode, reasonText = "") {
 
       return {
         code: "relay_temporarily_unavailable",
-        message: normalizedReason
-          ? `The relay connection closed unexpectedly: ${normalizedReason}`
+        message: diagnosticReason
+          ? `The relay connection closed unexpectedly: ${diagnosticReason}`
           : "The relay or network is temporarily unavailable.",
         isPermanent: false,
       };

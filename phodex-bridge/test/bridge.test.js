@@ -61,7 +61,7 @@ test("relayCloseDiagnostic classifies saved-session and permanent reconnect fail
 
   assert.deepEqual(relayCloseDiagnostic(4010, "relay proxy reset"), {
     code: "relay_temporarily_unavailable",
-    message: "The relay connection closed unexpectedly: relay proxy reset",
+    message: "The relay connection closed unexpectedly: [redacted]",
     isPermanent: false,
   });
 
