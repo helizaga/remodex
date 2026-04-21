@@ -22,6 +22,10 @@ enum CodexUITestHarness {
             return nil
         }
         defaults.removePersistentDomain(forName: suiteName)
+        defaults.set(true, forKey: "codex.hasSeenOnboarding")
+        defaults.set("1.1", forKey: "codex.whatsNew.lastPresentedVersion")
+        UserDefaults.standard.set(true, forKey: "codex.hasSeenOnboarding")
+        UserDefaults.standard.set("1.1", forKey: "codex.whatsNew.lastPresentedVersion")
 
         let service = CodexService(
             defaults: defaults,
@@ -51,20 +55,24 @@ enum CodexUITestHarness {
         )
 
         service.upsertThread(thread)
-        service.activeThreadId = thread.id
         service.isInitialized = true
         service.syncRealtimeEnabled = true
 
         switch options.scenario {
         case .timeline:
             service.isConnected = false
+            service.activeThreadId = thread.id
             service.messagesByThread[thread.id] = timelineMessages(
                 threadId: thread.id,
                 count: options.messageCount
             )
             service.hydratedThreadIDs.insert(thread.id)
+        case .threadOpenFailure:
+            service.isConnected = true
+            service.requestTransportOverride = threadOpenFailureTransportOverride()
         case .oversizedHistoryWithLocalTranscript:
             service.isConnected = true
+            service.activeThreadId = thread.id
             service.messagesByThread[thread.id] = timelineMessages(
                 threadId: thread.id,
                 count: max(12, options.messageCount)
@@ -203,6 +211,30 @@ enum CodexUITestHarness {
             }
         }
     }
+
+    private static func threadOpenFailureTransportOverride() -> (String, JSONValue?) async throws -> RPCMessage {
+        { method, _ in
+            switch method {
+            case "thread/resume":
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                throw CodexServiceError.invalidInput(
+                    "Request timed out after 15s while waiting for thread/resume."
+                )
+            case "thread/contextWindow/read", "account/rateLimits/read":
+                return RPCMessage(
+                    id: .string(UUID().uuidString),
+                    result: .object([:]),
+                    includeJSONRPC: false
+                )
+            default:
+                return RPCMessage(
+                    id: .string(UUID().uuidString),
+                    result: .object([:]),
+                    includeJSONRPC: false
+                )
+            }
+        }
+    }
 }
 
 struct CodexUITestLaunchFixture {
@@ -212,6 +244,12 @@ struct CodexUITestLaunchFixture {
 
     @MainActor
     func startIfNeeded(using service: CodexService) async {
+        if options.usesAppShell {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            guard !Task.isCancelled else { return }
+            service.activeThreadId = threadID
+        }
+
         guard options.autoStream else {
             return
         }
@@ -273,11 +311,17 @@ struct CodexUITestFixtureRootView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            TurnView(
-                thread: resolvedThread,
-                isWakingMacDisplayRecovery: false
-            )
+        Group {
+            if fixture.options.usesAppShell {
+                ContentView()
+            } else {
+                NavigationStack {
+                    TurnView(
+                        thread: resolvedThread,
+                        isWakingMacDisplayRecovery: false
+                    )
+                }
+            }
         }
         .task {
             guard !didStartFixtureScenario else { return }
@@ -290,6 +334,7 @@ struct CodexUITestFixtureRootView: View {
 struct CodexUITestLaunchOptions {
     enum Scenario: String {
         case timeline
+        case threadOpenFailure
         case oversizedHistoryWithLocalTranscript
         case oversizedHistoryWithoutLocalTranscript
     }
@@ -316,6 +361,8 @@ struct CodexUITestLaunchOptions {
         switch scenario {
         case .timeline:
             return "Fixture Timeline"
+        case .threadOpenFailure:
+            return "Thread Open Failure"
         case .oversizedHistoryWithLocalTranscript:
             return "Oversized History (Recovered)"
         case .oversizedHistoryWithoutLocalTranscript:
@@ -327,10 +374,21 @@ struct CodexUITestLaunchOptions {
         switch scenario {
         case .timeline:
             return "Deterministic timeline fixture"
+        case .threadOpenFailure:
+            return "Shows the post-timeout recovery path for chat opening"
         case .oversizedHistoryWithLocalTranscript:
             return "Uses the local transcript when thread/read is oversized"
         case .oversizedHistoryWithoutLocalTranscript:
             return "Shows recovery UI when no local transcript exists"
+        }
+    }
+
+    var usesAppShell: Bool {
+        switch scenario {
+        case .threadOpenFailure:
+            return true
+        case .timeline, .oversizedHistoryWithLocalTranscript, .oversizedHistoryWithoutLocalTranscript:
+            return false
         }
     }
 

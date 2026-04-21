@@ -70,6 +70,12 @@ extension CodexService {
             return .ready
         }
 
+        // A disconnected phone cannot advance hydration, so an unhydrated thread would
+        // otherwise sit behind a permanent spinner until the user reconnects manually.
+        if !isConnected {
+            return .empty
+        }
+
         if shouldSkipInitialDisplayHydration(threadId: threadId)
             || shouldShowImmediateEmptyPlaceholder(threadId: threadId) {
             return .empty
@@ -113,15 +119,10 @@ extension CodexService {
 
     // Returns the service-owned timeline state for a single thread.
     func timelineState(for threadId: String) -> ThreadTimelineState {
-        let state = timelineStore.timelineState(for: threadId)
-        guard !timelineRefreshInProgressThreadIDs.contains(threadId) else {
-            return state
-        }
-        refreshThreadTimelineState(for: threadId)
-        return state
+        timelineStore.timelineState(for: threadId)
     }
 
-    // Returns the observed render snapshot for a thread while keeping the backing cache lazy.
+    // Returns the latest cached render snapshot without mutating observed state during a SwiftUI read.
     func renderSnapshot(for threadId: String) -> TurnTimelineRenderSnapshot {
         let state = timelineState(for: threadId)
         return timelineRenderSnapshotsByThread[threadId] ?? state.renderSnapshot
@@ -580,6 +581,13 @@ extension CodexService {
         } catch {
             if shouldTreatAsThreadNotFound(error) {
                 handleMissingThread(threadId)
+            } else {
+                lastErrorMessage = error.localizedDescription
+                // Stop the empty chat from sitting behind a permanent loading state when
+                // resume/read failed or timed out. Background sync can still refresh later.
+                if messages(for: threadId).isEmpty {
+                    hydratedThreadIDs.insert(threadId)
+                }
             }
             return false
         }

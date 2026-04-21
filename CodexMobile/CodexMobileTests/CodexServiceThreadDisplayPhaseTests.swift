@@ -60,6 +60,23 @@ final class CodexServiceThreadDisplayPhaseTests: XCTestCase {
         XCTAssertEqual(service.threadDisplayPhase(threadId: threadID), .empty)
     }
 
+    func testThreadDisplayPhaseDoesNotStayLoadingWhileDisconnected() {
+        let service = makeService()
+        let threadID = "thread-\(UUID().uuidString)"
+
+        service.threads = [
+            CodexThread(
+                id: threadID,
+                title: CodexThread.defaultDisplayTitle,
+                preview: "Existing message preview",
+                syncState: .live
+            )
+        ]
+        service.isConnected = false
+
+        XCTAssertEqual(service.threadDisplayPhase(threadId: threadID), .empty)
+    }
+
     private func makeService() -> CodexService {
         let suiteName = "CodexServiceThreadDisplayPhaseTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard

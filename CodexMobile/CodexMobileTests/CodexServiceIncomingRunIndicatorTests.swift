@@ -379,6 +379,33 @@ final class CodexServiceIncomingRunIndicatorTests: XCTestCase {
         XCTAssertTrue(recordedMethods.isEmpty)
     }
 
+    func testPrepareThreadForDisplayStopsLoadingAfterResumeFailure() async {
+        let service = makeService()
+        let threadID = "thread-\(UUID().uuidString)"
+
+        service.isConnected = true
+        service.isInitialized = true
+        service.threads = [
+            CodexThread(
+                id: threadID,
+                title: CodexThread.defaultDisplayTitle,
+                preview: "Existing message preview",
+                syncState: .live
+            )
+        ]
+        service.requestTransportOverride = { method, _ in
+            XCTAssertEqual(method, "thread/resume")
+            throw CodexServiceError.invalidInput("Request timed out after 15s while waiting for thread/resume.")
+        }
+
+        let didPrepare = await service.prepareThreadForDisplay(threadId: threadID)
+
+        XCTAssertFalse(didPrepare)
+        XCTAssertTrue(service.hydratedThreadIDs.contains(threadID))
+        XCTAssertEqual(service.threadDisplayPhase(threadId: threadID), .empty)
+        XCTAssertEqual(service.lastErrorMessage, "Request timed out after 15s while waiting for thread/resume.")
+    }
+
     func testActiveThreadDoesNotReceiveReadyOrFailedBadge() {
         let service = makeService()
         let threadID = "thread-\(UUID().uuidString)"

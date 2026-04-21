@@ -90,6 +90,21 @@ struct TurnView: View {
             presentRepositoryDiff(workingDirectory: gitWorkingDirectory)
         } : nil
 
+        let composerView: AnyView
+        if threadDisplayPhase == .loading {
+            composerView = AnyView(loadingComposerPlaceholder)
+        } else {
+            composerView = AnyView(composerWithSubagentAccessory(
+                currentThread: resolvedThread,
+                activeTurnID: activeTurnID,
+                isThreadRunning: isThreadRunning,
+                isEmptyThread: isEmptyThread,
+                isWorktreeProject: isWorktreeProject,
+                showsGitControls: showsGitControls,
+                gitWorkingDirectory: gitWorkingDirectory
+            ))
+        }
+
         return TurnConversationContainerView(
                 threadID: thread.id,
                 messages: renderSnapshot.messages,
@@ -110,15 +125,7 @@ struct TurnView: View {
                 isComposerFocused: isInputFocused,
                 isComposerAutocompletePresented: isComposerAutocompletePresented,
                 emptyState: resolvedEmptyConversationState,
-                composer: AnyView(composerWithSubagentAccessory(
-                    currentThread: resolvedThread,
-                    activeTurnID: activeTurnID,
-                    isThreadRunning: isThreadRunning,
-                    isEmptyThread: isEmptyThread,
-                    isWorktreeProject: isWorktreeProject,
-                    showsGitControls: showsGitControls,
-                    gitWorkingDirectory: gitWorkingDirectory
-                )),
+                composer: composerView,
                 structuredPromptReplacementComposer: { message in
                     AnyView(composerStructuredPromptReplacement(message: message))
                 },
@@ -429,6 +436,27 @@ struct TurnView: View {
         } message: { alert in
             Text(alert.message)
         }
+    }
+
+    // Keeps thread-open loading responsive by deferring the full composer tree until hydration resolves.
+    private var loadingComposerPlaceholder: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+
+            Text("Loading chat controls…")
+                .font(AppFont.subheadline())
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .adaptiveGlass(.regular, in: RoundedRectangle(cornerRadius: 28))
+        .padding(.horizontal, 12)
+        .padding(.top, 4)
+        .padding(.bottom, 8)
     }
 
     // Reuses the shared recovery-card slot for both transport reconnects and voice-specific guidance.

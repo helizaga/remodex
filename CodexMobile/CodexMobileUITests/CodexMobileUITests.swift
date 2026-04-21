@@ -59,6 +59,41 @@ final class CodexMobileUITests: XCTestCase {
         )
     }
 
+    func testThreadOpenFailureDoesNotStayOnLoadingChatForever() {
+        let app = launchFixtureApp(
+            messageCount: 0,
+            scenario: "threadOpenFailure"
+        )
+
+        XCTAssertTrue(app.staticTexts["Loading chat..."].waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.staticTexts["Request timed out after 15s while waiting for thread/resume."].waitForExistence(timeout: 5)
+        )
+        XCTAssertTrue(
+            app.staticTexts["Hi! How can I help you?"].waitForExistence(timeout: 5),
+            "Expected the app to fall back to the empty-thread state after thread open fails."
+        )
+    }
+
+    func testThreadOpenFailureKeepsSidebarMenuResponsive() {
+        let app = launchFixtureApp(
+            messageCount: 0,
+            scenario: "threadOpenFailure"
+        )
+
+        XCTAssertTrue(app.staticTexts["Loading chat..."].waitForExistence(timeout: 5))
+
+        let menuButton = app.buttons["Menu"]
+        XCTAssertTrue(menuButton.waitForExistence(timeout: 5))
+        menuButton.tap()
+
+        let closeMenuButton = app.buttons["Close menu"]
+        XCTAssertTrue(
+            closeMenuButton.waitForExistence(timeout: 5),
+            "Expected the sidebar to remain openable while the thread resume request is still pending."
+        )
+    }
+
     private func launchFixtureApp(
         messageCount: Int,
         autoStream: Bool = false,

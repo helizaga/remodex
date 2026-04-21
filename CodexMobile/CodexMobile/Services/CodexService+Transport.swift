@@ -13,6 +13,7 @@ import Security
 // Image-heavy thread history and secure-envelope overhead can legitimately exceed 4 MB while
 // reopening a chat, so the limit needs enough headroom for background `thread/read` catches too.
 let codexWebSocketMaximumMessageSizeBytes = 16 * 1024 * 1024
+private let codexRPCRequestTimeoutNanoseconds: UInt64 = 15_000_000_000
 
 private enum CodexRelayTransportPreference {
     case manualTCP
@@ -157,11 +158,24 @@ extension CodexService {
 
         return try await withCheckedThrowingContinuation { continuation in
             pendingRequests[requestKey] = continuation
+            let timeoutTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: codexRPCRequestTimeoutNanoseconds)
+                guard let self,
+                      let pendingContinuation = self.pendingRequests.removeValue(forKey: requestKey) else {
+                    return
+                }
+                pendingContinuation.resume(
+                    throwing: CodexServiceError.invalidInput(
+                        "Request timed out after 15s while waiting for \(method)."
+                    )
+                )
+            }
 
             Task {
                 do {
                     try await sendMessage(request)
                 } catch {
+                    timeoutTask.cancel()
                     if shouldTreatSendFailureAsDisconnect(error) {
                         handleReceiveError(error)
                         return
