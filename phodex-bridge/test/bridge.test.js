@@ -194,6 +194,44 @@ test("sanitizeThreadHistoryImagesForRelay replaces inline history images with li
   });
 });
 
+test("sanitizeThreadHistoryImagesForRelay replaces input_image history data URLs", () => {
+  const rawMessage = JSON.stringify({
+    id: "req-thread-input-image",
+    result: {
+      thread: {
+        id: "thread-input-image",
+        turns: [
+          {
+            id: "turn-1",
+            items: [
+              {
+                id: "item-user",
+                type: "user_message",
+                content: [
+                  {
+                    type: "input_image",
+                    image_url: {
+                      url: "data:image/png;base64,AAAA",
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    },
+  });
+
+  const sanitized = JSON.parse(sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/read"));
+  const content = sanitized.result.thread.turns[0].items[0].content;
+
+  assert.deepEqual(content[0], {
+    type: "input_image",
+    url: "remodex://history-image-elided",
+  });
+});
+
 test("sanitizeThreadHistoryImagesForRelay leaves unrelated RPC payloads unchanged", () => {
   const rawMessage = JSON.stringify({
     id: "req-other",
@@ -502,4 +540,78 @@ test("sanitizeThreadHistoryImagesForRelay drops oldest turns once sanitizing sti
     sanitized.result.thread.turns.map((turn) => turn.id),
     ["turn-2", "turn-3"]
   );
+});
+
+test("sanitizeThreadHistoryImagesForRelay trims oversized history down to the newest turn tail", () => {
+  const largeText = "A".repeat(4 * 1024 * 1024);
+  const rawMessage = JSON.stringify({
+    id: "req-thread-tail",
+    result: {
+      thread: {
+        id: "thread-large-history",
+        turns: [
+          {
+            id: "turn-old",
+            items: [
+              {
+                id: "item-old",
+                type: "assistant_message",
+                text: largeText,
+              },
+            ],
+          },
+          {
+            id: "turn-new",
+            items: [
+              {
+                id: "item-new",
+                type: "assistant_message",
+                text: "latest reply",
+              },
+            ],
+          },
+        ],
+      },
+    },
+  });
+
+  const sanitized = JSON.parse(sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/read"));
+
+  assert.equal(sanitized.result.thread.historyTailTruncatedForRelay, true);
+  assert.deepEqual(
+    sanitized.result.thread.turns.map((turn) => turn.id),
+    ["turn-new"]
+  );
+});
+
+test("sanitizeThreadHistoryImagesForRelay truncates the newest oversized text item to its tail", () => {
+  const largeText = `header\n${"B".repeat(4 * 1024 * 1024)}`;
+  const rawMessage = JSON.stringify({
+    id: "req-thread-text-tail",
+    result: {
+      thread: {
+        id: "thread-large-item",
+        turns: [
+          {
+            id: "turn-1",
+            items: [
+              {
+                id: "item-1",
+                type: "assistant_message",
+                text: largeText,
+              },
+            ],
+          },
+        ],
+      },
+    },
+  });
+
+  const sanitized = JSON.parse(sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/read"));
+  const item = sanitized.result.thread.turns[0].items[0];
+
+  assert.equal(sanitized.result.thread.historyTailTruncatedForRelay, true);
+  assert.equal(item.relayTextTailTruncated, true);
+  assert.equal(item.text.startsWith("…\n"), true);
+  assert.equal(item.text.includes("header"), false);
 });

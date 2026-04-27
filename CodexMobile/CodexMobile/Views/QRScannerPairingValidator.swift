@@ -1,5 +1,5 @@
 // FILE: QRScannerPairingValidator.swift
-// Purpose: Classifies scanned or pasted pairing payloads so the pairing flow can block outdated Mac bridges before reconnecting.
+// Purpose: Classifies scanned or pasted pairing payloads so the pairing flow can block outdated computer bridges before reconnecting.
 // Layer: View support
 // Exports: validatePairingQRCode
 // Depends on: Foundation, CodexPairingQRPayload, CodexBridgeUpdatePrompt
@@ -31,7 +31,7 @@ func validatePairingQRCode(_ code: String, now: Date = Date()) -> QRScannerPairi
     let normalizedCode: String
     if trimmedCode.hasPrefix(qrScannerPairingCodePrefix) {
         guard let decodedCode = decodePairingCode(trimmedCode) else {
-            return .scanError("This pairing code is unreadable. Copy it again from the Mac bridge.")
+            return .scanError("This pairing code is unreadable. Copy it again from the computer bridge.")
         }
         normalizedCode = decodedCode
     } else {
@@ -67,7 +67,7 @@ func validatePairingQRCode(_ code: String, now: Date = Date()) -> QRScannerPairi
 
         let expiryDate = Date(timeIntervalSince1970: TimeInterval(payload.expiresAt) / 1000)
         guard expiryDate.addingTimeInterval(codexSecureClockSkewToleranceSeconds) >= now else {
-            return .scanError("This pairing code has expired. Generate a new one from the Mac bridge.")
+            return .scanError("This pairing code has expired. Generate a new one from the computer bridge.")
         }
 
         return .success(payload)
@@ -91,7 +91,7 @@ func validatePairingQRCode(_ code: String, now: Date = Date()) -> QRScannerPairi
     if looksLikeRemodexPairingPayload(data) {
         return .bridgeUpdateRequired(
             makeScannerBridgeUpdatePrompt(
-                message: "This QR code looks like it came from an older Remodex bridge. Update the npm package on your Mac to the latest release before scanning a new QR code."
+                message: "This QR code looks like it came from an older Remodex bridge. Update the npm package on your computer to the latest release before scanning a new QR code."
             )
         )
     }
@@ -148,7 +148,7 @@ private func extractRawPairingVersion(_ data: Data) -> Int? {
 
 private func makeScannerBridgeUpdatePrompt(message: String) -> CodexBridgeUpdatePrompt {
     CodexBridgeUpdatePrompt(
-        title: "Update Remodex on your Mac before scanning",
+        title: "Update Remodex on your computer before scanning",
         message: message,
         command: qrScannerBridgeUpdateCommand
     )
