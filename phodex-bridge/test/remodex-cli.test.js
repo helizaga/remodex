@@ -56,6 +56,35 @@ test("remodex restart reuses the macOS service start flow", async () => {
   assert.deepEqual(messages, ["[remodex] macOS bridge service restarted."]);
 });
 
+test("remodex down is an alias for stop", async () => {
+  const calls = [];
+  const messages = [];
+
+  await main({
+    argv: ["node", "remodex", "down"],
+    platform: "darwin",
+    consoleImpl: {
+      log(message) {
+        messages.push(message);
+      },
+      error(message) {
+        messages.push(message);
+      },
+    },
+    exitImpl(code) {
+      throw new Error(`unexpected exit ${code}`);
+    },
+    deps: {
+      stopMacOSBridgeService() {
+        calls.push("stop-service");
+      },
+    },
+  });
+
+  assert.deepEqual(calls, ["stop-service"]);
+  assert.deepEqual(messages, ["[remodex] macOS bridge service stopped."]);
+});
+
 test("remodex status --json exposes daemon metadata for companion apps", async () => {
   const writes = [];
   const originalWrite = process.stdout.write;

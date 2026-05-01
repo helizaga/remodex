@@ -239,9 +239,9 @@ async function main({
 
   consoleImpl.error(`Unknown command: ${command}`);
   consoleImpl.error(
-    "Usage: remodex up | remodex run | remodex start | remodex restart | remodex stop | remodex status | " +
+    "Usage: remodex up | remodex run | remodex start | remodex restart | remodex stop | remodex down | remodex status | " +
       "remodex reset-pairing | remodex resume | remodex watch [threadId] | remodex --version | " +
-      "append --json to start/restart/stop/status/reset-pairing/resume for machine-readable output"
+      "append --json to start/restart/stop/down/status/reset-pairing/resume for machine-readable output"
   );
   exitImpl(1);
 }
@@ -259,8 +259,10 @@ function parseCliArgs(rawArgs) {
     positionals.push(arg);
   }
 
+  const command = positionals[0] || "up";
+
   return {
-    command: positionals[0] || "up",
+    command: command === "down" ? "stop" : command,
     jsonOutput,
     watchThreadId: positionals[1] || "",
   };
