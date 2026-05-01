@@ -76,11 +76,11 @@ struct TurnView: View {
         )
         let toolbarNavigationContext = threadNavigationContext(for: resolvedThread)
         let toolbarWorktreeHandoffTitle = isWorktreeProject ? "Hand off to Local" : "Hand off to Worktree"
-        let isGitActionEnabled = canRunGitAction(
+        let isGitActionEnabled = viewModel.gitRepoSync != nil && canRunGitAction(
             isThreadRunning: isThreadRunning,
             gitWorkingDirectory: gitWorkingDirectory
         )
-        let disabledGitActions: Set<TurnGitActionKind> = viewModel.canCreatePullRequest ? [] : [.createPR]
+        let disabledGitActions: Set<TurnGitActionKind> = viewModel.disabledGitActions
         let onTapMacHandoff: (() -> Void)? = codex.isConnected && codex.supportsDesktopAppHandoff ? {
             isShowingMacHandoffConfirm = true
         } : nil
@@ -122,6 +122,7 @@ struct TurnView: View {
                 planSessionSource: planSessionSource,
                 allowsAssistantPlanFallbackRecovery: planSessionSource == .compatibilityFallback,
                 threadMessagesForPlanMatching: renderSnapshot.planMatchingMessages,
+                currentWorkingDirectory: gitWorkingDirectory,
                 errorMessage: codex.lastErrorMessage,
                 composerRecoveryAccessory: composerRecoveryAccessory,
                 shouldAnchorToAssistantResponse: shouldAnchorToAssistantResponseBinding,
@@ -195,6 +196,11 @@ struct TurnView: View {
             )
         }
         .overlay {
+            if isStartingSiblingChat {
+                NewChatOpeningOverlay()
+                    .transition(.opacity)
+            }
+
             if isShowingWorktreeHandoff {
                 TurnWorktreeHandoffOverlay(
                     mode: .handoff,
@@ -750,7 +756,7 @@ struct TurnView: View {
         isThreadRunning: Bool,
         gitWorkingDirectory: String?
     ) -> Bool {
-        canRunGitAction(
+        viewModel.isGitRepositoryInitialized && canRunGitAction(
             isThreadRunning: isThreadRunning,
             gitWorkingDirectory: gitWorkingDirectory
         )
@@ -1275,8 +1281,8 @@ struct TurnView: View {
                 orderedModelOptions: orderedModelOptions,
                 selectedModelTitle: selectedModelTitle,
                 reasoningDisplayOptions: reasoningDisplayOptions,
-                showsGitControls: showsGitControls,
-                isGitBranchSelectorEnabled: canRunGitAction(
+                showsGitControls: showsGitControls && viewModel.isGitRepositoryInitialized,
+                isGitBranchSelectorEnabled: viewModel.isGitRepositoryInitialized && canRunGitAction(
                     isThreadRunning: isThreadRunning,
                     gitWorkingDirectory: gitWorkingDirectory
                 ),
@@ -1330,7 +1336,7 @@ struct TurnView: View {
                     )
                 },
                 onRefreshGitBranches: {
-                    guard showsGitControls else { return }
+                    guard showsGitControls, viewModel.isGitRepositoryInitialized else { return }
                     viewModel.refreshGitBranchTargets(
                         codex: codex,
                         workingDirectory: gitWorkingDirectory,
@@ -1759,6 +1765,27 @@ struct TurnView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()
+    }
+}
+
+private struct NewChatOpeningOverlay: View {
+    var body: some View {
+        VStack(spacing: 14) {
+            ProgressView()
+                .controlSize(.regular)
+
+            VStack(spacing: 4) {
+                Text("Starting new chat...")
+                    .font(AppFont.headline())
+                    .foregroundStyle(.primary)
+
+                Text("Preparing an empty conversation.")
+                    .font(AppFont.caption())
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemBackground))
     }
 }
 

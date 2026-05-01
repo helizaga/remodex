@@ -193,7 +193,7 @@ enum CodexNotificationPayloadKeys {
 }
 
 // Tracks the real terminal outcome of a run, including user interruption.
-enum CodexTurnTerminalState: String, Equatable, Sendable {
+enum CodexTurnTerminalState: String, Codable, Equatable, Sendable {
     case completed
     case failed
     case stopped
@@ -356,7 +356,7 @@ final class CodexService {
         case ephemeral
     }
 
-    static let minimumSupportedBridgePackageVersion = "1.3.5"
+    static let minimumSupportedBridgePackageVersion = "1.3.9"
 
     // --- Public state ---------------------------------------------------------
 
@@ -424,6 +424,7 @@ final class CodexService {
     var notificationAuthorizationStatus: UNAuthorizationStatus = .notDetermined
     var pendingNotificationOpenThreadID: String?
     var supportsStructuredSkillInput = true
+    var supportsStructuredMentionInput = true
     // Runtime compatibility flag for `turn/start.collaborationMode` plan turns.
     var supportsTurnCollaborationMode = false
     // Runtime compatibility flag for `thread/start|turn/start.serviceTier` speed controls.
@@ -496,10 +497,10 @@ final class CodexService {
     @ObservationIgnored var messagePersistenceDebounceTask: Task<Void, Never>?
     // Coalesces high-frequency assistant deltas before they mutate observed timeline state.
     @ObservationIgnored var pendingAssistantDeltaByStreamID: [String: String] = [:]
-    @ObservationIgnored var pendingAssistantDeltaContextByStreamID: [String: (threadId: String, turnId: String, itemId: String?)] = [:]
+    @ObservationIgnored var pendingAssistantDeltaContextByStreamID: [String: (threadId: String, turnId: String, itemId: String?, assistantPhase: String?)] = [:]
     @ObservationIgnored var pendingAssistantDeltaStreamOrder: [String] = []
     @ObservationIgnored var pendingAssistantDeltaFlushTask: Task<Void, Never>?
-    let assistantDeltaBatchIntervalNanoseconds: UInt64 = 40_000_000
+    let assistantDeltaBatchIntervalNanoseconds: UInt64 = 50_000_000
     // Coalesces multiple invalidateAssistantRevertStates() calls within the same run loop tick into one refresh.
     var coalescedRevertRefreshTask: Task<Void, Never>?
     // Dedupes completion payloads when servers omit turn/item identifiers.
@@ -568,7 +569,13 @@ final class CodexService {
         if let hostCapabilities = gptAccountSnapshot.hostCapabilities {
             return hostCapabilities
         }
-        return preferredTrustedMacRecord == nil ? CodexBridgeHostCapabilities() : .legacyMacOS
+        // Older bridges did not report capabilities; only apply that compatibility
+        // fallback when the remembered host is known to be macOS.
+        guard preferredTrustedMacRecord != nil,
+              bridgeHostPlatform == .macOS else {
+            return CodexBridgeHostCapabilities()
+        }
+        return .legacyMacOS
     }
     var supportsDesktopAppHandoff: Bool {
         bridgeHostCapabilities.desktopHandoff
@@ -603,6 +610,7 @@ final class CodexService {
     var shouldAutoReconnectOnForeground = false
     // Test hook so connection handling can model `.inactive` without waiting for real app lifecycle changes.
     @ObservationIgnored var applicationStateProvider: () -> UIApplication.State = { UIApplication.shared.applicationState }
+    var backgroundTurnGraceExpiredUntilForeground = false
     var secureSession: CodexSecureSession?
     var pendingHandshake: CodexPendingHandshake?
     var phoneIdentityState: CodexPhoneIdentityState
@@ -614,6 +622,7 @@ final class CodexService {
     var aiChangeSetsByID: [String: AIChangeSet] = [:]
     var aiChangeSetIDByTurnID: [String: String] = [:]
     var aiChangeSetIDByAssistantMessageID: [String: String] = [:]
+    @ObservationIgnored var workspaceCheckpointCopyTaskByTurnID: [String: Task<Void, Never>] = [:]
     // Keeps hot-path thread lookups O(1) instead of rescanning the full sidebar list.
     @ObservationIgnored var threadByID: [String: CodexThread] = [:]
     @ObservationIgnored var threadIndexByID: [String: Int] = [:]
@@ -696,6 +705,7 @@ final class CodexService {
     static let pinnedThreadIDsDefaultsKey = "codex.pinnedThreadIDs"
     static let pinnedThreadSnapshotsDefaultsKey = "codex.pinnedThreadSnapshots"
     static let associatedManagedWorktreePathsDefaultsKey = "codex.associatedManagedWorktreePaths"
+    static let turnTerminalStatesDefaultsKey = "codex.turnTerminalStates"
     static let notificationsPromptedDefaultsKey = "codex.notifications.prompted"
     static let keepMacAwakeWhileBridgeRunsDefaultsKey = "codex.keepMacAwakeWhileBridgeRuns"
 
@@ -839,6 +849,16 @@ final class CodexService {
             self.associatedManagedWorktreePathByThreadID = decodedAssociatedManagedWorktreePaths
         } else {
             self.associatedManagedWorktreePathByThreadID = [:]
+        }
+
+        if let savedTurnTerminalStates = defaults.data(forKey: Self.turnTerminalStatesDefaultsKey),
+           let decodedTurnTerminalStates = try? decoder.decode(
+               [String: CodexTurnTerminalState].self,
+               from: savedTurnTerminalStates
+           ) {
+            self.terminalStateByTurnID = decodedTurnTerminalStates
+        } else {
+            self.terminalStateByTurnID = [:]
         }
 
         let savedServiceTier = defaults.string(forKey: Self.selectedServiceTierDefaultsKey)?
@@ -1015,35 +1035,25 @@ final class CodexService {
         hasSavedRelaySession || hasTrustedMacReconnectCandidate
     }
 
-    // Chooses the best relay base URL for display-wake recovery, even when only the trusted Mac record remains.
+    // Chooses the relay base URL only when a saved live session can actually carry a wake request.
     var preferredWakeRelayURL: String? {
         guard !isConnected,
-              secureConnectionState != .rePairRequired else {
+              secureConnectionState != .rePairRequired,
+              hasTrustedReconnectContext else {
             return nil
         }
 
-        let candidates = [
-            normalizedRelayURL,
-            preferredTrustedMacRecord?.relayURL?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
-        ]
-
-        for relayURL in candidates {
-            if let relayURL {
-                return relayURL
-            }
-        }
-
-        return nil
+        return normalizedRelayURL
     }
 
-    // Treat any remembered reconnect candidate as wake-capable; the actual wake path will still validate and fail loudly if needed.
+    // Wake needs a concrete live-session URL; trusted-Mac-only recovery should show Reconnect, not Wake Screen.
     var canWakePreferredMacDisplay: Bool {
         guard !isConnected,
               secureConnectionState != .rePairRequired else {
             return false
         }
 
-        return hasReconnectCandidate
+        return preferredWakeRelayURL != nil
     }
 
     // Separates transport readiness from post-connect hydration so the UI can explain delays honestly.

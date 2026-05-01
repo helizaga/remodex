@@ -33,8 +33,8 @@ const DEFAULT_PAIRING_WAIT_TIMEOUT_MS = 10_000;
 const DEFAULT_PAIRING_WAIT_INTERVAL_MS = 200;
 
 // Runs the bridge inside launchd while keeping QR rendering in the foreground CLI command.
-function runMacOSBridgeService({ env = process.env, platform = process.platform } = {}) {
-  assertDarwinPlatform(platform);
+function runMacOSBridgeService({ env = process.env } = {}) {
+  assertDarwinPlatform();
   const config = readDaemonConfig({ env });
   if (!config?.relayUrl) {
     const message = "No relay URL configured for the macOS bridge service.";
@@ -183,8 +183,6 @@ function printMacOSBridgeServiceStatus(options = {}) {
   const bridgeState = status.bridgeStatus?.state || "unknown";
   const connectionStatus = status.bridgeStatus?.connectionStatus || "unknown";
   const pairingCreatedAt = status.pairingSession?.createdAt || "none";
-  const lastPermanentReconnectReason =
-    status.bridgeStatus?.lastPermanentReconnectReason?.message || "none";
   console.log(`[remodex] Service label: ${status.label}`);
   console.log(`[remodex] Installed: ${status.installed ? "yes" : "no"}`);
   console.log(`[remodex] Launchd loaded: ${status.launchdLoaded ? "yes" : "no"}`);
@@ -192,7 +190,6 @@ function printMacOSBridgeServiceStatus(options = {}) {
   console.log(`[remodex] Bridge state: ${bridgeState}`);
   console.log(`[remodex] Connection: ${connectionStatus}`);
   console.log(`[remodex] Pairing payload: ${pairingCreatedAt}`);
-  console.log(`[remodex] Last permanent reconnect reason: ${lastPermanentReconnectReason}`);
   console.log(`[remodex] Stdout log: ${status.stdoutLogPath}`);
   console.log(`[remodex] Stderr log: ${status.stderrLogPath}`);
 }
@@ -315,10 +312,12 @@ function restartLaunchAgent({
   bootoutLaunchAgent({
     env,
     execFileSyncImpl,
-    plistPath,
     ignoreMissing: true,
   });
   execFileSyncImpl("launchctl", ["bootstrap", launchAgentDomain(env), plistPath], {
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  execFileSyncImpl("launchctl", ["kickstart", "-k", launchAgentLabelDomain(env)], {
     stdio: ["ignore", "ignore", "pipe"],
   });
 }
@@ -326,32 +325,29 @@ function restartLaunchAgent({
 function bootoutLaunchAgent({
   env = process.env,
   execFileSyncImpl = execFileSync,
-  plistPath = resolveLaunchAgentPlistPath({ env }),
   ignoreMissing = false,
 } = {}) {
-  const attempts = [
-    ["bootout", launchAgentDomain(env), plistPath],
-    ["bootout", launchAgentLabelDomain(env)],
+  const bootoutTargets = [
+    // Some macOS setups only fully unload the agent when bootout targets the plist path.
+    [launchAgentDomain(env), resolveLaunchAgentPlistPath({ env })],
+    [launchAgentLabelDomain(env)],
   ];
   let lastError = null;
 
-  for (const [index, args] of attempts.entries()) {
+  for (const targetArgs of bootoutTargets) {
     try {
-      execFileSyncImpl("launchctl", args, { stdio: ["ignore", "ignore", "pipe"] });
+      execFileSyncImpl("launchctl", ["bootout", ...targetArgs], {
+        stdio: ["ignore", "ignore", "pipe"],
+      });
       return;
     } catch (error) {
       lastError = error;
-      if (isMissingLaunchAgentError(error) || (index === 0 && isStaleLaunchAgentPathError(error))) {
-        continue;
-      }
-      break;
     }
   }
 
-  if (ignoreMissing && lastError && isMissingLaunchAgentError(lastError)) {
+  if (ignoreMissing && isMissingLaunchAgentError(lastError)) {
     return;
   }
-
   throw lastError;
 }
 
@@ -438,18 +434,6 @@ function isMissingLaunchAgentError(error) {
     combined.includes("service could not be found") ||
     combined.includes("no such process")
   );
-}
-
-function isStaleLaunchAgentPathError(error) {
-  const combined = [
-    error?.message,
-    error?.stderr?.toString?.("utf8"),
-    error?.stdout?.toString?.("utf8"),
-  ]
-    .filter(Boolean)
-    .join("\n")
-    .toLowerCase();
-  return combined.includes("input/output error");
 }
 
 function escapeXml(value) {

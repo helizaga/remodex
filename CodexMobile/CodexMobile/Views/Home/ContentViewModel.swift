@@ -438,34 +438,35 @@ extension ContentViewModel {
         for error: CodexTrustedSessionResolveError,
         codex: CodexService
     ) -> ReconnectURLResolution {
-        let reconnectFailure = codex.reconnectFailurePresentation(for: error)
-
         switch error {
         case .unsupportedRelay:
             if !codex.hasSavedRelaySession {
+                codex.secureConnectionState = .liveSessionUnresolved
                 codex.connectionRecoveryState = .idle
-                codex.lastErrorMessage = reconnectFailure?.message
+                codex.shouldAutoReconnectOnForeground = false
+                codex.lastErrorMessage = "Trusted reconnect is unavailable from this relay endpoint. Update or check the relay/proxy, then reconnect. Scan a new QR code only if this Mac was reset."
                 return .stop
             }
             return .fallbackToSaved
-        case .macOffline:
+        case .macOffline(let message):
             if codex.hasSavedRelaySession {
                 codex.lastErrorMessage = nil
                 return .fallbackToSaved
             }
             codex.connectionRecoveryState = .idle
-            codex.lastErrorMessage = reconnectFailure?.message
+            codex.lastErrorMessage = message
             return .stop
-        case .rePairRequired:
+        case .rePairRequired(let message):
             codex.connectionRecoveryState = .idle
             codex.shouldAutoReconnectOnForeground = false
-            codex.lastErrorMessage = reconnectFailure?.message
+            codex.lastErrorMessage = message
             return .stop
         case .noTrustedMac:
             return .fallbackToSaved
-        case .invalidResponse, .network:
+        case .invalidResponse(let message), .network(let message):
             if !codex.hasSavedRelaySession {
-                codex.lastErrorMessage = reconnectFailure?.message
+                codex.secureConnectionState = .liveSessionUnresolved
+                codex.lastErrorMessage = message
             }
             return .fallbackToSaved
         }

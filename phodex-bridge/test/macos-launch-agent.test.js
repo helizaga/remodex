@@ -16,6 +16,7 @@ const {
   resetMacOSBridgePairing,
   resolveLaunchAgentPlistPath,
   runMacOSBridgeService,
+  startMacOSBridgeService,
   stopMacOSBridgeService,
 } = require("../src/macos-launch-agent");
 const {
@@ -101,6 +102,52 @@ test("stopMacOSBridgeService tries plist-path bootout before falling back to the
       ],
       ["bootout", `gui/${process.getuid()}/com.remodex.bridge`],
     ]);
+  });
+});
+
+test("startMacOSBridgeService kickstarts the launch agent after bootstrap", () => {
+  withTempDaemonEnv(({ rootDir }) => {
+    const calls = [];
+    const env = {
+      ...process.env,
+      HOME: rootDir,
+      REMODEX_DEVICE_STATE_DIR: rootDir,
+      REMODEX_RELAY: "ws://127.0.0.1:9000/relay",
+    };
+
+    startMacOSBridgeService({
+      env,
+      platform: "darwin",
+      waitForPairing: false,
+      execFileSyncImpl(command, args) {
+        calls.push([command, args]);
+        if (args[0] === "bootout") {
+          const error = new Error("Could not find service");
+          error.stderr = Buffer.from("Could not find service");
+          throw error;
+        }
+      },
+    });
+
+    assert.deepEqual(
+      calls.map(([command, args]) => [command, args[0], args[1], args[2]]),
+      [
+        [
+          "launchctl",
+          "bootout",
+          `gui/${process.getuid()}`,
+          path.join(rootDir, "Library", "LaunchAgents", "com.remodex.bridge.plist"),
+        ],
+        ["launchctl", "bootout", `gui/${process.getuid()}/com.remodex.bridge`, undefined],
+        [
+          "launchctl",
+          "bootstrap",
+          `gui/${process.getuid()}`,
+          path.join(rootDir, "Library", "LaunchAgents", "com.remodex.bridge.plist"),
+        ],
+        ["launchctl", "kickstart", "-k", `gui/${process.getuid()}/com.remodex.bridge`],
+      ]
+    );
   });
 });
 

@@ -1,84 +1,22 @@
+// FILE: bridge.test.js
+// Purpose: Verifies relay watchdog helpers used to recover from stale sleep/wake sockets.
+// Layer: Unit test
+// Exports: node:test suite
+// Depends on: node:test, node:assert/strict, fs, os, path, ../src/bridge
+
 const test = require("node:test");
 const assert = require("node:assert/strict");
-
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const {
   buildHeartbeatBridgeStatus,
   createMacOSBridgeWakeAssertion,
   hasRelayConnectionGoneStale,
-  isActiveRelaySocket,
-  nextRelayReconnectDelayMs,
   persistBridgePreferences,
-  redactedRelayCloseReason,
-  relayCloseDiagnostic,
-  shouldShutdownOnRelayCloseCode,
+  sanitizeLiveGeneratedImageMessageForRelay,
   sanitizeThreadHistoryImagesForRelay,
 } = require("../src/bridge");
-
-test("isActiveRelaySocket only accepts the current relay socket", () => {
-  const currentSocket = { id: "current" };
-  const staleSocket = { id: "stale" };
-
-  assert.equal(isActiveRelaySocket(currentSocket, currentSocket), true);
-  assert.equal(isActiveRelaySocket(currentSocket, staleSocket), false);
-  assert.equal(isActiveRelaySocket(null, staleSocket), false);
-});
-
-test("nextRelayReconnectDelayMs backs off exponentially and caps the delay", () => {
-  assert.equal(nextRelayReconnectDelayMs(1), 1_000);
-  assert.equal(nextRelayReconnectDelayMs(2), 2_000);
-  assert.equal(nextRelayReconnectDelayMs(3), 4_000);
-  assert.equal(nextRelayReconnectDelayMs(6), 30_000);
-  assert.equal(nextRelayReconnectDelayMs(10), 30_000);
-});
-
-test("shouldShutdownOnRelayCloseCode only fails closed for invalid relay sessions", () => {
-  assert.equal(shouldShutdownOnRelayCloseCode(4000), true);
-  assert.equal(shouldShutdownOnRelayCloseCode(4001), true);
-  assert.equal(shouldShutdownOnRelayCloseCode(4005), true);
-  assert.equal(shouldShutdownOnRelayCloseCode(4002), false);
-  assert.equal(shouldShutdownOnRelayCloseCode(1006), false);
-});
-
-test("relayCloseDiagnostic classifies saved-session and permanent reconnect failures", () => {
-  assert.deepEqual(relayCloseDiagnostic(4002), {
-    code: "saved_session_unavailable",
-    message: "The saved session expired or is temporarily unavailable. Retrying...",
-    isPermanent: false,
-  });
-
-  assert.deepEqual(relayCloseDiagnostic(4000), {
-    code: "re_pair_required",
-    message: "This relay pairing is no longer valid. Scan a new QR code to reconnect.",
-    isPermanent: true,
-  });
-
-  assert.deepEqual(relayCloseDiagnostic(4005), {
-    code: "re_pair_required",
-    message:
-      "This saved relay session is no longer trusted by the Mac. Scan a new QR code to reconnect.",
-    isPermanent: true,
-  });
-
-  assert.deepEqual(relayCloseDiagnostic(4010, "relay proxy reset"), {
-    code: "relay_temporarily_unavailable",
-    message: "The relay connection closed unexpectedly: [redacted]",
-    isPermanent: false,
-  });
-
-  assert.deepEqual(relayCloseDiagnostic(4010), {
-    code: "relay_temporarily_unavailable",
-    message: "The relay or network is temporarily unavailable.",
-    isPermanent: false,
-  });
-});
-
-test("redactedRelayCloseReason hides non-empty relay close reasons from logs", () => {
-  assert.equal(redactedRelayCloseReason("sessionId=abc123"), "[redacted]");
-  assert.equal(redactedRelayCloseReason("   relay rejected   "), "[redacted]");
-  assert.equal(redactedRelayCloseReason(""), "");
-  assert.equal(redactedRelayCloseReason("   "), "");
-  assert.equal(redactedRelayCloseReason(null), "");
-});
 
 test("hasRelayConnectionGoneStale returns true once the relay silence crosses the timeout", () => {
   assert.equal(
@@ -99,6 +37,21 @@ test("hasRelayConnectionGoneStale returns false for fresh or missing activity ti
     false
   );
   assert.equal(hasRelayConnectionGoneStale(Number.NaN), false);
+});
+
+test("hasRelayConnectionGoneStale default threshold tolerates a full quiet minute", () => {
+  assert.equal(
+    hasRelayConnectionGoneStale(1_000, {
+      now: 60_999,
+    }),
+    false
+  );
+  assert.equal(
+    hasRelayConnectionGoneStale(1_000, {
+      now: 71_000,
+    }),
+    true
+  );
 });
 
 test("buildHeartbeatBridgeStatus downgrades stale connected snapshots", () => {
@@ -230,6 +183,275 @@ test("sanitizeThreadHistoryImagesForRelay replaces input_image history data URLs
     type: "input_image",
     url: "remodex://history-image-elided",
   });
+});
+
+test("sanitizeThreadHistoryImagesForRelay annotates generated image calls with local paths", () => {
+  const rawMessage = JSON.stringify({
+    id: "req-thread-generated-image",
+    result: {
+      thread: {
+        id: "thread-generated-image",
+        turns: [
+          {
+            id: "turn-1",
+            items: [
+              {
+                id: "ig_123",
+                type: "image_generation_call",
+                status: "generating",
+                result: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+              },
+            ],
+          },
+        ],
+      },
+    },
+  });
+
+  const sanitized = JSON.parse(sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/read"));
+  const item = sanitized.result.thread.turns[0].items[0];
+
+  assert.equal(
+    item.saved_path,
+    path.join(os.homedir(), ".codex", "generated_images", "thread-generated-image", "ig_123.png")
+  );
+  assert.equal(item.result, undefined);
+  assert.equal(item.result_elided_for_relay, true);
+});
+
+test("sanitizeThreadHistoryImagesForRelay annotates image generation items with local paths", () => {
+  const rawMessage = JSON.stringify({
+    id: "req-thread-image-generation",
+    result: {
+      thread: {
+        id: "thread-image-generation",
+        turns: [
+          {
+            id: "turn-1",
+            items: [
+              {
+                id: "ig_generation",
+                type: "image_generation",
+                result: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+              },
+            ],
+          },
+        ],
+      },
+    },
+  });
+
+  const sanitized = JSON.parse(sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/read"));
+  const item = sanitized.result.thread.turns[0].items[0];
+
+  assert.equal(
+    item.saved_path,
+    path.join(
+      os.homedir(),
+      ".codex",
+      "generated_images",
+      "thread-image-generation",
+      "ig_generation.png"
+    )
+  );
+  assert.equal(item.result, undefined);
+  assert.equal(item.result_elided_for_relay, true);
+});
+
+test("sanitizeThreadHistoryImagesForRelay annotates image end history with local paths", () => {
+  const rawMessage = JSON.stringify({
+    id: "req-thread-generated-image-end",
+    result: {
+      thread: {
+        id: "thread-generated-image-end",
+        turns: [
+          {
+            id: "turn-1",
+            items: [
+              {
+                id: "turn-1",
+                type: "image_generation_end",
+                call_id: "ig_end",
+                result: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+              },
+            ],
+          },
+        ],
+      },
+    },
+  });
+
+  const sanitized = JSON.parse(sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/read"));
+  const item = sanitized.result.thread.turns[0].items[0];
+
+  assert.equal(
+    item.saved_path,
+    path.join(
+      os.homedir(),
+      ".codex",
+      "generated_images",
+      "thread-generated-image-end",
+      "ig_end.png"
+    )
+  );
+  assert.equal(item.result, undefined);
+  assert.equal(item.result_elided_for_relay, true);
+});
+
+test("sanitizeThreadHistoryImagesForRelay uses CODEX_HOME for generated image fallbacks", (t) => {
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "remodex-codex-home-"));
+  const previousCodexHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = codexHome;
+  t.after(() => {
+    if (previousCodexHome == null) {
+      delete process.env.CODEX_HOME;
+    } else {
+      process.env.CODEX_HOME = previousCodexHome;
+    }
+    fs.rmSync(codexHome, { recursive: true, force: true });
+  });
+
+  const rawMessage = JSON.stringify({
+    id: "req-thread-generated-image-codex-home",
+    result: {
+      thread: {
+        id: "thread-generated-image-home",
+        turns: [
+          {
+            id: "turn-1",
+            items: [
+              {
+                id: "ig_home",
+                type: "imageView",
+                result: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+              },
+            ],
+          },
+        ],
+      },
+    },
+  });
+
+  const sanitized = JSON.parse(sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/read"));
+  const item = sanitized.result.thread.turns[0].items[0];
+
+  assert.equal(
+    item.saved_path,
+    path.join(codexHome, "generated_images", "thread-generated-image-home", "ig_home.png")
+  );
+  assert.equal(item.result, undefined);
+  assert.equal(item.result_elided_for_relay, true);
+});
+
+test("sanitizeThreadHistoryImagesForRelay preserves generated image file_path without saved_path", () => {
+  const rawMessage = JSON.stringify({
+    id: "req-thread-generated-image-file-path",
+    result: {
+      thread: {
+        id: "thread-generated-image",
+        turns: [
+          {
+            id: "turn-1",
+            items: [
+              {
+                id: "ig_123",
+                type: "image_generation_call",
+                file_path: "/tmp/real-generated-image.png",
+                status: "completed",
+              },
+            ],
+          },
+        ],
+      },
+    },
+  });
+
+  const sanitized = JSON.parse(sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/read"));
+  const item = sanitized.result.thread.turns[0].items[0];
+
+  assert.equal(item.file_path, "/tmp/real-generated-image.png");
+  assert.equal(item.saved_path, undefined);
+});
+
+test("sanitizeLiveGeneratedImageMessageForRelay annotates completed image items", () => {
+  const rawMessage = JSON.stringify({
+    method: "item/completed",
+    params: {
+      threadId: "thread-live-image",
+      turnId: "turn-1",
+      item: {
+        id: "ig_live",
+        type: "image_generation_call",
+        result: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+      },
+    },
+  });
+
+  const sanitized = JSON.parse(sanitizeLiveGeneratedImageMessageForRelay(rawMessage));
+  const item = sanitized.params.item;
+
+  assert.equal(
+    item.saved_path,
+    path.join(os.homedir(), ".codex", "generated_images", "thread-live-image", "ig_live.png")
+  );
+  assert.equal(item.result, undefined);
+  assert.equal(item.result_elided_for_relay, true);
+});
+
+test("sanitizeLiveGeneratedImageMessageForRelay elides nested completed image items", () => {
+  const rawMessage = JSON.stringify({
+    method: "item/completed",
+    params: {
+      threadId: "thread-live-nested-image",
+      turnId: "turn-1",
+      event: {
+        type: "item_completed",
+        item: {
+          id: "ig_nested",
+          type: "image_generation",
+          result: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+        },
+      },
+    },
+  });
+
+  const sanitized = JSON.parse(sanitizeLiveGeneratedImageMessageForRelay(rawMessage));
+  const item = sanitized.params.event.item;
+
+  assert.equal(
+    item.saved_path,
+    path.join(
+      os.homedir(),
+      ".codex",
+      "generated_images",
+      "thread-live-nested-image",
+      "ig_nested.png"
+    )
+  );
+  assert.equal(item.result, undefined);
+  assert.equal(item.result_elided_for_relay, true);
+});
+
+test("sanitizeLiveGeneratedImageMessageForRelay uses call id for image end events", () => {
+  const rawMessage = JSON.stringify({
+    method: "image_generation_end",
+    params: {
+      type: "image_generation_end",
+      threadId: "thread-live-event",
+      id: "turn-1",
+      call_id: "ig_event",
+      result: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+    },
+  });
+
+  const sanitized = JSON.parse(sanitizeLiveGeneratedImageMessageForRelay(rawMessage));
+
+  assert.equal(
+    sanitized.params.saved_path,
+    path.join(os.homedir(), ".codex", "generated_images", "thread-live-event", "ig_event.png")
+  );
+  assert.equal(sanitized.params.result, undefined);
+  assert.equal(sanitized.params.result_elided_for_relay, true);
 });
 
 test("sanitizeThreadHistoryImagesForRelay leaves unrelated RPC payloads unchanged", () => {
@@ -414,135 +636,7 @@ test("sanitizeThreadHistoryImagesForRelay strips bulky compaction replacement hi
   });
 });
 
-test("sanitizeThreadHistoryImagesForRelay recursively elides inline image payload fields outside content arrays", () => {
-  const rawMessage = JSON.stringify({
-    id: "req-thread-read-recursive",
-    result: {
-      thread: {
-        id: "thread-recursive-images",
-        turns: [
-          {
-            id: "turn-1",
-            items: [
-              {
-                id: "item-recursive-image",
-                type: "user_message",
-                attachment: {
-                  sourceURL: "data:image/png;base64,AAAA",
-                  payloadDataURL: "data:image/png;base64,BBBB",
-                },
-              },
-            ],
-          },
-        ],
-      },
-    },
-  });
-
-  const sanitized = JSON.parse(sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/read"));
-  const attachment = sanitized.result.thread.turns[0].items[0].attachment;
-
-  assert.deepEqual(attachment, {
-    sourceURL: "remodex://history-image-elided",
-  });
-});
-
-test("sanitizeThreadHistoryImagesForRelay strips attachment previews once the sanitized thread is still too large", () => {
-  const rawMessage = JSON.stringify({
-    id: "req-thread-read-soft-cap",
-    result: {
-      thread: {
-        id: "thread-soft-cap",
-        turns: [
-          {
-            id: "turn-1",
-            items: [
-              {
-                id: "item-attachment-preview",
-                type: "user_message",
-                attachment: {
-                  thumbnailBase64JPEG: "A".repeat(10_000),
-                  sourceURL: "http://127.0.0.1/image.png",
-                },
-              },
-            ],
-          },
-        ],
-      },
-    },
-  });
-
-  const sanitized = JSON.parse(
-    sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/read", {
-      softCapBytes: 1_000,
-    })
-  );
-  const attachment = sanitized.result.thread.turns[0].items[0].attachment;
-
-  assert.deepEqual(attachment, {
-    thumbnailBase64JPEG: "",
-    sourceURL: "http://127.0.0.1/image.png",
-  });
-});
-
-test("sanitizeThreadHistoryImagesForRelay drops oldest turns once sanitizing still exceeds the relay budget", () => {
-  const oversizedText = "x".repeat(4_096);
-  const rawMessage = JSON.stringify({
-    id: "req-thread-read-truncated",
-    result: {
-      thread: {
-        id: "thread-large-history",
-        turns: [
-          {
-            id: "turn-1",
-            items: [
-              {
-                id: "item-1",
-                type: "assistant_message",
-                text: oversizedText,
-              },
-            ],
-          },
-          {
-            id: "turn-2",
-            items: [
-              {
-                id: "item-2",
-                type: "assistant_message",
-                text: oversizedText,
-              },
-            ],
-          },
-          {
-            id: "turn-3",
-            items: [
-              {
-                id: "item-3",
-                type: "assistant_message",
-                text: "latest",
-              },
-            ],
-          },
-        ],
-      },
-    },
-  });
-
-  const sanitized = JSON.parse(
-    sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/read", {
-      softCapBytes: 5_000,
-    })
-  );
-
-  assert.equal(sanitized.result.thread.relayHistoryTruncated, true);
-  assert.equal(sanitized.result.thread.relayHistoryDroppedTurns, 1);
-  assert.deepEqual(
-    sanitized.result.thread.turns.map((turn) => turn.id),
-    ["turn-2", "turn-3"]
-  );
-});
-
-test("sanitizeThreadHistoryImagesForRelay trims oversized history down to the newest turn tail", () => {
+test("sanitizeThreadHistoryImagesForRelay compacts oversized history before the newest turn tail", () => {
   const largeText = "A".repeat(4 * 1024 * 1024);
   const rawMessage = JSON.stringify({
     id: "req-thread-tail",
@@ -578,9 +672,49 @@ test("sanitizeThreadHistoryImagesForRelay trims oversized history down to the ne
   const sanitized = JSON.parse(sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/read"));
 
   assert.equal(sanitized.result.thread.historyTailTruncatedForRelay, true);
+  assert.equal(sanitized.result.thread.remodexHistoryCompacted, true);
+  assert.equal(sanitized.result.thread.remodexOmittedTurnCount, 1);
+  assert.equal(sanitized.result.thread.remodexKeptTurnCount, 1);
   assert.deepEqual(
     sanitized.result.thread.turns.map((turn) => turn.id),
-    ["turn-new"]
+    ["remodex-history-compacted-turn-old", "turn-new"]
+  );
+  assert.equal(
+    sanitized.result.thread.turns[0].items[0].text.includes("Older turns omitted: 1"),
+    true
+  );
+});
+
+test("sanitizeThreadHistoryImagesForRelay keeps the newest forty turns when compacting", () => {
+  const largeText = "A".repeat(900 * 1024);
+  const turns = Array.from({ length: 45 }, (_, index) => ({
+    id: `turn-${index + 1}`,
+    items: [
+      {
+        id: `item-${index + 1}`,
+        type: "assistant_message",
+        text: index < 5 ? largeText : `reply ${index + 1}`,
+      },
+    ],
+  }));
+  const rawMessage = JSON.stringify({
+    id: "req-thread-recent-window",
+    result: {
+      thread: {
+        id: "thread-recent-window",
+        turns,
+      },
+    },
+  });
+
+  const sanitized = JSON.parse(sanitizeThreadHistoryImagesForRelay(rawMessage, "thread/read"));
+
+  assert.equal(sanitized.result.thread.remodexHistoryCompacted, true);
+  assert.equal(sanitized.result.thread.remodexOmittedTurnCount, 5);
+  assert.equal(sanitized.result.thread.remodexKeptTurnCount, 40);
+  assert.deepEqual(
+    sanitized.result.thread.turns.map((turn) => turn.id),
+    ["remodex-history-compacted-turn-1", ...turns.slice(5).map((turn) => turn.id)]
   );
 });
 
