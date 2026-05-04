@@ -18,8 +18,27 @@ const TRUSTED_SESSION_RESOLVE_SKEW_MS = 90_000;
 const SHORT_PAIRING_CODE_MIN_LENGTH = 8;
 const SHORT_PAIRING_CODE_MAX_LENGTH = 12;
 
-// In-memory session registry for one Mac host and one live iPhone client per session.
+// In-memory session registry for one Mac host and one live mobile client per session.
 const sessions = new Map();
+const relayMetrics = {
+  startedAt: Date.now(),
+  acceptedConnections: 0,
+  closedConnections: 0,
+  heartbeatTerminations: 0,
+  macMessagesRelayed: 0,
+  mobileMessagesRelayed: 0,
+  mobileMessagesRejectedDuringMacAbsence: 0,
+};
+
+function normalizeRelayRole(headerValue) {
+  const raw = readHeaderString(headerValue);
+  return typeof raw === "string" ? raw.trim().toLowerCase() : "";
+}
+
+function isRelayMobileRole(role) {
+  return role === "iphone" || role === "android";
+}
+
 const liveSessionsByMacDeviceId = new Map();
 const liveSessionsByPairingCode = new Map();
 const usedResolveNonces = new Map();
@@ -36,6 +55,11 @@ function setupRelay(
   const heartbeat = setInterval(() => {
     for (const ws of wss.clients) {
       if (ws._relayAlive === false) {
+        relayMetrics.heartbeatTerminations += 1;
+        console.warn(
+          `[relay] heartbeat terminated ${ws._relayRole || "unknown"} ` +
+            `${relaySessionLogLabel(ws._relaySessionId || "")}`
+        );
         ws.terminate();
         continue;
       }
@@ -51,7 +75,10 @@ function setupRelay(
     const urlPath = req.url || "";
     const match = urlPath.match(/^\/relay\/([^/?]+)/);
     const sessionId = match?.[1];
-    const role = req.headers["x-role"];
+    const role = normalizeRelayRole(req.headers["x-role"]);
+    relayMetrics.acceptedConnections += 1;
+    ws._relaySessionId = sessionId;
+    ws._relayRole = role;
     const incomingNotificationSecret =
       role === "mac" ? readHeaderString(req.headers["x-notification-secret"]) : null;
     const incomingMacRegistration =
@@ -59,7 +86,7 @@ function setupRelay(
     const incomingIphoneIdentity =
       role === "iphone" ? readIphoneAdmissionHeaders(req.headers) : null;
 
-    if (!sessionId || (role !== "mac" && role !== "iphone")) {
+    if (!sessionId || (role !== "mac" && !isRelayMobileRole(role))) {
       ws.close(4000, "Missing sessionId or invalid x-role header");
       return;
     }
@@ -75,7 +102,7 @@ function setupRelay(
     });
 
     // Only the Mac host is allowed to create a fresh session room.
-    if (role === "iphone" && !sessions.has(sessionId)) {
+    if (isRelayMobileRole(role) && !sessions.has(sessionId)) {
       ws.close(CLOSE_CODE_SESSION_UNAVAILABLE, "Mac session not available");
       return;
     }
@@ -94,7 +121,7 @@ function setupRelay(
     const session = sessions.get(sessionId);
     pruneSessionState(session, sessionId);
 
-    if (role === "iphone" && !canAcceptIphoneConnection(session, incomingIphoneIdentity)) {
+    if (isRelayMobileRole(role) && !canAcceptMobileConnection(session, incomingIphoneIdentity)) {
       ws.close(CLOSE_CODE_SESSION_UNAVAILABLE, "Mac session not available");
       return;
     }
@@ -132,7 +159,7 @@ function setupRelay(
       registerLiveMacSession(session.macRegistration);
       console.log(`[relay] Mac connected -> ${relaySessionLogLabel(sessionId)}`);
     } else {
-      // Keep one live iPhone RPC client per session to avoid competing sockets.
+      // Keep one live mobile RPC client per session to avoid competing sockets.
       for (const existingClient of session.clients) {
         if (existingClient === ws) {
           continue;
@@ -141,14 +168,19 @@ function setupRelay(
           existingClient.readyState === WebSocket.OPEN ||
           existingClient.readyState === WebSocket.CONNECTING
         ) {
-          existingClient.close(CLOSE_CODE_IPHONE_REPLACED, "Replaced by newer iPhone connection");
+          existingClient.close(
+            CLOSE_CODE_IPHONE_REPLACED,
+            role === "iphone"
+              ? "Replaced by newer iPhone connection"
+              : "Replaced by newer mobile connection"
+          );
         }
         session.clients.delete(existingClient);
       }
 
       session.clients.add(ws);
       console.log(
-        `[relay] iPhone connected -> ${relaySessionLogLabel(sessionId)} ` +
+        `[relay] Mobile connected (${role}) -> ${relaySessionLogLabel(sessionId)} ` +
           `(${session.clients.size} client(s))`
       );
     }
@@ -162,20 +194,24 @@ function setupRelay(
       if (role === "mac") {
         for (const client of session.clients) {
           if (client.readyState === WebSocket.OPEN) {
+            relayMetrics.macMessagesRelayed += 1;
             client.send(msg);
           }
         }
       } else if (session.mac?.readyState === WebSocket.OPEN) {
+        relayMetrics.mobileMessagesRelayed += 1;
         session.mac.send(msg);
       } else {
         // The relay cannot prove a buffered request really reached the bridge after
         // a reconnect, so fail fast with an explicit retry-required close instead
         // of silently dropping queued client work during a later flush.
+        relayMetrics.mobileMessagesRejectedDuringMacAbsence += 1;
         ws.close(CLOSE_CODE_MAC_ABSENCE_BUFFER_FULL, "Mac temporarily unavailable");
       }
     });
 
     ws.on("close", () => {
+      relayMetrics.closedConnections += 1;
       if (role === "mac") {
         if (session.mac === ws) {
           session.mac = null;
@@ -194,7 +230,7 @@ function setupRelay(
       } else {
         session.clients.delete(ws);
         console.log(
-          `[relay] iPhone disconnected -> ${relaySessionLogLabel(sessionId)} ` +
+          `[relay] Mobile disconnected (${role}) -> ${relaySessionLogLabel(sessionId)} ` +
             `(${session.clients.size} remaining)`
         );
       }
@@ -274,7 +310,7 @@ function clearMacAbsenceTimer(session, { clearTimeoutFn = clearTimeout } = {}) {
   session.macAbsenceTimer = null;
 }
 
-function canAcceptIphoneConnection(session, iphoneAdmission) {
+function canAcceptMobileConnection(session, iphoneAdmission) {
   if (!session) {
     return false;
   }
@@ -290,6 +326,10 @@ function canAcceptIphoneConnection(session, iphoneAdmission) {
 
   if (iphoneAdmission?.requestedHandshakeMode === "qr_bootstrap") {
     return true;
+  }
+
+  if (!iphoneAdmission && session.macRegistration?.trustedPhoneIdentity) {
+    return false;
   }
 
   return matchesTrustedIphoneIdentity(session.macRegistration, iphoneAdmission?.identity);
@@ -496,6 +536,11 @@ function getRelayStats() {
 
   let totalClients = 0;
   let sessionsWithMac = 0;
+  let sessionsWithOpenMac = 0;
+  let sessionsWithStaleMac = 0;
+  let sessionsWithClients = 0;
+  let cleanupPending = 0;
+  let macAbsencePending = 0;
   let activeSessions = 0;
 
   for (const session of sessions.values()) {
@@ -507,16 +552,42 @@ function getRelayStats() {
 
     activeSessions += 1;
     totalClients += clientCount;
+    if (clientCount > 0) {
+      sessionsWithClients += 1;
+    }
     if (hasMac) {
       sessionsWithMac += 1;
+      if (session.mac.readyState === WebSocket.OPEN) {
+        sessionsWithOpenMac += 1;
+      } else {
+        sessionsWithStaleMac += 1;
+      }
+    }
+    if (session.cleanupTimer) {
+      cleanupPending += 1;
+    }
+    if (session.macAbsenceTimer) {
+      macAbsencePending += 1;
     }
   }
 
   return {
     activeSessions,
     sessionsWithMac,
+    sessionsWithOpenMac,
+    sessionsWithStaleMac,
+    sessionsWithClients,
     totalClients,
     pairingCodes: liveSessionsByPairingCode.size,
+    cleanupPending,
+    macAbsencePending,
+    uptimeSeconds: Math.round((Date.now() - relayMetrics.startedAt) / 1000),
+    acceptedConnections: relayMetrics.acceptedConnections,
+    closedConnections: relayMetrics.closedConnections,
+    heartbeatTerminations: relayMetrics.heartbeatTerminations,
+    macMessagesRelayed: relayMetrics.macMessagesRelayed,
+    mobileMessagesRelayed: relayMetrics.mobileMessagesRelayed,
+    mobileMessagesRejectedDuringMacAbsence: relayMetrics.mobileMessagesRejectedDuringMacAbsence,
   };
 }
 

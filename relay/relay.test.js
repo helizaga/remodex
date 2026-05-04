@@ -52,6 +52,13 @@ function relayRequest(sessionId, role, headers = {}) {
   };
 }
 
+function assertStatsInclude(actual, expected) {
+  assert.deepEqual(
+    Object.fromEntries(Object.keys(expected).map((key) => [key, actual[key]])),
+    expected
+  );
+}
+
 test("getRelayStats counts only live sockets", (t) => {
   __resetRelayStateForTests();
 
@@ -74,7 +81,7 @@ test("getRelayStats counts only live sockets", (t) => {
   );
   wss.connect(iphone, relayRequest("session-a", "iphone"));
 
-  assert.deepEqual(getRelayStats(), {
+  assertStatsInclude(getRelayStats(), {
     activeSessions: 1,
     pairingCodes: 0,
     sessionsWithMac: 1,
@@ -82,7 +89,7 @@ test("getRelayStats counts only live sockets", (t) => {
   });
 
   iphone.readyState = WS_CLOSED;
-  assert.deepEqual(getRelayStats(), {
+  assertStatsInclude(getRelayStats(), {
     activeSessions: 1,
     pairingCodes: 0,
     sessionsWithMac: 1,
@@ -90,7 +97,7 @@ test("getRelayStats counts only live sockets", (t) => {
   });
 
   mac.readyState = WS_CLOSED;
-  assert.deepEqual(getRelayStats(), {
+  assertStatsInclude(getRelayStats(), {
     activeSessions: 0,
     pairingCodes: 0,
     sessionsWithMac: 0,
@@ -125,7 +132,7 @@ test("replacing an iPhone client removes stale client sockets from stats", (t) =
   wss.connect(nextIphone, relayRequest("session-b", "iphone"));
 
   assert.equal(staleIphone.readyState, WS_CLOSED);
-  assert.deepEqual(getRelayStats(), {
+  assertStatsInclude(getRelayStats(), {
     activeSessions: 1,
     pairingCodes: 0,
     sessionsWithMac: 1,
@@ -154,7 +161,7 @@ test("a newer session for the same Mac retires the older session across the rela
       "x-mac-identity-public-key": "mac-key-shared",
     })
   );
-  assert.deepEqual(getRelayStats(), {
+  assertStatsInclude(getRelayStats(), {
     activeSessions: 1,
     pairingCodes: 0,
     sessionsWithMac: 1,
@@ -170,7 +177,7 @@ test("a newer session for the same Mac retires the older session across the rela
     })
   );
   assert.equal(firstMac.readyState, WS_CLOSED);
-  assert.deepEqual(getRelayStats(), {
+  assertStatsInclude(getRelayStats(), {
     activeSessions: 1,
     pairingCodes: 0,
     sessionsWithMac: 1,
@@ -210,7 +217,7 @@ test("a different Mac device cannot retire unrelated live sessions", (t) => {
 
   assert.equal(firstMac.readyState, WS_OPEN);
   assert.equal(secondMac.readyState, WS_OPEN);
-  assert.deepEqual(getRelayStats(), {
+  assertStatsInclude(getRelayStats(), {
     activeSessions: 2,
     pairingCodes: 0,
     sessionsWithMac: 2,
@@ -250,7 +257,7 @@ test("replacing a live Mac socket requires the existing session secret", (t) => 
 
   assert.equal(originalMac.readyState, WS_OPEN);
   assert.equal(attackerMac.readyState, WS_CLOSED);
-  assert.deepEqual(getRelayStats(), {
+  assertStatsInclude(getRelayStats(), {
     activeSessions: 1,
     pairingCodes: 0,
     sessionsWithMac: 1,

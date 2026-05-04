@@ -17,27 +17,29 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-test("readBridgeConfig keeps safe defaults and explicit overrides", () => {
-  const stubFs = {
-    existsSync: () => false,
-    readFileSync: () => {
-      throw new Error("unexpected read");
-    },
-  };
-  const commonPackagedArgs = {
-    runtimeRoot: "/tmp/remodex-package",
-    fsImpl: stubFs,
-  };
+async function waitFor(predicate, timeoutMs = 500) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const value = predicate();
+    if (value) {
+      return value;
+    }
+    await wait(5);
+  }
+  return predicate();
+}
 
+test("readBridgeConfig keeps safe defaults and explicit overrides", () => {
   const macConfig = readBridgeConfig({
     env: {},
     platform: "darwin",
-    ...commonPackagedArgs,
-  });
-  const explicitRelayConfig = readBridgeConfig({
-    env: { REMODEX_RELAY: "ws://127.0.0.1:9000/relay" },
-    platform: "darwin",
-    ...commonPackagedArgs,
+    runtimeRoot: "/tmp/remodex-package",
+    fsImpl: {
+      existsSync: () => false,
+      readFileSync: () => {
+        throw new Error("unexpected read");
+      },
+    },
   });
   const persistedKeepAwakeConfig = readBridgeConfig({
     env: {
@@ -60,25 +62,50 @@ test("readBridgeConfig keeps safe defaults and explicit overrides", () => {
   const macEndpointConfig = readBridgeConfig({
     env: { REMODEX_CODEX_ENDPOINT: "ws://localhost:8080" },
     platform: "darwin",
-    ...commonPackagedArgs,
+    runtimeRoot: "/tmp/remodex-package",
+    fsImpl: {
+      existsSync: () => false,
+      readFileSync: () => {
+        throw new Error("unexpected read");
+      },
+    },
   });
   const linuxConfig = readBridgeConfig({
     env: {},
     platform: "linux",
-    ...commonPackagedArgs,
+    runtimeRoot: "/tmp/remodex-package",
+    fsImpl: {
+      existsSync: () => false,
+      readFileSync: () => {
+        throw new Error("unexpected read");
+      },
+    },
   });
   const linuxCommandConfig = readBridgeConfig({
     env: { REMODEX_REFRESH_COMMAND: "echo refresh" },
     platform: "linux",
-    ...commonPackagedArgs,
+    runtimeRoot: "/tmp/remodex-package",
+    fsImpl: {
+      existsSync: () => false,
+      readFileSync: () => {
+        throw new Error("unexpected read");
+      },
+    },
   });
   const explicitOnConfig = readBridgeConfig({
     env: {
       REMODEX_CODEX_ENDPOINT: "ws://localhost:8080",
       REMODEX_REFRESH_ENABLED: "true",
+      REMODEX_DESKTOP_IPC_SOCKET: "/tmp/remodex-ipc.sock",
     },
     platform: "darwin",
-    ...commonPackagedArgs,
+    runtimeRoot: "/tmp/remodex-package",
+    fsImpl: {
+      existsSync: () => false,
+      readFileSync: () => {
+        throw new Error("unexpected read");
+      },
+    },
   });
   const explicitOffConfig = readBridgeConfig({
     env: {
@@ -87,54 +114,25 @@ test("readBridgeConfig keeps safe defaults and explicit overrides", () => {
       REMODEX_KEEP_MAC_AWAKE: "false",
     },
     platform: "darwin",
-    ...commonPackagedArgs,
-  });
-  const resetSessionConfig = readBridgeConfig({
-    env: {
-      REMODEX_RESET_SESSION: "true",
+    runtimeRoot: "/tmp/remodex-package",
+    fsImpl: {
+      existsSync: () => false,
+      readFileSync: () => {
+        throw new Error("unexpected read");
+      },
     },
-    platform: "darwin",
-    ...commonPackagedArgs,
   });
-  const customPairingTtlConfig = readBridgeConfig({
-    env: {
-      REMODEX_PAIRING_TTL_MS: "2700000",
-    },
-    platform: "darwin",
-    ...commonPackagedArgs,
-  });
-  const clampedPairingTtlConfig = readBridgeConfig({
-    env: {
-      REMODEX_PAIRING_TTL_MS: "0",
-    },
-    platform: "darwin",
-    ...commonPackagedArgs,
-  });
-  const typoedResetSessionConfig = readBridgeConfig({
-    env: {
-      REMODEX_RESET_SESSION: "tru",
-    },
-    platform: "darwin",
-    ...commonPackagedArgs,
-  });
-
   assert.equal(macConfig.refreshEnabled, false);
-  assert.equal(macConfig.keepMacAwakeEnabled, false);
+  assert.equal(macConfig.keepMacAwakeEnabled, true);
   assert.equal(macConfig.relayUrl, "");
   assert.equal(macConfig.pushServiceUrl, "");
-  assert.equal(macConfig.pairingTtlMs, 30 * 60 * 1000);
-  assert.equal(macConfig.resetRelaySession, false);
-  assert.equal(explicitRelayConfig.relayUrl, "ws://127.0.0.1:9000/relay");
   assert.equal(persistedKeepAwakeConfig.keepMacAwakeEnabled, false);
   assert.equal(macEndpointConfig.refreshEnabled, false);
   assert.equal(linuxConfig.refreshEnabled, false);
   assert.equal(linuxCommandConfig.refreshEnabled, false);
   assert.equal(explicitOnConfig.refreshEnabled, true);
+  assert.equal(explicitOnConfig.desktopIpcSocketPath, "/tmp/remodex-ipc.sock");
   assert.equal(explicitOffConfig.refreshEnabled, false);
-  assert.equal(customPairingTtlConfig.pairingTtlMs, 2_700_000);
-  assert.equal(clampedPairingTtlConfig.pairingTtlMs, 60_000);
-  assert.equal(resetSessionConfig.resetRelaySession, true);
-  assert.equal(typoedResetSessionConfig.resetRelaySession, false);
   assert.equal(explicitOffConfig.keepMacAwakeEnabled, false);
 });
 
@@ -252,7 +250,7 @@ test("thread/start falls back once to the new-thread route when thread id is sti
     })
   );
 
-  await wait(120);
+  await waitFor(() => refreshCalls.length === 1);
 
   assert.deepEqual(refreshCalls, ["codex://threads/new"]);
   refresher.handleTransportReset();

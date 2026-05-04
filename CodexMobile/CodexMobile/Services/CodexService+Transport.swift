@@ -130,7 +130,13 @@ extension CodexService {
     }
 
     // Sends an RPC request and waits for the matching response by request id.
-    func sendRequest(method: String, params: JSONValue?) async throws -> RPCMessage {
+    // Optional per-call timeout is reserved for non-critical reads that can fail open.
+    func sendRequest(
+        method: String,
+        params: JSONValue?,
+        timeoutNanoseconds: UInt64? = nil,
+        timeoutMessage: String? = nil
+    ) async throws -> RPCMessage {
         if let requestTransportOverride {
             return try await requestTransportOverride(method, params)
         }
@@ -156,38 +162,67 @@ extension CodexService {
             )
         }
 
-        return try await withCheckedThrowingContinuation { continuation in
-            pendingRequests[requestKey] = continuation
-            let timeoutTask = Task { @MainActor [weak self] in
-                try? await Task.sleep(nanoseconds: codexRPCRequestTimeoutNanoseconds)
+        try Task.checkCancellation()
+
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                pendingRequests[requestKey] = continuation
+                scheduleRequestTimeoutIfNeeded(
+                    requestKey: requestKey,
+                    method: method,
+                    timeoutNanoseconds: timeoutNanoseconds,
+                    timeoutMessage: timeoutMessage
+                )
+
+                Task {
+                    do {
+                        try await sendMessage(request)
+                    } catch {
+                        if shouldTreatSendFailureAsDisconnect(error) {
+                            handleReceiveError(error)
+                            return
+                        }
+
+                        // Avoid double-resume if the request was already completed
+                        // (for example by a disconnect race that fails all pending requests).
+                        if let pendingContinuation = pendingRequests.removeValue(forKey: requestKey) {
+                            pendingContinuation.resume(throwing: error)
+                        }
+                    }
+                }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
                 guard let self,
-                      let pendingContinuation = self.pendingRequests.removeValue(forKey: requestKey) else {
+                      let continuation = self.pendingRequests.removeValue(forKey: requestKey) else {
                     return
                 }
-                pendingContinuation.resume(
-                    throwing: CodexServiceError.invalidInput(
-                        "Request timed out after 15s while waiting for \(method)."
-                    )
-                )
+                continuation.resume(throwing: CancellationError())
             }
+        }
+    }
 
-            Task {
-                do {
-                    try await sendMessage(request)
-                } catch {
-                    timeoutTask.cancel()
-                    if shouldTreatSendFailureAsDisconnect(error) {
-                        handleReceiveError(error)
-                        return
-                    }
+    // Clears a still-pending request after the caller's timeout so late responses are ignored safely.
+    func scheduleRequestTimeoutIfNeeded(
+        requestKey: String,
+        method: String,
+        timeoutNanoseconds: UInt64?,
+        timeoutMessage: String?
+    ) {
+        guard let timeoutNanoseconds, timeoutNanoseconds > 0 else {
+            return
+        }
 
-                    // Avoid double-resume if the request was already completed
-                    // (for example by a disconnect race that fails all pending requests).
-                    if let pendingContinuation = pendingRequests.removeValue(forKey: requestKey) {
-                        pendingContinuation.resume(throwing: error)
-                    }
-                }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+            guard let self,
+                  let continuation = self.pendingRequests.removeValue(forKey: requestKey) else {
+                return
             }
+            let message = timeoutMessage ?? "\(method) timed out while loading this chat."
+            continuation.resume(
+                throwing: CodexServiceError.invalidInput(message)
+            )
         }
     }
 

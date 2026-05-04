@@ -56,6 +56,20 @@ final class CodexThreadRuntimeOverrideTests: XCTestCase {
         XCTAssertNil(secondService.effectiveServiceTier(for: "thread-normal"))
     }
 
+    func testClearingSelectedModelFallsBackToGPT55Medium() {
+        let service = makeService()
+        service.availableModels = [makeGPT55Model(), makeModel()]
+        service.setSelectedModelId("gpt-5.4")
+        service.setSelectedReasoningEffort("high")
+
+        service.setSelectedModelId(nil)
+
+        XCTAssertEqual(service.selectedModelId, "gpt-5.5")
+        XCTAssertEqual(service.selectedReasoningEffort, "medium")
+        XCTAssertEqual(service.runtimeModelIdentifierForTurn(), "gpt-5.5")
+        XCTAssertEqual(service.selectedReasoningEffortForSelectedModel(), "medium")
+    }
+
     func testContinuationInheritsThreadRuntimeOverrides() {
         let service = makeService()
         service.availableModels = [makeModel()]
@@ -106,6 +120,8 @@ final class CodexThreadRuntimeOverrideTests: XCTestCase {
         XCTAssertEqual(thread.id, "thread-new")
         XCTAssertEqual(capturedThreadStartParams.first?.objectValue?["serviceTier"]?.stringValue, "fast")
         XCTAssertEqual(service.effectiveServiceTier(for: "thread-new"), .fast)
+        XCTAssertTrue(service.hydratedThreadIDs.contains("thread-new"))
+        XCTAssertTrue(service.initialTurnsLoadedByThreadID.contains("thread-new"))
     }
 
     func testStartThreadDropsFastRuntimeOverrideWhenSelectedModelDoesNotSupportFastMode() async throws {
@@ -164,6 +180,22 @@ final class CodexThreadRuntimeOverrideTests: XCTestCase {
             id: "gpt-5.4",
             model: "gpt-5.4",
             displayName: "GPT-5.4",
+            description: "Test model",
+            isDefault: true,
+            supportsFastMode: true,
+            supportedReasoningEfforts: [
+                CodexReasoningEffortOption(reasoningEffort: "medium", description: "Medium"),
+                CodexReasoningEffortOption(reasoningEffort: "high", description: "High"),
+            ],
+            defaultReasoningEffort: "medium"
+        )
+    }
+
+    private func makeGPT55Model() -> CodexModelOption {
+        CodexModelOption(
+            id: "gpt-5.5",
+            model: "gpt-5.5",
+            displayName: "GPT-5.5",
             description: "Test model",
             isDefault: true,
             supportsFastMode: true,

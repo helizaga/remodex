@@ -5,6 +5,7 @@
 // Depends on: http, ws, ./relay, ./push-service
 
 const http = require("http");
+const { monitorEventLoopDelay } = require("perf_hooks");
 const { WebSocketServer } = require("ws");
 const {
   setupRelay,
@@ -25,6 +26,7 @@ function createRelayServer({
   relayOptions = {},
   trustProxy = false,
 } = {}) {
+  const runtimeMetrics = createRuntimeMetrics();
   const pushEnabled = Boolean(enablePushService || pushSessionService);
   const resolvedPushSessionService = pushEnabled
     ? pushSessionService ||
@@ -47,6 +49,7 @@ function createRelayServer({
       pushEnabled,
       pushRateLimiter,
       pushSessionService: resolvedPushSessionService,
+      runtimeMetrics,
       trustProxy,
     });
   });
@@ -96,6 +99,7 @@ async function handleHTTPRequest(
     pushEnabled,
     pushRateLimiter,
     pushSessionService,
+    runtimeMetrics,
     trustProxy,
   }
 ) {
@@ -109,6 +113,7 @@ async function handleHTTPRequest(
             ok: true,
             relay: getRelayStats(),
             push: pushSessionService.getStats(),
+            runtime: runtimeMetrics.snapshot(),
           }
         : { ok: true }
     );
@@ -177,33 +182,23 @@ function readJSONBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let totalSize = 0;
-    let didReject = false;
 
     req.on("data", (chunk) => {
-      if (didReject) {
-        return;
-      }
-
       totalSize += chunk.length;
       if (totalSize > 64 * 1024) {
-        didReject = true;
-        req.removeAllListeners("data");
-        req.resume();
         reject(
           Object.assign(new Error("Request body too large"), {
             status: 413,
             code: "body_too_large",
           })
         );
+        req.destroy();
         return;
       }
       chunks.push(chunk);
     });
 
     req.on("end", () => {
-      if (didReject) {
-        return;
-      }
       const rawBody = Buffer.concat(chunks).toString("utf8");
       if (!rawBody.trim()) {
         resolve({});
@@ -252,6 +247,37 @@ function createDisabledPushSessionService() {
       };
     },
   };
+}
+
+// Captures process-level pressure that can make WebSocket heartbeats miss deadlines.
+function createRuntimeMetrics() {
+  const eventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
+  eventLoopDelay.enable();
+  const startedAt = Date.now();
+
+  return {
+    snapshot() {
+      const memory = process.memoryUsage();
+      return {
+        uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
+        eventLoopDelayMs: {
+          mean: nanosecondsToMilliseconds(eventLoopDelay.mean),
+          max: nanosecondsToMilliseconds(eventLoopDelay.max),
+          p99: nanosecondsToMilliseconds(eventLoopDelay.percentile(99)),
+        },
+        memory: {
+          rss: memory.rss,
+          heapUsed: memory.heapUsed,
+          heapTotal: memory.heapTotal,
+          external: memory.external,
+        },
+      };
+    },
+  };
+}
+
+function nanosecondsToMilliseconds(value) {
+  return Number.isFinite(value) ? Math.round(value / 1_000_000) : 0;
 }
 
 function safePathname(rawUrl) {
@@ -375,9 +401,10 @@ if (require.main === module) {
   const trustProxy = readOptionalBooleanEnv(["REMODEX_TRUST_PROXY", "PHODEX_TRUST_PROXY"]) ?? false;
   const enablePushService =
     readOptionalBooleanEnv(["REMODEX_ENABLE_PUSH_SERVICE", "PHODEX_ENABLE_PUSH_SERVICE"]) ?? false;
+  const bindHost = process.env.RELAY_BIND_HOST || "0.0.0.0";
   const { server } = createRelayServer({ enablePushService, trustProxy });
-  server.listen(port, () => {
-    console.log(`[relay] listening on :${port}`);
+  server.listen(port, bindHost, () => {
+    console.log(`[relay] listening on ${bindHost}:${port}`);
   });
 }
 

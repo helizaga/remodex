@@ -19,6 +19,8 @@ struct CodexMobileApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @UIApplicationDelegateAdaptor(CodexMobileAppDelegate.self) private var appDelegate
     @State private var codexService: CodexService
+    @State private var petCompanionStore: PetCompanionStore
+    @State private var petCompanionStatusStore: PetCompanionStatusStore
     @State private var subscriptionService: SubscriptionService
     @State private var uiTestFixture: CodexUITestLaunchFixture?
     private let shouldSkipAppBootstrap: Bool
@@ -29,6 +31,8 @@ struct CodexMobileApp: App {
         Self.configureRevenueCatIfAvailable(skip: shouldSkipAppBootstrap)
         if let fixtureContext = CodexUITestHarness.makeIfEnabled(arguments: ProcessInfo.processInfo.arguments) {
             _codexService = State(initialValue: fixtureContext.service)
+            _petCompanionStore = State(initialValue: PetCompanionStore())
+            _petCompanionStatusStore = State(initialValue: PetCompanionStatusStore())
             _subscriptionService = State(initialValue: fixtureContext.subscriptions)
             _uiTestFixture = State(initialValue: fixtureContext.fixture)
         } else {
@@ -46,6 +50,8 @@ struct CodexMobileApp: App {
                 service.configureNotifications()
             }
             _codexService = State(initialValue: service)
+            _petCompanionStore = State(initialValue: PetCompanionStore())
+            _petCompanionStatusStore = State(initialValue: PetCompanionStatusStore())
             _subscriptionService = State(initialValue: SubscriptionService())
             _uiTestFixture = State(initialValue: nil)
         }
@@ -55,6 +61,8 @@ struct CodexMobileApp: App {
         WindowGroup {
             rootView
                 .environment(codexService)
+                .environment(petCompanionStore)
+                .environment(petCompanionStatusStore)
                 .environment(subscriptionService)
                 .onOpenURL { url in
                     Task { @MainActor in
