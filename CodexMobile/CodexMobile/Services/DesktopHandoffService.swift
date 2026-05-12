@@ -174,11 +174,16 @@ final class DesktopHandoffService {
                 return "\(relayURL)/\(resolved.sessionId)"
             } catch let error as CodexTrustedSessionResolveError {
                 switch error {
-                case .unsupportedRelay, .network, .noTrustedMac, .macOffline:
+                case .unsupportedRelay, .network, .noTrustedMac, .macOffline, .rePairRequired:
                     if let savedReconnectURL {
+                        if case .rePairRequired = error {
+                            // The saved socket handshake is the authority; resolver trust can be stale.
+                            codex.restoreTrustedPairPresentationState()
+                        }
+                        codex.lastErrorMessage = nil
                         return savedReconnectURL
                     }
-                case .rePairRequired, .invalidResponse:
+                case .invalidResponse:
                     break
                 }
 

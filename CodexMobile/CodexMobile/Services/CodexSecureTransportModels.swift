@@ -63,8 +63,8 @@ struct CodexTrustedMacRegistry: Codable, Sendable {
     static let empty = CodexTrustedMacRegistry(records: [:])
 }
 
-struct SecureClientHello: Encodable, Sendable {
-    let kind = "clientHello"
+struct SecureClientHello: Codable, Sendable {
+    let kind: String
     let protocolVersion: Int
     let sessionId: String
     let handshakeMode: CodexSecureHandshakeMode
@@ -72,6 +72,26 @@ struct SecureClientHello: Encodable, Sendable {
     let phoneIdentityPublicKey: String
     let phoneEphemeralPublicKey: String
     let clientNonce: String
+
+    init(
+        kind: String = "clientHello",
+        protocolVersion: Int,
+        sessionId: String,
+        handshakeMode: CodexSecureHandshakeMode,
+        phoneDeviceId: String,
+        phoneIdentityPublicKey: String,
+        phoneEphemeralPublicKey: String,
+        clientNonce: String
+    ) {
+        self.kind = kind
+        self.protocolVersion = protocolVersion
+        self.sessionId = sessionId
+        self.handshakeMode = handshakeMode
+        self.phoneDeviceId = phoneDeviceId
+        self.phoneIdentityPublicKey = phoneIdentityPublicKey
+        self.phoneEphemeralPublicKey = phoneEphemeralPublicKey
+        self.clientNonce = clientNonce
+    }
 }
 
 struct SecureServerHello: Codable, Sendable {
@@ -89,12 +109,26 @@ struct SecureServerHello: Codable, Sendable {
     let clientNonce: String?
 }
 
-struct SecureClientAuth: Encodable, Sendable {
-    let kind = "clientAuth"
+struct SecureClientAuth: Codable, Sendable {
+    let kind: String
     let sessionId: String
     let phoneDeviceId: String
     let keyEpoch: Int
     let phoneSignature: String
+
+    init(
+        kind: String = "clientAuth",
+        sessionId: String,
+        phoneDeviceId: String,
+        keyEpoch: Int,
+        phoneSignature: String
+    ) {
+        self.kind = kind
+        self.sessionId = sessionId
+        self.phoneDeviceId = phoneDeviceId
+        self.keyEpoch = keyEpoch
+        self.phoneSignature = phoneSignature
+    }
 }
 
 struct SecureReadyMessage: Codable, Sendable {
@@ -104,11 +138,23 @@ struct SecureReadyMessage: Codable, Sendable {
     let macDeviceId: String
 }
 
-struct SecureResumeState: Encodable, Sendable {
-    let kind = "resumeState"
+struct SecureResumeState: Codable, Sendable {
+    let kind: String
     let sessionId: String
     let keyEpoch: Int
     let lastAppliedBridgeOutboundSeq: Int
+
+    init(
+        kind: String = "resumeState",
+        sessionId: String,
+        keyEpoch: Int,
+        lastAppliedBridgeOutboundSeq: Int
+    ) {
+        self.kind = kind
+        self.sessionId = sessionId
+        self.keyEpoch = keyEpoch
+        self.lastAppliedBridgeOutboundSeq = lastAppliedBridgeOutboundSeq
+    }
 }
 
 struct SecureErrorMessage: Codable, Sendable {

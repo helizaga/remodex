@@ -7,7 +7,7 @@
 import CryptoKit
 import Foundation
 
-struct CodexMessagePersistence {
+nonisolated struct CodexMessagePersistence {
     nonisolated(unsafe) private let loadImpl: () -> [String: [CodexMessage]]
     nonisolated(unsafe) private let saveImpl: ([String: [CodexMessage]]) -> Void
 

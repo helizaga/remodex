@@ -440,6 +440,7 @@ final class CodexService {
     var syncRealtimeEnabled = true
     var availableModels: [CodexModelOption] = []
     var selectedModelId: String?
+    var hasPersistedSelectedModelId = false
     var selectedGitWriterModelId: String?
     var selectedReasoningEffort: String?
     var selectedServiceTier: CodexServiceTier?
@@ -826,7 +827,8 @@ final class CodexService {
         let savedModelId = defaults.string(forKey: Self.selectedModelIdDefaultsKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let hasSavedModelId = savedModelId?.isEmpty == false
-        self.selectedModelId = hasSavedModelId ? savedModelId : "gpt-5.5"
+        self.hasPersistedSelectedModelId = hasSavedModelId
+        self.selectedModelId = hasSavedModelId ? savedModelId : nil
 
         let savedGitWriterModelId = defaults.string(forKey: Self.selectedGitWriterModelIdDefaultsKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -836,7 +838,7 @@ final class CodexService {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         self.selectedReasoningEffort = (hasSavedModelId && savedReasoning?.isEmpty == false)
             ? savedReasoning
-            : "medium"
+            : nil
 
         if defaults.object(forKey: Self.keepMacAwakeWhileBridgeRunsDefaultsKey) != nil {
             self.keepMacAwakeWhileBridgeRuns = defaults.bool(forKey: Self.keepMacAwakeWhileBridgeRunsDefaultsKey)
@@ -1106,7 +1108,6 @@ final class CodexService {
     // Chooses the relay base URL only when a saved live session can actually carry a wake request.
     var preferredWakeRelayURL: String? {
         guard !isConnected,
-              secureConnectionState != .rePairRequired,
               hasTrustedReconnectContext else {
             return nil
         }
@@ -1116,8 +1117,7 @@ final class CodexService {
 
     // Wake needs a concrete live-session URL; trusted-Mac-only recovery should show Reconnect, not Wake Screen.
     var canWakePreferredMacDisplay: Bool {
-        guard !isConnected,
-              secureConnectionState != .rePairRequired else {
+        guard !isConnected else {
             return false
         }
 
@@ -1138,7 +1138,7 @@ final class CodexService {
             return .loadingChats
         }
 
-        if isBootstrappingConnectionSync || isLoadingModels || isLoadingThreads {
+        if isBootstrappingConnectionSync || isLoadingThreads {
             return .syncing
         }
 

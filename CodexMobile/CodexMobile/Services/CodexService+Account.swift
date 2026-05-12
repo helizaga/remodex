@@ -322,7 +322,10 @@ extension CodexService {
         clearGPTLoginState()
         clearGPTLoginCallbackState()
         stopGPTLoginSync()
-        applyGPTAccountSnapshot(loggedOutGPTAccountSnapshot(status: .notLoggedIn))
+        applyGPTAccountSnapshot(loggedOutGPTAccountSnapshot(
+            status: .notLoggedIn,
+            retaining: codexGPTAccountInitialSnapshot()
+        ))
         gptAccountErrorMessage = nil
     }
 

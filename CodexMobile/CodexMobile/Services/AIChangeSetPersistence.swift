@@ -6,7 +6,7 @@
 
 import Foundation
 
-struct AIChangeSetPersistence {
+nonisolated struct AIChangeSetPersistence {
     private let loadImpl: () -> [AIChangeSet]
     private let saveImpl: ([AIChangeSet]) -> Void
 

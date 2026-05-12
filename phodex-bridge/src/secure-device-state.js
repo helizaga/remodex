@@ -85,7 +85,7 @@ function resolveBridgeRelaySession(state, { persist: _persist = true } = {}) {
   };
 }
 
-// Persists the trusted iPhone identity so reconnects can be authenticated during the current pairing flow.
+// Persists the one trusted mobile identity allowed to reconnect without scanning a new QR code.
 function rememberTrustedPhone(
   state,
   phoneDeviceId,
@@ -98,7 +98,6 @@ function rememberTrustedPhone(
     return state;
   }
 
-  // Remodex supports one trusted iPhone per Mac, so a new trust record replaces old ones.
   const nextState = normalizeBridgeDeviceState({
     ...state,
     trustedPhones: {

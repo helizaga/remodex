@@ -16,7 +16,7 @@ private struct CommandExecutionMessageContext {
 
 // Off-actor wire message classification and JSON-RPC decoding so transport callbacks
 // can parse before dispatching typed results to MainActor.
-enum WireMessagePreDecoder {
+nonisolated enum WireMessagePreDecoder {
     enum Result: Sendable {
         case message(RPCMessage)
         case decodeFailed
@@ -144,7 +144,7 @@ extension CodexService {
                         debugRuntimeLog("auto-approve triggered method=\(method)")
                         try await sendResponse(
                             id: requestID,
-                            result: approvalDecisionResult("accept")
+                            result: approvalResponseResult(for: request, decision: "accept")
                         )
                     } catch {
                         debugRuntimeLog("auto-approve failed method=\(method): \(error.localizedDescription)")

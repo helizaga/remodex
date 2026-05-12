@@ -28,4 +28,26 @@ module.exports = [
       ],
     },
   },
+  {
+    files: ["relay/**/*.mjs"],
+    languageOptions: {
+      ecmaVersion: "latest",
+      sourceType: "module",
+      globals: {
+        ...globals.node,
+      },
+    },
+    rules: {
+      "no-console": "off",
+      "no-empty": "off",
+      "no-unused-vars": [
+        "error",
+        {
+          varsIgnorePattern: "^_",
+          argsIgnorePattern: "^_",
+          caughtErrors: "none",
+        },
+      ],
+    },
+  },
 ];

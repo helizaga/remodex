@@ -92,7 +92,8 @@ flowchart TD
 ## Protocol Notes
 
 - WebSocket path: `/relay/{sessionId}`
-- required header: `x-role: mac` or `x-role: iphone`
+- required role: `x-role: mac`, `x-role: iphone`, or `x-role: android`
+- mobile clients that cannot send custom WebSocket headers may use `/relay/{sessionId}?role=iphone` or `/relay/{sessionId}?role=android`
 - additional required Mac header: `x-notification-secret`
 - trusted reconnect iPhone headers: `x-phone-device-id` and `x-phone-identity-public-key`
 - close code `4000`: invalid session or role

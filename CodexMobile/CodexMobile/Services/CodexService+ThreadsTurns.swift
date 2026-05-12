@@ -25,6 +25,31 @@ extension CodexService {
         .object(["decision": .string(decision)])
     }
 
+    // New permission prompts use a grant payload, unlike command/file approval decisions.
+    func permissionApprovalResult(for request: CodexApprovalRequest, grantsRequestedPermissions: Bool) -> JSONValue {
+        let requestedPermissions = request.params?.objectValue?["permissions"] ?? .object([:])
+        return .object([
+            "permissions": grantsRequestedPermissions ? requestedPermissions : .object([:]),
+            "scope": .string("turn"),
+        ])
+    }
+
+    func approvalResponseResult(
+        for request: CodexApprovalRequest,
+        decision: String,
+        forSession: Bool = false
+    ) -> JSONValue {
+        let normalizedMethod = request.method.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalizedMethod == "item/permissions/requestApproval" {
+            return permissionApprovalResult(for: request, grantsRequestedPermissions: decision == "accept")
+        }
+
+        let isCommandApproval = normalizedMethod == "item/commandExecution/requestApproval"
+            || normalizedMethod == "item/command_execution/request_approval"
+        let resolvedDecision = (decision == "accept" && forSession && isCommandApproval) ? "acceptForSession" : decision
+        return approvalDecisionResult(resolvedDecision)
+    }
+
     // Returns the next pending approval for a specific thread, falling back to thread-less requests.
     func pendingApproval(for threadId: String? = nil) -> CodexApprovalRequest? {
         guard let normalizedThreadID = normalizedApprovalThreadIdentifier(threadId) else {
@@ -190,8 +215,10 @@ extension CodexService {
         preservePlanSessionState: Bool = false
     ) async throws {
         let trimmedInput = userInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedInput.isEmpty || !attachments.isEmpty else {
-            throw CodexServiceError.invalidInput("User input and images cannot both be empty")
+        guard !trimmedInput.isEmpty
+                || !attachments.isEmpty
+                || hasRenderableStructuredMentions(skillMentions: skillMentions, mentionMentions: mentionMentions) else {
+            throw CodexServiceError.invalidInput("User input, images, and mentions cannot all be empty")
         }
 
         let initialThreadId = try await resolveThreadID(threadId)
@@ -512,12 +539,10 @@ extension CodexService {
             throw CodexServiceError.noPendingApproval
         }
 
-        let normalizedMethod = request.method.trimmingCharacters(in: .whitespacesAndNewlines)
-        let isCommandApproval = normalizedMethod == "item/commandExecution/requestApproval"
-            || normalizedMethod == "item/command_execution/request_approval"
-        let decision = (forSession && isCommandApproval) ? "acceptForSession" : "accept"
-
-        try await sendResponse(id: request.requestID, result: approvalDecisionResult(decision))
+        try await sendResponse(
+            id: request.requestID,
+            result: approvalResponseResult(for: request, decision: "accept", forSession: forSession)
+        )
         removePendingApproval(requestID: request.requestID)
     }
 
@@ -537,7 +562,10 @@ extension CodexService {
             throw CodexServiceError.noPendingApproval
         }
 
-        try await sendResponse(id: request.requestID, result: approvalDecisionResult("decline"))
+        try await sendResponse(
+            id: request.requestID,
+            result: approvalResponseResult(for: request, decision: "decline")
+        )
         removePendingApproval(requestID: request.requestID)
     }
 
@@ -1111,7 +1139,11 @@ extension CodexService {
     ) async throws {
         let automaticTitleSeed = shouldAppendUserMessage
             ? automaticThreadTitleSeedIfNeeded(
-                userInput: userInput,
+                userInput: displayTextForOutgoingTurn(
+                    userInput: userInput,
+                    skillMentions: skillMentions,
+                    mentionMentions: mentionMentions
+                ),
                 attachments: attachments,
                 threadId: threadId
             )
@@ -1119,7 +1151,11 @@ extension CodexService {
         let pendingMessageId = shouldAppendUserMessage
             ? appendUserMessage(
                 threadId: threadId,
-                text: userInput,
+                text: displayTextForOutgoingTurn(
+                    userInput: userInput,
+                    skillMentions: skillMentions,
+                    mentionMentions: mentionMentions
+                ),
                 attachments: attachments,
                 fileMentions: fileMentions
             )
@@ -1391,7 +1427,11 @@ extension CodexService {
         let pendingMessageId = shouldAppendUserMessage
             ? appendUserMessage(
                 threadId: normalizedThreadID,
-                text: userInput,
+                text: displayTextForOutgoingTurn(
+                    userInput: userInput,
+                    skillMentions: skillMentions,
+                    mentionMentions: mentionMentions
+                ),
                 attachments: attachments,
                 fileMentions: fileMentions
             )
@@ -1688,12 +1728,29 @@ extension CodexService {
 
         let trimmedText = userInput.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedText.isEmpty {
+            let fallbackText = legacyTextForStructuredMentions(
+                skillMentions: includeStructuredSkillItems ? [] : skillMentions,
+                mentionMentions: includeStructuredMentionItems ? [] : mentionMentions
+            )
             inputItems.append(
                 .object([
                     "type": .string("text"),
-                    "text": .string(trimmedText),
+                    "text": .string(appendingMissingLegacyMentionTokens(fallbackText, to: trimmedText)),
                 ])
             )
+        } else {
+            let fallbackText = legacyTextForStructuredMentions(
+                skillMentions: includeStructuredSkillItems ? [] : skillMentions,
+                mentionMentions: includeStructuredMentionItems ? [] : mentionMentions
+            )
+            if !fallbackText.isEmpty {
+                inputItems.append(
+                    .object([
+                        "type": .string("text"),
+                        "text": .string(fallbackText),
+                    ])
+                )
+            }
         }
 
         if includeStructuredSkillItems {
@@ -1741,6 +1798,78 @@ extension CodexService {
         }
 
         return inputItems
+    }
+
+    // Gives mention-only sends a visible local row and a text fallback for runtimes without structured items.
+    private func displayTextForOutgoingTurn(
+        userInput: String,
+        skillMentions: [CodexTurnSkillMention],
+        mentionMentions: [CodexTurnMention]
+    ) -> String {
+        let trimmedInput = userInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        let legacyText = legacyTextForStructuredMentions(
+            skillMentions: skillMentions,
+            mentionMentions: mentionMentions
+        )
+
+        guard !trimmedInput.isEmpty else {
+            return legacyText
+        }
+
+        return appendingMissingLegacyMentionTokens(legacyText, to: trimmedInput)
+    }
+
+    private func appendingMissingLegacyMentionTokens(_ legacyText: String, to text: String) -> String {
+        let trimmedLegacyText = legacyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedLegacyText.isEmpty else {
+            return text
+        }
+
+        let missingTokens = trimmedLegacyText
+            .split(separator: " ")
+            .map(String.init)
+            .filter { token in
+                !text.localizedCaseInsensitiveContains(token)
+            }
+        guard !missingTokens.isEmpty else {
+            return text
+        }
+
+        return "\(text)\n\n\(missingTokens.joined(separator: " "))"
+    }
+
+    private func legacyTextForStructuredMentions(
+        skillMentions: [CodexTurnSkillMention],
+        mentionMentions: [CodexTurnMention]
+    ) -> String {
+        var tokens: [String] = []
+
+        for mention in skillMentions {
+            let rawName = mention.name ?? mention.id
+            let normalizedName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !normalizedName.isEmpty {
+                tokens.append("$\(normalizedName)")
+            }
+        }
+
+        for mention in mentionMentions {
+            let normalizedName = mention.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !normalizedName.isEmpty {
+                tokens.append("@\(normalizedName)")
+            }
+        }
+
+        return tokens.joined(separator: " ")
+    }
+
+    private func hasRenderableStructuredMentions(
+        skillMentions: [CodexTurnSkillMention],
+        mentionMentions: [CodexTurnMention]
+    ) -> Bool {
+        !legacyTextForStructuredMentions(
+            skillMentions: skillMentions,
+            mentionMentions: mentionMentions
+        ).isEmpty
     }
 
     // Builds turn/start params so retries can switch only the input-item encoding.
@@ -2145,7 +2274,7 @@ extension CodexService {
         }
 
         let message = rpcError.message.lowercased()
-        guard message.contains("skill") else {
+        guard message.contains("skill") || isGenericStructuredInputItemRejection(message) else {
             return false
         }
 
@@ -2166,7 +2295,7 @@ extension CodexService {
         }
 
         let message = rpcError.message.lowercased()
-        guard message.contains("mention") else {
+        guard message.contains("mention") || isGenericStructuredInputItemRejection(message) else {
             return false
         }
 
@@ -2177,6 +2306,18 @@ extension CodexService {
             || message.contains("unrecognized")
             || message.contains("type")
             || message.contains("field")
+    }
+
+    private func isGenericStructuredInputItemRejection(_ message: String) -> Bool {
+        let mentionsInputShape = message.contains("input")
+            && (message.contains("item") || message.contains("type") || message.contains("array") || message.contains("schema"))
+        let rejectsShape = message.contains("unknown")
+            || message.contains("unsupported")
+            || message.contains("invalid")
+            || message.contains("expected")
+            || message.contains("unrecognized")
+            || message.contains("field")
+        return mentionsInputShape && rejectsShape
     }
 
     // Detects runtimes that reject plan-mode `collaborationMode` without `experimentalApi`.

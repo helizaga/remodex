@@ -70,6 +70,63 @@ final class CodexThreadRuntimeOverrideTests: XCTestCase {
         XCTAssertEqual(service.selectedReasoningEffortForSelectedModel(), "medium")
     }
 
+    func testPersistedModelSelectionIsUsableBeforeModelListRefresh() {
+        let suiteName = "CodexThreadRuntimeOverrideTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        defaults.removePersistentDomain(forName: suiteName)
+        defaults.set("gpt-5.3-codex", forKey: CodexService.selectedModelIdDefaultsKey)
+
+        let service = CodexService(defaults: defaults)
+        Self.retainedServices.append(service)
+
+        XCTAssertTrue(service.availableModels.isEmpty)
+        XCTAssertTrue(service.hasPersistedSelectedModelId)
+        XCTAssertEqual(service.selectedModelId, "gpt-5.3-codex")
+        XCTAssertEqual(service.runtimeModelIdentifierForTurn(), "gpt-5.3-codex")
+        XCTAssertEqual(service.selectedReasoningEffortForSelectedModel(), "medium")
+        XCTAssertEqual(
+            TurnComposerMetaMapper.modelTitle(forIdentifier: service.selectedModelId),
+            "GPT-5.3-Codex"
+        )
+    }
+
+    func testDefaultModelFallbackIsNotPersistedBeforeModelListRefresh() {
+        let suiteName = "CodexThreadRuntimeOverrideTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        defaults.removePersistentDomain(forName: suiteName)
+
+        let service = CodexService(defaults: defaults)
+        Self.retainedServices.append(service)
+        service.normalizeRuntimeSelectionsAfterModelsUpdate()
+
+        XCTAssertFalse(service.hasPersistedSelectedModelId)
+        XCTAssertNil(service.selectedModelId)
+        XCTAssertNil(service.selectedReasoningEffort)
+        XCTAssertEqual(service.runtimeModelIdentifierForTurn(), "gpt-5.5")
+        XCTAssertNil(defaults.string(forKey: CodexService.selectedModelIdDefaultsKey))
+    }
+
+    func testModelListRefreshPersistsResolvedDefaultForFutureLaunches() {
+        let suiteName = "CodexThreadRuntimeOverrideTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        defaults.removePersistentDomain(forName: suiteName)
+
+        let firstService = CodexService(defaults: defaults)
+        Self.retainedServices.append(firstService)
+        firstService.availableModels = [makeGPT55Model(), makeModel()]
+        firstService.normalizeRuntimeSelectionsAfterModelsUpdate()
+
+        XCTAssertTrue(firstService.hasPersistedSelectedModelId)
+        XCTAssertEqual(firstService.selectedModelId, "gpt-5.5")
+        XCTAssertEqual(defaults.string(forKey: CodexService.selectedModelIdDefaultsKey), "gpt-5.5")
+
+        let secondService = CodexService(defaults: defaults)
+        Self.retainedServices.append(secondService)
+
+        XCTAssertTrue(secondService.hasPersistedSelectedModelId)
+        XCTAssertEqual(secondService.selectedModelId, "gpt-5.5")
+    }
+
     func testContinuationInheritsThreadRuntimeOverrides() {
         let service = makeService()
         service.availableModels = [makeModel()]

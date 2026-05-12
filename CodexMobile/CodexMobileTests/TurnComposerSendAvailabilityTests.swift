@@ -53,6 +53,14 @@ final class TurnComposerSendAvailabilityTests: XCTestCase {
         XCTAssertFalse(subagentsState.isSendDisabled)
     }
 
+    func testSendEnabledWhenOnlyStructuredMentionIsSelected() {
+        let skillState = makeState(trimmedInput: "", hasReadyImages: false, hasSkillSelection: true)
+        XCTAssertFalse(skillState.isSendDisabled)
+
+        let pluginState = makeState(trimmedInput: "", hasReadyImages: false, hasPluginSelection: true)
+        XCTAssertFalse(pluginState.isSendDisabled)
+    }
+
     func testSendDisabledWhileReviewSelectionIsWaitingForTarget() {
         let reviewState = makeState(
             trimmedInput: "follow up",
@@ -256,6 +264,8 @@ final class TurnComposerSendAvailabilityTests: XCTestCase {
         trimmedInput: String = "hello",
         hasReadyImages: Bool = false,
         hasBlockingAttachmentState: Bool = false,
+        hasSkillSelection: Bool = false,
+        hasPluginSelection: Bool = false,
         hasReviewSelection: Bool = false,
         hasPendingReviewSelection: Bool = false,
         hasSubagentsSelection: Bool = false
@@ -266,6 +276,8 @@ final class TurnComposerSendAvailabilityTests: XCTestCase {
             trimmedInput: trimmedInput,
             hasReadyImages: hasReadyImages,
             hasBlockingAttachmentState: hasBlockingAttachmentState,
+            hasSkillSelection: hasSkillSelection,
+            hasPluginSelection: hasPluginSelection,
             hasReviewSelection: hasReviewSelection,
             hasPendingReviewSelection: hasPendingReviewSelection,
             hasSubagentsSelection: hasSubagentsSelection

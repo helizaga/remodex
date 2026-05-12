@@ -21,6 +21,7 @@ private enum CodexNotificationSource {
 
 @MainActor
 protocol CodexRemoteNotificationRegistering: AnyObject {
+    @MainActor
     func registerForRemoteNotifications()
 }
 
@@ -34,6 +35,7 @@ final class CodexNoopRemoteNotificationRegistrar: CodexRemoteNotificationRegiste
 @MainActor
 final class CodexApplicationRemoteNotificationRegistrar: CodexRemoteNotificationRegistering {
     // Requests the APNs device token once alert permission is no longer denied.
+    @MainActor
     func registerForRemoteNotifications() {
 #if targetEnvironment(simulator)
         return
