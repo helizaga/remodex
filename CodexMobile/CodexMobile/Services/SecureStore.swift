@@ -19,6 +19,10 @@ enum CodexSecureKeys {
     nonisolated static let lastTrustedMacDeviceId = "codex.secure.lastTrustedMacDeviceId"
     nonisolated static let phoneIdentityState = "codex.secure.phoneIdentityState"
     nonisolated static let messageHistoryKey = "codex.local.messageHistoryKey"
+    nonisolated static let terminalSSHProfile = "codex.terminal.sshProfile"
+    nonisolated static let terminalSSHPrivateKey = "codex.terminal.sshPrivateKey"
+    nonisolated static let terminalSSHPrivateKeyPassphrase = "codex.terminal.sshPrivateKeyPassphrase"
+    nonisolated static let terminalSSHKnownHostPrefix = "codex.terminal.sshKnownHost"
 }
 
 enum SecureStore {
@@ -59,16 +63,26 @@ enum SecureStore {
 
     // Writes a UTF-8 string to Keychain; empty values are treated as delete.
     nonisolated static func writeString(_ value: String, for key: String) {
+        writeString(value, for: key, accessibility: nil)
+    }
+
+    // Writes sensitive strings with optional Keychain accessibility constraints.
+    nonisolated static func writeString(_ value: String, for key: String, accessibility: CFString?) {
         if value.isEmpty {
             deleteValue(for: key)
             return
         }
 
-        writeData(Data(value.utf8), for: key)
+        writeData(Data(value.utf8), for: key, accessibility: accessibility)
     }
 
     // Stores raw data in Keychain; used by local message-history encryption keys.
     nonisolated static func writeData(_ value: Data, for key: String) {
+        writeData(value, for: key, accessibility: nil)
+    }
+
+    // Stores raw data in Keychain with optional accessibility constraints for key material.
+    nonisolated static func writeData(_ value: Data, for key: String, accessibility: CFString?) {
         if value.isEmpty {
             deleteValue(for: key)
             return
@@ -78,6 +92,9 @@ enum SecureStore {
 
         var query = baseQuery(for: key)
         query[kSecValueData as String] = value
+        if let accessibility {
+            query[kSecAttrAccessible as String] = accessibility
+        }
 
         SecItemAdd(query as CFDictionary, nil)
     }

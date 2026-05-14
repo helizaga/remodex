@@ -11,6 +11,7 @@ import UIKit
 struct TurnView: View {
     let thread: CodexThread
     let isWakingMacDisplayRecovery: Bool
+    var onOpenTerminal: ((String?) -> Void)? = nil
 
     @Environment(CodexService.self) private var codex
     @Environment(SubscriptionService.self) private var subscriptions
@@ -216,6 +217,9 @@ struct TurnView: View {
                 onTapMacHandoff: onTapMacHandoff,
                 onTapWorktreeHandoff: onTapWorktreeHandoff,
                 onTapNewChat: onTapNewChat,
+                onTapTerminal: onOpenTerminal == nil ? nil : {
+                    onOpenTerminal?(gitWorkingDirectory)
+                },
                 onTapRepoDiff: onTapRepoDiff,
                 onGitAction: { action in
                     handleGitActionSelection(
