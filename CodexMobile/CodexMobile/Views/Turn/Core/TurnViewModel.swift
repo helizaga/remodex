@@ -103,6 +103,59 @@ struct QueuedTurnDraft: Identifiable {
     }
 }
 
+struct TurnComposerLocalDraft: Codable, Equatable, Sendable {
+    let input: String
+    let mentionedFiles: [TurnComposerMentionedFile]
+    let mentionedSkills: [TurnComposerMentionedSkill]
+    let mentionedPlugins: [TurnComposerMentionedPlugin]
+    let attachments: [TurnComposerImageAttachment]
+    let reviewSelection: TurnComposerReviewSelection?
+    let isPlanModeArmed: Bool
+    let isSubagentsSelectionArmed: Bool
+    let updatedAt: Date
+
+    var isEmpty: Bool {
+        input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && mentionedFiles.isEmpty
+            && mentionedSkills.isEmpty
+            && mentionedPlugins.isEmpty
+            && attachments.isEmpty
+            && reviewSelection == nil
+            && !isPlanModeArmed
+            && !isSubagentsSelectionArmed
+    }
+
+    // Captures only reusable attachment states so stale loading tiles do not revive after navigation.
+    static func make(
+        input: String,
+        mentionedFiles: [TurnComposerMentionedFile],
+        mentionedSkills: [TurnComposerMentionedSkill],
+        mentionedPlugins: [TurnComposerMentionedPlugin],
+        attachments: [TurnComposerImageAttachment],
+        reviewSelection: TurnComposerReviewSelection?,
+        isPlanModeArmed: Bool,
+        isSubagentsSelectionArmed: Bool,
+        updatedAt: Date = Date()
+    ) -> TurnComposerLocalDraft {
+        let readyAttachments = attachments.compactMap { attachment -> TurnComposerImageAttachment? in
+            guard case .ready = attachment.state else { return nil }
+            return attachment
+        }
+
+        return TurnComposerLocalDraft(
+            input: input,
+            mentionedFiles: mentionedFiles,
+            mentionedSkills: mentionedSkills,
+            mentionedPlugins: mentionedPlugins,
+            attachments: readyAttachments,
+            reviewSelection: reviewSelection,
+            isPlanModeArmed: isPlanModeArmed,
+            isSubagentsSelectionArmed: isSubagentsSelectionArmed,
+            updatedAt: updatedAt
+        )
+    }
+}
+
 enum QueuePauseState: Equatable {
     case active
     case paused(errorMessage: String)
@@ -302,6 +355,7 @@ final class TurnViewModel {
     @ObservationIgnored var fileAutocompleteDebounceTask: Task<Void, Never>?
     @ObservationIgnored var skillAutocompleteDebounceTask: Task<Void, Never>?
     @ObservationIgnored var pluginAutocompleteDebounceTask: Task<Void, Never>?
+    @ObservationIgnored private var localDraftPersistenceDebounceTask: Task<Void, Never>?
     @ObservationIgnored var gitStatusRefreshTask: Task<Void, Never>?
     @ObservationIgnored var pendingGitBranchOperation: GitBranchUserOperation?
     @ObservationIgnored var pendingGitWorktreeOpenHandler: ((GitCreateWorktreeResult) -> Void)?
@@ -319,6 +373,7 @@ final class TurnViewModel {
     private let fileAutocompleteDebounceNanoseconds: UInt64 = 180_000_000
     private let skillAutocompleteDebounceNanoseconds: UInt64 = 180_000_000
     private let pluginAutocompleteDebounceNanoseconds: UInt64 = 180_000_000
+    private let localDraftPersistenceDebounceNanoseconds: UInt64 = 650_000_000
     let gitStatusRefreshDebounceNanoseconds: UInt64 = 350_000_000
 
     init() {}
@@ -358,6 +413,8 @@ final class TurnViewModel {
         skillAutocompleteDebounceTask = nil
         pluginAutocompleteDebounceTask?.cancel()
         pluginAutocompleteDebounceTask = nil
+        localDraftPersistenceDebounceTask?.cancel()
+        localDraftPersistenceDebounceTask = nil
         gitStatusRefreshTask?.cancel()
         gitStatusRefreshTask = nil
     }
@@ -519,6 +576,81 @@ final class TurnViewModel {
         composerMentionedFiles.removeAll()
         composerMentionedSkills.removeAll()
         composerMentionedPlugins.removeAll()
+    }
+
+    func localDraftSnapshot() -> TurnComposerLocalDraft {
+        TurnComposerLocalDraft.make(
+            input: input,
+            mentionedFiles: composerMentionedFiles,
+            mentionedSkills: composerMentionedSkills,
+            mentionedPlugins: composerMentionedPlugins,
+            attachments: composerAttachments,
+            reviewSelection: composerReviewSelection,
+            isPlanModeArmed: isPlanModeArmed,
+            isSubagentsSelectionArmed: isSubagentsSelectionArmed
+        )
+    }
+
+    // Saves the current composer as a per-thread draft; empty composers remove stale draft state.
+    func saveLocalDraft(codex: CodexService, threadID: String, persistToDisk: Bool = false) {
+        let draft = localDraftSnapshot()
+        if isSending, draft.isEmpty {
+            if persistToDisk {
+                flushLocalDraftPersistence(codex: codex)
+            }
+            return
+        }
+
+        codex.setComposerDraft(draft.isEmpty ? nil : draft, for: threadID)
+        if persistToDisk {
+            flushLocalDraftPersistence(codex: codex)
+        } else {
+            scheduleLocalDraftPersistence(codex: codex)
+        }
+    }
+
+    func clearLocalDraft(codex: CodexService, threadID: String, persistToDisk: Bool = false) {
+        codex.setComposerDraft(nil, for: threadID)
+        if persistToDisk {
+            flushLocalDraftPersistence(codex: codex)
+        } else {
+            scheduleLocalDraftPersistence(codex: codex)
+        }
+    }
+
+    func restoreSavedLocalDraftIfNeeded(codex: CodexService, threadID: String) {
+        guard !hasComposerDraftContent,
+              let draft = codex.composerDraft(for: threadID),
+              !draft.isEmpty else {
+            return
+        }
+
+        restoreComposerState(from: draft)
+    }
+
+    // Debounces disk writes so removals and edits update persistence without writing per keystroke.
+    func scheduleLocalDraftPersistence(codex: CodexService) {
+        localDraftPersistenceDebounceTask?.cancel()
+        localDraftPersistenceDebounceTask = Task { @MainActor [weak self, weak codex] in
+            guard let self, let codex else { return }
+
+            do {
+                try await Task.sleep(nanoseconds: localDraftPersistenceDebounceNanoseconds)
+            } catch {
+                return
+            }
+
+            guard !Task.isCancelled else { return }
+            codex.persistComposerDrafts()
+            self.localDraftPersistenceDebounceTask = nil
+        }
+    }
+
+    // Forces pending draft state to disk before disappear/background/send boundaries.
+    func flushLocalDraftPersistence(codex: CodexService) {
+        localDraftPersistenceDebounceTask?.cancel()
+        localDraftPersistenceDebounceTask = nil
+        codex.persistComposerDrafts()
     }
 
     // Appends spoken text into the composer without sending it automatically.
@@ -1051,8 +1183,8 @@ final class TurnViewModel {
         isCameraPresented = true
     }
 
-    func enqueueCapturedImageData(_ data: Data, codex: CodexService) {
-        enqueuePastedImageData([data], codex: codex)
+    func enqueueCapturedImageData(_ data: Data, codex: CodexService, threadID: String) {
+        enqueuePastedImageData([data], codex: codex, threadID: threadID)
     }
 
     func openPhotoLibraryPicker(codex: CodexService) {
@@ -1065,7 +1197,7 @@ final class TurnViewModel {
     }
 
     // Converts the picker results into loading slots and async image pipeline jobs.
-    func enqueuePhotoPickerItems(_ items: [PhotosPickerItem], codex: CodexService) {
+    func enqueuePhotoPickerItems(_ items: [PhotosPickerItem], codex: CodexService, threadID: String) {
         guard !items.isEmpty else {
             return
         }
@@ -1094,14 +1226,15 @@ final class TurnViewModel {
             Task {
                 let state = await Self.loadComposerAttachmentState(from: item)
                 await MainActor.run {
-                    self.updateComposerAttachment(id: attachmentID, state: state)
+                    self.updateComposerAttachment(id: attachmentID, state: state, codex: codex, threadID: threadID)
                 }
             }
         }
+        saveLocalDraft(codex: codex, threadID: threadID)
     }
 
     // Reuses the picker intake pipeline so pasted images obey the same limits and processing.
-    func enqueuePastedImageData(_ imageDataItems: [Data], codex: CodexService) {
+    func enqueuePastedImageData(_ imageDataItems: [Data], codex: CodexService, threadID: String) {
         guard !imageDataItems.isEmpty else {
             return
         }
@@ -1130,18 +1263,25 @@ final class TurnViewModel {
             Task {
                 let state = Self.loadComposerAttachmentState(fromData: imageData)
                 await MainActor.run {
-                    self.updateComposerAttachment(id: attachmentID, state: state)
+                    self.updateComposerAttachment(id: attachmentID, state: state, codex: codex, threadID: threadID)
                 }
             }
         }
+        saveLocalDraft(codex: codex, threadID: threadID)
     }
 
-    private func updateComposerAttachment(id: String, state: TurnComposerImageAttachmentState) {
+    private func updateComposerAttachment(
+        id: String,
+        state: TurnComposerImageAttachmentState,
+        codex: CodexService,
+        threadID: String
+    ) {
         guard let index = composerAttachments.firstIndex(where: { $0.id == id }) else {
             return
         }
 
         composerAttachments[index].state = state
+        saveLocalDraft(codex: codex, threadID: threadID, persistToDisk: true)
     }
 
     // Sends a composer payload, queueing follow-ups while the current run is still active.
@@ -1150,62 +1290,16 @@ final class TurnViewModel {
         subscriptions: SubscriptionService? = nil,
         threadID: String
     ) {
-        let payload = buildPayloadWithMentions()
-        let attachments = readyComposerAttachments
-        let skillMentions = composerMentionedSkills.map {
-            CodexTurnSkillMention(id: $0.name, name: $0.name, path: $0.path)
-        }
-        let mentionMentions = composerMentionedPlugins.map {
-            CodexTurnMention(name: $0.name, path: $0.path)
-        }
-        let reviewSelection = composerReviewSelection
-
-        guard (!payload.isEmpty || !attachments.isEmpty || reviewSelection != nil || !skillMentions.isEmpty || !mentionMentions.isEmpty),
-              !isSending,
-              codex.isConnected,
-              !hasBlockingAttachmentState else {
+        guard let pendingSend = buildValidatedPendingSend(
+            codex: codex,
+            subscriptions: subscriptions
+        ) else {
             return
         }
 
-        if reviewSelection != nil, hasComposerContentConflictingWithReview {
-            codex.lastErrorMessage = "Clear text, files, skills, and images before starting a code review."
-            return
-        }
-
-        if let subscriptions, !subscriptions.hasAppAccess {
-            codex.lastErrorMessage = "Your 5 free messages are over. Unlock Remodex Pro to keep chatting."
-            return
-        }
-
-        let queuedDraft = reviewSelection == nil ? QueuedTurnDraft(
-            id: UUID().uuidString,
-            text: payload,
-            attachments: attachments,
-            skillMentions: skillMentions,
-            mentionMentions: mentionMentions,
-            collaborationMode: isPlanModeArmed ? .plan : nil,
-            rawInput: input,
-            rawFileMentions: composerMentionedFiles,
-            rawSkillMentions: composerMentionedSkills,
-            rawPluginMentions: composerMentionedPlugins,
-            rawAttachments: composerAttachments,
-            rawSubagentsSelectionArmed: isSubagentsSelectionArmed,
-            createdAt: Date()
-        ) : nil
-        let pendingSend = PendingTurnSend(
-            payload: payload,
-            attachments: attachments,
-            skillMentions: skillMentions,
-            mentionMentions: mentionMentions,
-            collaborationMode: isPlanModeArmed ? .plan : nil,
-            rawInput: input,
-            rawFileMentions: composerMentionedFiles,
-            rawSkillMentions: composerMentionedSkills,
-            rawPluginMentions: composerMentionedPlugins,
-            rawAttachments: composerAttachments,
-            rawReviewSelection: reviewSelection,
-            rawSubagentsSelectionArmed: isSubagentsSelectionArmed
-        )
+        let queuedDraft = pendingSend.rawReviewSelection == nil
+            ? makeQueuedDraft(from: pendingSend)
+            : nil
         let threadBusy = isThreadBusy(codex: codex, threadID: threadID)
         let queuePaused = isQueuePaused(codex: codex, threadID: threadID)
 
@@ -1229,12 +1323,173 @@ final class TurnViewModel {
                 appendQueuedDraft(queuedDraft, codex: codex, threadID: threadID)
                 shouldAnchorToAssistantResponse = true
                 clearComposer()
+                clearLocalDraft(codex: codex, threadID: threadID, persistToDisk: true)
 
                 resumeQueueAndFlushIfPossible(codex: codex, threadID: threadID)
                 return
             }
 
             await performTurnSend(pendingSend, codex: codex, threadID: threadID)
+        }
+    }
+
+    // Starts a real thread only when the first draft message is sent from the New Chat screen.
+    func sendNewThread(
+        codex: CodexService,
+        subscriptions: SubscriptionService? = nil,
+        draftThreadID: String,
+        preferredProjectPath: String?,
+        onThreadCreated: @escaping @MainActor (CodexThread) -> Void
+    ) {
+        guard let pendingSend = buildValidatedPendingSend(
+            codex: codex,
+            subscriptions: subscriptions
+        ) else {
+            return
+        }
+
+        subscriptions?.consumeFreeSendAttemptIfNeeded()
+        isSending = true
+        Task { @MainActor in
+            defer { isSending = false }
+
+            isPlanModeArmed = false
+            shouldAnchorToAssistantResponse = true
+            clearComposer()
+
+            do {
+                let thread = try await codex.startThreadIfReady(preferredProjectPath: preferredProjectPath)
+                try await dispatchPendingSend(pendingSend, codex: codex, threadID: thread.id)
+                clearLocalDraft(codex: codex, threadID: draftThreadID, persistToDisk: true)
+                clearLocalDraft(codex: codex, threadID: thread.id, persistToDisk: true)
+                onThreadCreated(thread)
+            } catch {
+                restorePendingSendOnFailure(
+                    pendingSend,
+                    error: error,
+                    codex: codex,
+                    draftThreadID: draftThreadID
+                )
+            }
+        }
+    }
+
+    // Shared validation + payload assembly used by `sendTurn` and `sendNewThread`
+    // so the empty/connected/blocking/review/subscription guards stay in one place.
+    private func buildValidatedPendingSend(
+        codex: CodexService,
+        subscriptions: SubscriptionService?
+    ) -> PendingTurnSend? {
+        let payload = buildPayloadWithMentions()
+        let attachments = readyComposerAttachments
+        let skillMentions = composerMentionedSkills.map {
+            CodexTurnSkillMention(id: $0.name, name: $0.name, path: $0.path)
+        }
+        let mentionMentions = composerMentionedPlugins.map {
+            CodexTurnMention(name: $0.name, path: $0.path)
+        }
+        let reviewSelection = composerReviewSelection
+
+        guard (!payload.isEmpty || !attachments.isEmpty || reviewSelection != nil || !skillMentions.isEmpty || !mentionMentions.isEmpty),
+              !isSending,
+              codex.isConnected,
+              !hasBlockingAttachmentState else {
+            return nil
+        }
+
+        if reviewSelection != nil, hasComposerContentConflictingWithReview {
+            codex.lastErrorMessage = "Clear text, files, skills, and images before starting a code review."
+            return nil
+        }
+
+        if let subscriptions, !subscriptions.hasAppAccess {
+            codex.lastErrorMessage = "Your 5 free messages are over. Unlock Remodex Pro to keep chatting."
+            return nil
+        }
+
+        return PendingTurnSend(
+            payload: payload,
+            attachments: attachments,
+            skillMentions: skillMentions,
+            mentionMentions: mentionMentions,
+            collaborationMode: isPlanModeArmed ? .plan : nil,
+            rawInput: input,
+            rawFileMentions: composerMentionedFiles,
+            rawSkillMentions: composerMentionedSkills,
+            rawPluginMentions: composerMentionedPlugins,
+            rawAttachments: composerAttachments,
+            rawReviewSelection: reviewSelection,
+            rawSubagentsSelectionArmed: isSubagentsSelectionArmed
+        )
+    }
+
+    // Mirrors a validated PendingTurnSend into the queued-draft shape used when
+    // sendTurn needs to defer the payload behind a busy thread or paused queue.
+    private func makeQueuedDraft(from pendingSend: PendingTurnSend) -> QueuedTurnDraft {
+        QueuedTurnDraft(
+            id: UUID().uuidString,
+            text: pendingSend.payload,
+            attachments: pendingSend.attachments,
+            skillMentions: pendingSend.skillMentions,
+            mentionMentions: pendingSend.mentionMentions,
+            collaborationMode: pendingSend.collaborationMode,
+            rawInput: pendingSend.rawInput,
+            rawFileMentions: pendingSend.rawFileMentions,
+            rawSkillMentions: pendingSend.rawSkillMentions,
+            rawPluginMentions: pendingSend.rawPluginMentions,
+            rawAttachments: pendingSend.rawAttachments,
+            rawSubagentsSelectionArmed: pendingSend.rawSubagentsSelectionArmed,
+            createdAt: Date()
+        )
+    }
+
+    // Routes a PendingTurnSend through the right runtime call (review vs turn)
+    // so sendNewThread doesn't have to duplicate the review branch from
+    // performTurnSend. Errors bubble to the caller for context-specific recovery.
+    private func dispatchPendingSend(
+        _ pendingSend: PendingTurnSend,
+        codex: CodexService,
+        threadID: String
+    ) async throws {
+        if let reviewSelection = pendingSend.rawReviewSelection {
+            try await codex.startReview(
+                threadId: threadID,
+                target: reviewSelection.target?.codexReviewTarget,
+                baseBranch: reviewBaseBranchName(for: reviewSelection)
+            )
+        } else {
+            try await codex.startTurn(
+                userInput: pendingSend.payload,
+                threadId: threadID,
+                attachments: pendingSend.attachments,
+                skillMentions: pendingSend.skillMentions,
+                mentionMentions: pendingSend.mentionMentions,
+                fileMentions: confirmedFileMentionPaths(from: pendingSend.rawFileMentions),
+                collaborationMode: pendingSend.collaborationMode
+            )
+        }
+    }
+
+    // Shared failure recovery for both performTurnSend and sendNewThread: restores
+    // the exact composer payload so the user can retry without re-typing, persists
+    // it under the right thread id, and rebuilds the footer error message.
+    private func restorePendingSendOnFailure(
+        _ pendingSend: PendingTurnSend,
+        error: Error,
+        codex: CodexService,
+        draftThreadID: String
+    ) {
+        shouldAnchorToAssistantResponse = false
+        restoreComposerState(from: pendingSend)
+        saveLocalDraft(codex: codex, threadID: draftThreadID, persistToDisk: true)
+        if pendingSend.collaborationMode == .plan,
+           shouldRearmPlanModeAfterSendFailure(error) {
+            isPlanModeArmed = true
+        }
+        let fallbackMessage = codex.userFacingTurnErrorMessageForFooter(from: error)
+        if (codex.lastErrorMessage?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            && !(fallbackMessage?.isEmpty ?? true) {
+            codex.lastErrorMessage = fallbackMessage
         }
     }
 
@@ -2070,6 +2325,7 @@ final class TurnViewModel {
         shouldAnchorToAssistantResponse = true
         appendQueuedDraft(queuedDraft, codex: codex, threadID: threadID)
         clearComposer()
+        clearLocalDraft(codex: codex, threadID: threadID, persistToDisk: true)
     }
 
     // Sends the prepared payload and restores the exact raw composer state if startTurn fails.
@@ -2083,35 +2339,15 @@ final class TurnViewModel {
         clearComposer()
 
         do {
-            if let reviewSelection = pendingSend.rawReviewSelection {
-                try await codex.startReview(
-                    threadId: threadID,
-                    target: reviewSelection.target?.codexReviewTarget,
-                    baseBranch: reviewBaseBranchName(for: reviewSelection)
-                )
-            } else {
-                try await codex.startTurn(
-                    userInput: pendingSend.payload,
-                    threadId: threadID,
-                    attachments: pendingSend.attachments,
-                    skillMentions: pendingSend.skillMentions,
-                    mentionMentions: pendingSend.mentionMentions,
-                    fileMentions: confirmedFileMentionPaths(from: pendingSend.rawFileMentions),
-                    collaborationMode: pendingSend.collaborationMode
-                )
-            }
+            try await dispatchPendingSend(pendingSend, codex: codex, threadID: threadID)
+            clearLocalDraft(codex: codex, threadID: threadID, persistToDisk: true)
         } catch {
-            shouldAnchorToAssistantResponse = false
-            restoreComposerState(from: pendingSend)
-            if pendingSend.collaborationMode == .plan,
-               shouldRearmPlanModeAfterSendFailure(error) {
-                isPlanModeArmed = true
-            }
-            let fallbackMessage = codex.userFacingTurnErrorMessageForFooter(from: error)
-            if (codex.lastErrorMessage?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-                && !(fallbackMessage?.isEmpty ?? true) {
-                codex.lastErrorMessage = fallbackMessage
-            }
+            restorePendingSendOnFailure(
+                pendingSend,
+                error: error,
+                codex: codex,
+                draftThreadID: threadID
+            )
         }
     }
 
@@ -2153,6 +2389,19 @@ final class TurnViewModel {
         composerReviewSelection = nil
         isSubagentsSelectionArmed = draft.rawSubagentsSelectionArmed
         isPlanModeArmed = draft.collaborationMode == .plan
+    }
+
+    // Restores a locally saved unsent draft when the user comes back to a chat.
+    private func restoreComposerState(from draft: TurnComposerLocalDraft) {
+        input = draft.input
+        composerMentionedFiles = draft.mentionedFiles
+        composerMentionedSkills = draft.mentionedSkills
+        composerMentionedPlugins = draft.mentionedPlugins
+        composerAttachments = draft.attachments
+        composerReviewSelection = draft.reviewSelection
+        isSubagentsSelectionArmed = draft.isSubagentsSelectionArmed
+        isPlanModeArmed = draft.isPlanModeArmed
+        clearComposerAutocomplete()
     }
 
     // Resolves the active turn id for manual steer without relying on async autoclosure operators.
@@ -2794,24 +3043,44 @@ final class TurnViewModel {
 
 }
 
-struct TurnComposerMentionedFile: Identifiable, Equatable {
-    let id = UUID().uuidString
+struct TurnComposerMentionedFile: Identifiable, Codable, Equatable, Sendable {
+    let id: String
     let fileName: String
     let path: String
+
+    init(id: String = UUID().uuidString, fileName: String, path: String) {
+        self.id = id
+        self.fileName = fileName
+        self.path = path
+    }
 }
 
-struct TurnComposerMentionedSkill: Identifiable, Equatable {
-    let id = UUID().uuidString
+struct TurnComposerMentionedSkill: Identifiable, Codable, Equatable, Sendable {
+    let id: String
     let name: String
     let path: String?
     let description: String?
+
+    init(id: String = UUID().uuidString, name: String, path: String?, description: String?) {
+        self.id = id
+        self.name = name
+        self.path = path
+        self.description = description
+    }
 }
 
-struct TurnComposerMentionedPlugin: Identifiable, Equatable {
-    let id = UUID().uuidString
+struct TurnComposerMentionedPlugin: Identifiable, Codable, Equatable, Sendable {
+    let id: String
     let name: String
     let path: String
     let displayName: String?
+
+    init(id: String = UUID().uuidString, name: String, path: String, displayName: String?) {
+        self.id = id
+        self.name = name
+        self.path = path
+        self.displayName = displayName
+    }
 }
 
 struct TurnTrailingFileAutocompleteToken: Equatable {

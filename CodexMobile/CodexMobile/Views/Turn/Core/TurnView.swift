@@ -8,6 +8,13 @@ import SwiftUI
 import PhotosUI
 import UIKit
 
+// The handoff and fork dialogs are mutually exclusive overlays that share the
+// same worktree creation surface.
+private enum TurnWorktreeOverlayRoute: Equatable {
+    case handoff
+    case fork
+}
+
 struct TurnView: View {
     let thread: CodexThread
     let isWakingMacDisplayRecovery: Bool
@@ -29,8 +36,7 @@ struct TurnView: View {
     @State private var alertApprovalRequest: CodexApprovalRequest?
     @State private var isApprovalAlertPresented = false
     @State private var isShowingMacHandoffConfirm = false
-    @State private var isShowingWorktreeHandoff = false
-    @State private var isShowingForkWorktree = false
+    @State private var worktreeOverlayRoute: TurnWorktreeOverlayRoute?
     @State private var macHandoffErrorMessage: String?
     @State private var isHandingOffToMac = false
     @State private var isStartingSiblingChat = false
@@ -157,6 +163,7 @@ struct TurnView: View {
                 isRepositoryLoadingToastVisible: false,
                 onRetryUserMessage: { messageText in
                     viewModel.input = messageText
+                    viewModel.saveLocalDraft(codex: codex, threadID: thread.id)
                     isInputFocused = true
                 },
                 onTapAssistantRevert: { message in
@@ -237,13 +244,13 @@ struct TurnView: View {
                     .transition(.opacity)
             }
 
-            if isShowingWorktreeHandoff {
+            if worktreeOverlayRoute == .handoff {
                 TurnWorktreeHandoffOverlay(
                     mode: .handoff,
                     preferredBaseBranch: preferredWorktreeBaseBranch,
                     isHandoffAvailable: isWorktreeHandoffAvailable,
                     isSubmitting: viewModel.isCreatingGitWorktree,
-                    onClose: { isShowingWorktreeHandoff = false },
+                    onClose: { worktreeOverlayRoute = nil },
                     onSubmit: { branchName, baseBranch in
                         submitWorktreeHandoff(
                             branchName: branchName,
@@ -256,13 +263,13 @@ struct TurnView: View {
                 .transition(.opacity)
             }
 
-            if isShowingForkWorktree {
+            if worktreeOverlayRoute == .fork {
                 TurnWorktreeHandoffOverlay(
                     mode: .fork,
                     preferredBaseBranch: preferredWorktreeBaseBranch,
                     isHandoffAvailable: isWorktreeHandoffAvailable,
                     isSubmitting: viewModel.isCreatingGitWorktree || isForkingThread,
-                    onClose: { isShowingForkWorktree = false },
+                    onClose: { worktreeOverlayRoute = nil },
                     onSubmit: { branchName, baseBranch in
                         submitForkIntoNewWorktree(
                             branchName: branchName,
@@ -288,7 +295,7 @@ struct TurnView: View {
         .animation(.spring(response: 0.35, dampingFraction: 0.88), value: viewModel.gitActionSuccess?.id)
         .fullScreenCover(isPresented: isCameraPresentedBinding) {
             CameraImagePicker { data in
-                viewModel.enqueueCapturedImageData(data, codex: codex)
+                viewModel.enqueueCapturedImageData(data, codex: codex, threadID: thread.id)
             }
             .ignoresSafeArea()
         }
@@ -351,6 +358,7 @@ struct TurnView: View {
             },
             onScenePhaseChanged: { phase in
                 guard phase != .active else { return }
+                viewModel.saveLocalDraft(codex: codex, threadID: thread.id, persistToDisk: true)
                 cancelVoiceRecordingIfNeeded()
                 invalidatePendingVoicePreflight()
             },
@@ -359,6 +367,7 @@ struct TurnView: View {
             }
         )
         .onDisappear {
+            viewModel.saveLocalDraft(codex: codex, threadID: thread.id, persistToDisk: true)
             cancelVoiceRecordingIfNeeded()
             invalidatePendingVoicePreflight()
             clearVoiceRecovery()
@@ -853,7 +862,7 @@ struct TurnView: View {
         }
 
         guard let associatedWorktreePath = codex.associatedManagedWorktreePath(for: thread.id) else {
-            isShowingWorktreeHandoff = true
+            worktreeOverlayRoute = .handoff
             return
         }
 
@@ -877,7 +886,7 @@ struct TurnView: View {
                         threadID: thread.id
                     )
                 case .missingAssociatedWorktree:
-                    isShowingWorktreeHandoff = true
+                    worktreeOverlayRoute = .handoff
                 }
             } catch {
                 viewModel.gitSyncAlert = TurnGitSyncAlert(
@@ -895,12 +904,15 @@ struct TurnView: View {
         syncApprovalAlertPresentation()
         if let pendingComposerAction = codex.consumePendingComposerAction(for: thread.id) {
             viewModel.applyPendingComposerAction(pendingComposerAction)
+            viewModel.saveLocalDraft(codex: codex, threadID: thread.id)
             isInputFocused = true
+        } else {
+            viewModel.restoreSavedLocalDraftIfNeeded(codex: codex, threadID: thread.id)
         }
     }
 
     private func handlePhotoPickerItemsChanged(_ newItems: [PhotosPickerItem]) {
-        viewModel.enqueuePhotoPickerItems(newItems, codex: codex)
+        viewModel.enqueuePhotoPickerItems(newItems, codex: codex, threadID: thread.id)
         viewModel.photoPickerItems = []
     }
 
@@ -1061,7 +1073,7 @@ struct TurnView: View {
                         )
 
                         if case .moved(let move) = outcome {
-                            isShowingWorktreeHandoff = false
+                            worktreeOverlayRoute = nil
                             viewModel.refreshGitBranchTargets(
                                 codex: codex,
                                 workingDirectory: move.projectPath,
@@ -1154,7 +1166,7 @@ struct TurnView: View {
                             from: thread.id,
                             target: .projectPath(result.worktreePath)
                         )
-                        isShowingForkWorktree = false
+                        worktreeOverlayRoute = nil
                         openThread(forkedThread.id)
                     } catch {
                         viewModel.gitSyncAlert = TurnGitSyncAlert(
@@ -1182,26 +1194,16 @@ struct TurnView: View {
             do {
                 _ = try await codex.startThreadIfReady(
                     preferredProjectPath: resolvedProjectPathForFollowUpThread(),
-                    pendingComposerAction: .codeReview(target: pendingCodeReviewTarget(for: target))
+                    pendingComposerAction: .codeReview(target: target.codexPendingTarget)
                 )
                 viewModel.clearComposerReviewSelection()
+                viewModel.saveLocalDraft(codex: codex, threadID: thread.id, persistToDisk: true)
             } catch {
                 if let message = codex.userFacingTurnErrorMessageForFooter(from: error),
                    codex.lastErrorMessage?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
                     codex.lastErrorMessage = message
                 }
             }
-        }
-    }
-
-    private func pendingCodeReviewTarget(
-        for target: TurnComposerReviewTarget
-    ) -> CodexPendingCodeReviewTarget {
-        switch target {
-        case .uncommittedChanges:
-            return .uncommittedChanges
-        case .baseBranch:
-            return .baseBranch
         }
     }
 
@@ -1284,10 +1286,10 @@ struct TurnView: View {
             return nil
         }
         let fullPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        let folderName = (fullPath as NSString).lastPathComponent
+        let folderName = fullPath.pathDisplayName
         return TurnThreadNavigationContext(
-            folderName: folderName.isEmpty ? fullPath : folderName,
-            subtitle: fullPath,
+            folderName: folderName,
+            subtitle: folderName,
             fullPath: fullPath
         )
     }
@@ -1401,7 +1403,7 @@ struct TurnView: View {
                 onStartCodeReviewThread: startCodeReviewThread,
                 onStartForkThreadLocally: startLocalFork,
                 onOpenForkWorktree: {
-                    isShowingForkWorktree = true
+                    worktreeOverlayRoute = .fork
                 },
                 onOpenWorktreeHandoff: {
                     handleWorktreeHandoffTap(currentThread: currentThread)
@@ -1479,6 +1481,7 @@ struct TurnView: View {
             )
             clearVoiceRecovery()
             viewModel.appendVoiceTranscript(transcript)
+            viewModel.saveLocalDraft(codex: codex, threadID: thread.id, persistToDisk: true)
             // Keep voice flows keyboard-free; users can tap into the draft afterward if they want to edit.
             isInputFocused = false
         } catch {
@@ -1630,7 +1633,7 @@ struct TurnView: View {
     // MARK: - Empty State
 
     private var loadingState: some View {
-        chatPlaceholderState(
+        ChatEmptyStatePlaceholder(
             title: Text("Loading chat..."),
             subtitle: "Fetching the latest messages for this conversation."
         )
@@ -1646,49 +1649,18 @@ struct TurnView: View {
     }
 
     private var emptyState: some View {
-        chatPlaceholderState(
-            title: emptyStateTitle,
+        ChatEmptyStatePlaceholder(
+            title: ChatEmptyStateTitleBuilder.makeTitle(for: emptyStateFolderName),
             subtitle: "Chats are End-to-end encrypted"
         )
     }
 
-    private var emptyStateTitle: Text {
-        guard let folder = emptyStateFolderName else {
-            return Text("Hi! How can I help you?")
-        }
-        return Text("What should we do in ")
-            + Text(folder).foregroundStyle(.secondary)
-            + Text("?")
-    }
-
     private var emptyStateFolderName: String? {
         guard let cwd = currentResolvedThread.gitWorkingDirectory else { return nil }
-        let component = (cwd as NSString).lastPathComponent
-        return component.isEmpty ? nil : component
-    }
-
-    private func chatPlaceholderState(title: Text, subtitle: String) -> some View {
-        VStack(spacing: 12) {
-            Spacer()
-            Image("AppLogo")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 56, height: 56)
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .adaptiveGlass(in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            title
-                .font(AppFont.title2(weight: .regular))
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 28)
-            Text(subtitle)
-                .font(AppFont.caption())
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 28)
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding()
+        let display = cwd.pathDisplayName
+        // Defensive: pathDisplayName falls back to the input, so only nil out
+        // when there's no usable folder portion at all (empty cwd after split).
+        return display.isEmpty ? nil : display
     }
 }
 

@@ -79,6 +79,43 @@ final class TurnTimelineReducerTests: XCTestCase {
         XCTAssertTrue(projection.messages[0].text.contains("Running /usr/bin/bash"))
     }
 
+    func testCollapseConsecutiveThinkingKeepsLargeTextInsteadOfFingerprint() {
+        let threadID = "thread"
+        let now = Date()
+        let longThinking = "Resolved reasoning\n" + String(repeating: "reasoning detail\n", count: 6_000) + "TAIL"
+
+        let messages = [
+            makeMessage(
+                id: "thinking-placeholder",
+                threadID: threadID,
+                role: .system,
+                kind: .thinking,
+                text: "Thinking...",
+                createdAt: now,
+                turnID: "turn-1",
+                itemID: "item-1",
+                isStreaming: true
+            ),
+            makeMessage(
+                id: "thinking-large",
+                threadID: threadID,
+                role: .system,
+                kind: .thinking,
+                text: longThinking,
+                createdAt: now.addingTimeInterval(1),
+                turnID: "turn-1",
+                itemID: "item-1",
+                isStreaming: false
+            ),
+        ]
+
+        let projection = TurnTimelineReducer.project(messages: messages)
+
+        XCTAssertEqual(projection.messages.count, 1)
+        XCTAssertEqual(projection.messages[0].text, longThinking)
+        XCTAssertFalse(projection.messages[0].text.hasPrefix("large|"))
+    }
+
     func testCollapseConsecutiveThinkingKeepsDistinctItemsSeparated() {
         let threadID = "thread"
         let now = Date()
@@ -1492,6 +1529,49 @@ final class TurnTimelineReducerTests: XCTestCase {
         XCTAssertEqual(deduped.map(\.id), ["assistant-1", "assistant-2"])
     }
 
+    func testRemoveDuplicateAssistantMessagesKeepsDistinctLargeRowsWithSameSampledEdges() {
+        let now = Date()
+        let sharedPrefix = String(repeating: "p", count: 100)
+        let sharedMiddle = String(repeating: "m", count: 100)
+        let sharedSuffix = String(repeating: "s", count: 100)
+        let firstText = sharedPrefix
+            + String(repeating: "a", count: 40_000)
+            + sharedMiddle
+            + String(repeating: "b", count: 40_000)
+            + sharedSuffix
+        let secondText = sharedPrefix
+            + String(repeating: "c", count: 40_000)
+            + sharedMiddle
+            + String(repeating: "d", count: 40_000)
+            + sharedSuffix
+        let messages = [
+            makeMessage(
+                id: "assistant-large-1",
+                threadID: "thread",
+                role: .assistant,
+                kind: .chat,
+                text: firstText,
+                createdAt: now,
+                turnID: "turn-1",
+                itemID: "item-1"
+            ),
+            makeMessage(
+                id: "assistant-large-2",
+                threadID: "thread",
+                role: .assistant,
+                kind: .chat,
+                text: secondText,
+                createdAt: now.addingTimeInterval(0.2),
+                turnID: "turn-1",
+                itemID: "item-2"
+            ),
+        ]
+
+        let deduped = TurnTimelineReducer.removeDuplicateAssistantMessages(in: messages)
+
+        XCTAssertEqual(deduped.map(\.id), ["assistant-large-1", "assistant-large-2"])
+    }
+
     func testRemoveDuplicateAssistantMessagesStillDedupesTurnTextWhenOneIdentityIsMissing() {
         let now = Date()
         let messages = [
@@ -1896,6 +1976,50 @@ final class TurnTimelineReducerTests: XCTestCase {
         XCTAssertEqual(projection.messages.map(\.id), ["user", "assistant", "diff"])
     }
 
+    func testRenderProjectionKeepsLargeFileChangeRowsSeparateInsteadOfEagerParsing() {
+        let now = Date()
+        let largeDiffText = """
+        Status: completed
+
+        Path: Sources/App.swift
+        Kind: update
+        Totals: +1 -0
+        \(String(repeating: "context line\n", count: 9_000))
+        """
+        let messages = [
+            makeMessage(
+                id: "diff-large-1",
+                threadID: "thread",
+                role: .system,
+                kind: .fileChange,
+                text: largeDiffText,
+                createdAt: now,
+                turnID: "turn-1",
+                itemID: "diff-1"
+            ),
+            makeMessage(
+                id: "diff-large-2",
+                threadID: "thread",
+                role: .system,
+                kind: .fileChange,
+                text: largeDiffText,
+                createdAt: now.addingTimeInterval(1),
+                turnID: "turn-1",
+                itemID: "diff-2"
+            ),
+        ]
+
+        let items = TurnTimelineRenderProjection.project(messages: messages)
+        let messageIDs = items.compactMap { item -> String? in
+            if case .message(let message) = item {
+                return message.id
+            }
+            return nil
+        }
+
+        XCTAssertEqual(messageIDs, ["diff-large-1", "diff-large-2"])
+    }
+
     func testRemoveDuplicateFileChangeMessagesKeepsNewestMatchingTurnSnapshot() {
         let now = Date()
         let messages = [
@@ -2255,6 +2379,63 @@ final class TurnTimelineReducerTests: XCTestCase {
             activeTurnID: nil
         )
         XCTAssertEqual(fallbackAnchor, "assistant-2")
+    }
+
+    func testRenderItemsCacheReusesProjectionForSameSignature() {
+        let messages = [
+            makeMessage(
+                id: "assistant-1",
+                threadID: "thread",
+                role: .assistant,
+                kind: .chat,
+                text: "Streaming",
+                turnID: "turn-1",
+                isStreaming: true
+            ),
+        ]
+        let visibleMessages = messages[...]
+        let firstSignature = TurnTimelineCacheKeyBuilder.renderItemsSignature(
+            threadID: "thread",
+            timelineChangeToken: 1,
+            visibleTailCount: 1,
+            messages: visibleMessages,
+            completedTurnIDs: []
+        )
+        let secondSignature = TurnTimelineCacheKeyBuilder.renderItemsSignature(
+            threadID: "thread",
+            timelineChangeToken: 2,
+            visibleTailCount: 1,
+            messages: visibleMessages,
+            completedTurnIDs: []
+        )
+        let cache = TurnTimelineRenderItemsCache()
+        var projectionCount = 0
+        let projector: ([CodexMessage], Set<String>) -> [TurnTimelineRenderItem] = { source, _ in
+            projectionCount += 1
+            return source.map(TurnTimelineRenderItem.message)
+        }
+
+        let first = cache.items(
+            for: firstSignature,
+            messages: visibleMessages,
+            completedTurnIDs: [],
+            projector: projector
+        )
+        let second = cache.items(
+            for: firstSignature,
+            messages: visibleMessages,
+            completedTurnIDs: [],
+            projector: projector
+        )
+        _ = cache.items(
+            for: secondSignature,
+            messages: visibleMessages,
+            completedTurnIDs: [],
+            projector: projector
+        )
+
+        XCTAssertEqual(first, second)
+        XCTAssertEqual(projectionCount, 2)
     }
 
     func testEnforceIntraTurnOrderPreservesInterleavedMultiItemFlow() {
@@ -2802,6 +2983,104 @@ final class TurnTimelineReducerTests: XCTestCase {
         ])
     }
 
+    func testEnforceIntraTurnOrderKeepsLateActivityBelowStreamingAssistant() {
+        let now = Date()
+        var order = 0
+        func nextOrder() -> Int { order += 1; return order }
+
+        let messages = [
+            makeMessage(
+                id: "user-1",
+                threadID: "thread",
+                role: .user,
+                kind: .chat,
+                text: "Hello",
+                createdAt: now,
+                turnID: "turn-1",
+                orderIndex: nextOrder()
+            ),
+            makeMessage(
+                id: "assistant-1",
+                threadID: "thread",
+                role: .assistant,
+                kind: .chat,
+                text: "Working through it",
+                createdAt: now.addingTimeInterval(1),
+                turnID: "turn-1",
+                itemID: "item-1",
+                isStreaming: true,
+                orderIndex: nextOrder()
+            ),
+            makeMessage(
+                id: "command-1",
+                threadID: "thread",
+                role: .system,
+                kind: .commandExecution,
+                text: "Completed rg",
+                createdAt: now.addingTimeInterval(2),
+                turnID: "turn-1",
+                itemID: "command-1",
+                orderIndex: nextOrder()
+            ),
+        ]
+
+        let reordered = TurnTimelineReducer.enforceIntraTurnOrder(in: messages)
+        XCTAssertEqual(reordered.map(\.id), [
+            "user-1",
+            "assistant-1",
+            "command-1",
+        ])
+    }
+
+    func testEnforceIntraTurnOrderKeepsLateStatusBelowCompletedAssistant() {
+        let now = Date()
+        var order = 0
+        func nextOrder() -> Int { order += 1; return order }
+
+        let messages = [
+            makeMessage(
+                id: "user-1",
+                threadID: "thread",
+                role: .user,
+                kind: .chat,
+                text: "Hello",
+                createdAt: now,
+                turnID: "turn-1",
+                orderIndex: nextOrder()
+            ),
+            makeMessage(
+                id: "assistant-1",
+                threadID: "thread",
+                role: .assistant,
+                kind: .chat,
+                text: "Done",
+                createdAt: now.addingTimeInterval(1),
+                turnID: "turn-1",
+                itemID: "item-1",
+                isStreaming: false,
+                orderIndex: nextOrder()
+            ),
+            makeMessage(
+                id: "command-1",
+                threadID: "thread",
+                role: .system,
+                kind: .commandExecution,
+                text: "Completed rg",
+                createdAt: now.addingTimeInterval(2),
+                turnID: "turn-1",
+                itemID: "command-1",
+                orderIndex: nextOrder()
+            ),
+        ]
+
+        let reordered = TurnTimelineReducer.enforceIntraTurnOrder(in: messages)
+        XCTAssertEqual(reordered.map(\.id), [
+            "user-1",
+            "assistant-1",
+            "command-1",
+        ])
+    }
+
     func testEnforceIntraTurnOrderPreservesSteerPromptAfterAssistantWithinSameTurn() {
         let now = Date()
         var order = 0
@@ -3050,6 +3329,108 @@ final class TurnTimelineReducerTests: XCTestCase {
         )
 
         XCTAssertEqual(blockInfo[0]?.copyText, "Completed response")
+    }
+
+    func testRunningAccessoryRehomesFromSkippedThinkingPlaceholder() {
+        let now = Date()
+        let messages = [
+            makeMessage(
+                id: "assistant-1",
+                threadID: "thread",
+                role: .assistant,
+                kind: .chat,
+                text: "Partial response",
+                createdAt: now,
+                turnID: "turn-1",
+                isStreaming: true
+            ),
+            makeMessage(
+                id: "thinking-placeholder",
+                threadID: "thread",
+                role: .system,
+                kind: .thinking,
+                text: "",
+                createdAt: now.addingTimeInterval(1),
+                turnID: "turn-1",
+                isStreaming: true
+            ),
+        ]
+
+        let blockInfo = TurnTimelineView<EmptyView, EmptyView>.assistantBlockInfo(
+            for: messages,
+            activeTurnID: "turn-1",
+            isThreadRunning: true,
+            latestTurnTerminalState: nil,
+            stoppedTurnIDs: []
+        )
+        let initialStates = [String: AssistantBlockAccessoryState](
+            uniqueKeysWithValues: zip(messages, blockInfo).compactMap { message, state in
+                guard let state else { return nil }
+                return (message.id, state)
+            }
+        )
+        let renderItems = TurnTimelineRenderProjection.project(messages: messages)
+        let rehousedStates = TurnTimelineView<EmptyView, EmptyView>.rehomeHiddenAccessoryStates(
+            initialStates,
+            messages: messages,
+            renderItems: renderItems
+        )
+
+        XCTAssertEqual(renderItems.map(\.id), ["assistant-1"])
+        XCTAssertNil(initialStates["assistant-1"])
+        XCTAssertEqual(initialStates["thinking-placeholder"]?.showsRunningIndicator, true)
+        XCTAssertNil(rehousedStates["thinking-placeholder"])
+        XCTAssertEqual(rehousedStates["assistant-1"]?.showsRunningIndicator, true)
+    }
+
+    func testEmptyStreamingAssistantPlaceholderDoesNotRenderAfterUserSend() {
+        let now = Date()
+        let messages = [
+            makeMessage(
+                id: "user-1",
+                threadID: "thread",
+                role: .user,
+                kind: .chat,
+                text: "Please fix this",
+                createdAt: now,
+                turnID: "turn-1"
+            ),
+            makeMessage(
+                id: "assistant-placeholder",
+                threadID: "thread",
+                role: .assistant,
+                kind: .chat,
+                text: "",
+                createdAt: now.addingTimeInterval(1),
+                turnID: "turn-1",
+                isStreaming: true
+            ),
+        ]
+
+        let renderItems = TurnTimelineRenderProjection.project(messages: messages)
+        let blockInfo = TurnTimelineView<EmptyView, EmptyView>.assistantBlockInfo(
+            for: messages,
+            activeTurnID: "turn-1",
+            isThreadRunning: true,
+            latestTurnTerminalState: nil,
+            stoppedTurnIDs: []
+        )
+        let initialStates = [String: AssistantBlockAccessoryState](
+            uniqueKeysWithValues: zip(messages, blockInfo).compactMap { message, state in
+                guard let state else { return nil }
+                return (message.id, state)
+            }
+        )
+        let rehousedStates = TurnTimelineView<EmptyView, EmptyView>.rehomeHiddenAccessoryStates(
+            initialStates,
+            messages: messages,
+            renderItems: renderItems
+        )
+
+        XCTAssertEqual(renderItems.map(\.id), ["user-1"])
+        XCTAssertEqual(initialStates["assistant-placeholder"]?.showsRunningIndicator, true)
+        XCTAssertNil(rehousedStates["user-1"])
+        XCTAssertEqual(rehousedStates["assistant-placeholder"]?.showsRunningIndicator, true)
     }
 
     func testAssistantBlockInfoHidesCopyWhenLatestRunStopped() {

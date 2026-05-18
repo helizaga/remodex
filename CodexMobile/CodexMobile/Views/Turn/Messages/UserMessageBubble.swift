@@ -10,9 +10,13 @@ import UIKit
 struct UserMessageBubble: View {
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage(UserBubbleColor.storageKey) private var userBubbleColorRawValue = UserBubbleColor.defaultStoredRawValue
+    private static let bubbleCornerRadius: CGFloat = 20
+    private static let darkColoredBubbleOpacity = 0.75
 
     let message: CodexMessage
     let text: String
+    let actionText: String
+    var isProgressiveTextWindow: Bool = false
     let isRetryAvailable: Bool
     let onRetryUserMessage: (String) -> Void
 
@@ -31,7 +35,17 @@ struct UserMessageBubble: View {
                     }
                 }
 
-                if !text.isEmpty {
+                if !text.isEmpty, isProgressiveTextWindow {
+                    userBubbleText(text, bubbleColor: bubbleColor)
+                        .font(AppFont.body())
+                        .foregroundStyle(bubbleColor.bubbleForeground(for: colorScheme))
+                        .padding(.vertical, 12)
+                        .padding(.horizontal, 16)
+                        .background {
+                            RoundedRectangle(cornerRadius: Self.bubbleCornerRadius, style: .continuous)
+                                .fill(userBubbleBackground(for: bubbleColor))
+                        }
+                } else if !text.isEmpty {
                     UserBubbleTextBlock(
                         contentIdentity: message.id,
                         rawText: text
@@ -43,8 +57,8 @@ struct UserMessageBubble: View {
                     .padding(.vertical, 12)
                     .padding(.horizontal, 16)
                     .background {
-                        RoundedRectangle(cornerRadius: 22, style: .continuous)
-                            .fill(bubbleColor.bubbleBackground(for: colorScheme))
+                        RoundedRectangle(cornerRadius: Self.bubbleCornerRadius, style: .continuous)
+                            .fill(userBubbleBackground(for: bubbleColor))
                     }
                 }
 
@@ -55,18 +69,18 @@ struct UserMessageBubble: View {
                 }
             }
             .contextMenu {
-                if !text.isEmpty {
+                if !actionText.isEmpty {
                     Button {
                         HapticFeedback.shared.triggerImpactFeedback(style: .light)
-                        UIPasteboard.general.string = text
+                        UIPasteboard.general.string = actionText
                     } label: {
-                        Label("Copy", systemImage: "doc.on.doc")
+                        RemodexIcon.menuLabel("Copy", systemName: "doc.on.doc")
                     }
                 }
-                if isRetryAvailable, !text.isEmpty {
+                if isRetryAvailable, !actionText.isEmpty {
                     Button {
                         HapticFeedback.shared.triggerImpactFeedback(style: .light)
-                        onRetryUserMessage(text)
+                        onRetryUserMessage(actionText)
                     } label: {
                         Label("Retry", systemImage: "arrow.clockwise")
                     }
@@ -83,6 +97,20 @@ struct UserMessageBubble: View {
 
     private var selectedUserBubbleColor: UserBubbleColor {
         UserBubbleColor(rawValue: userBubbleColorRawValue) ?? .default
+    }
+
+    // Softens saturated palettes in dark mode without muting the neutral/default choices.
+    private func userBubbleBackground(for bubbleColor: UserBubbleColor) -> Color {
+        guard colorScheme == .dark else {
+            return bubbleColor.bubbleBackground(for: colorScheme)
+        }
+
+        switch bubbleColor {
+        case .default, .black:
+            return bubbleColor.bubbleBackground(for: colorScheme)
+        default:
+            return Color(uiColor: bubbleColor.uiColor).opacity(Self.darkColoredBubbleOpacity)
+        }
     }
 
     private var deliveryStatusText: String? {
@@ -198,8 +226,7 @@ struct UserMessageBubble: View {
                 let color: Color
 
                 if trigger == "@", isConfirmedFileMention {
-                    let fileName = (normalizedToken as NSString).lastPathComponent
-                    displayName = fileName.isEmpty ? normalizedToken : fileName
+                    displayName = normalizedToken.pathDisplayName
                     color = bubbleColor.mentionForeground(for: colorScheme, fallback: .blue)
                 } else if trigger == "@" {
                     displayName = SkillDisplayNameFormatter.displayName(for: normalizedToken)

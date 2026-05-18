@@ -69,7 +69,7 @@ struct SidebarLocalFolderBrowserSheet: View {
 
                 ToolbarItemGroup(placement: .primaryAction) {
                     Button(action: presentNewFolderPrompt) {
-                        Image(systemName: "folder.badge.plus")
+                        RemodexIcon.image(systemName: "folder.badge.plus")
                     }
                     .disabled(currentPath == nil || isCreatingFolder)
 
@@ -265,7 +265,7 @@ private struct SidebarLocalFolderCurrentSection: View {
             if let currentPath {
                 SidebarLocalFolderRow(
                     iconSystemName: "folder.fill",
-                    title: Self.displayName(for: currentPath),
+                    title: currentPath.pathDisplayName,
                     subtitle: currentPath
                 )
             } else {
@@ -276,10 +276,6 @@ private struct SidebarLocalFolderCurrentSection: View {
         }
     }
 
-    private static func displayName(for path: String) -> String {
-        let lastComponent = (path as NSString).lastPathComponent
-        return lastComponent.isEmpty ? path : lastComponent
-    }
 }
 
 private struct SidebarLocalFolderEntriesSection: View {
@@ -379,7 +375,7 @@ private struct SidebarLocalFolderRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: iconSystemName)
+            RemodexIcon.image(systemName: iconSystemName)
                 .font(AppFont.body(weight: .medium))
                 .foregroundStyle(.secondary)
                 .frame(width: 22)

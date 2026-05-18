@@ -11,6 +11,9 @@ struct CodexImageAttachment: Identifiable, Codable, Hashable, Sendable {
     let thumbnailBase64JPEG: String
     let payloadDataURL: String?
     let sourceURL: String?
+    let thumbnailContentFingerprint: CodexTextContentFingerprint
+    let payloadContentFingerprint: CodexTextContentFingerprint?
+    let sourceContentFingerprint: CodexTextContentFingerprint?
 
     nonisolated init(
         id: String = UUID().uuidString,
@@ -22,6 +25,56 @@ struct CodexImageAttachment: Identifiable, Codable, Hashable, Sendable {
         self.thumbnailBase64JPEG = thumbnailBase64JPEG
         self.payloadDataURL = payloadDataURL
         self.sourceURL = sourceURL
+        self.thumbnailContentFingerprint = CodexTextContentFingerprint(thumbnailBase64JPEG)
+        self.payloadContentFingerprint = payloadDataURL.map(CodexTextContentFingerprint.init)
+        self.sourceContentFingerprint = sourceURL.map(CodexTextContentFingerprint.init)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case thumbnailBase64JPEG
+        case payloadDataURL
+        case sourceURL
+        case thumbnailContentFingerprint
+        case payloadContentFingerprint
+        case sourceContentFingerprint
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        thumbnailBase64JPEG = try container.decode(String.self, forKey: .thumbnailBase64JPEG)
+        payloadDataURL = try container.decodeIfPresent(String.self, forKey: .payloadDataURL)
+        sourceURL = try container.decodeIfPresent(String.self, forKey: .sourceURL)
+        thumbnailContentFingerprint = try container.decodeIfPresent(
+            CodexTextContentFingerprint.self,
+            forKey: .thumbnailContentFingerprint
+        ) ?? CodexTextContentFingerprint(thumbnailBase64JPEG)
+        let decodedPayloadFingerprint = try container.decodeIfPresent(
+            CodexTextContentFingerprint.self,
+            forKey: .payloadContentFingerprint
+        )
+        payloadContentFingerprint = payloadDataURL == nil
+            ? nil
+            : decodedPayloadFingerprint ?? payloadDataURL.map(CodexTextContentFingerprint.init)
+        let decodedSourceFingerprint = try container.decodeIfPresent(
+            CodexTextContentFingerprint.self,
+            forKey: .sourceContentFingerprint
+        )
+        sourceContentFingerprint = sourceURL == nil
+            ? nil
+            : decodedSourceFingerprint ?? sourceURL.map(CodexTextContentFingerprint.init)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(thumbnailBase64JPEG, forKey: .thumbnailBase64JPEG)
+        try container.encodeIfPresent(payloadDataURL, forKey: .payloadDataURL)
+        try container.encodeIfPresent(sourceURL, forKey: .sourceURL)
+        try container.encode(thumbnailContentFingerprint, forKey: .thumbnailContentFingerprint)
+        try container.encodeIfPresent(payloadContentFingerprint, forKey: .payloadContentFingerprint)
+        try container.encodeIfPresent(sourceContentFingerprint, forKey: .sourceContentFingerprint)
     }
 
     // History rows only need a thumbnail and, when available, a lightweight remote URL.
@@ -48,12 +101,12 @@ struct CodexImageAttachment: Identifiable, Codable, Hashable, Sendable {
         return id
     }
 
-    private nonisolated var normalizedPayloadDataURL: String? {
+    nonisolated private var normalizedPayloadDataURL: String? {
         let trimmed = payloadDataURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    private nonisolated var normalizedSourceURL: String? {
+    nonisolated private var normalizedSourceURL: String? {
         let trimmed = sourceURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !trimmed.isEmpty, !Self.isInlineImageDataURL(trimmed) else {
             return nil
@@ -61,7 +114,7 @@ struct CodexImageAttachment: Identifiable, Codable, Hashable, Sendable {
         return trimmed
     }
 
-    private nonisolated static func isInlineImageDataURL(_ value: String) -> Bool {
+    nonisolated private static func isInlineImageDataURL(_ value: String) -> Bool {
         value.lowercased().hasPrefix("data:image")
     }
 }

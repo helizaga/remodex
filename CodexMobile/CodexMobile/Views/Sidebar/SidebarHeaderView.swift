@@ -1,47 +1,148 @@
 // FILE: SidebarHeaderView.swift
-// Purpose: Displays the sidebar app identity header and the inline close affordance for full-width presentation.
+// Purpose: Top sidebar row with logo/title, detached utility shortcut (settings),
+//          overflow creation menu, and the hamburger close affordance. All
+//          icon buttons route through `SidebarToolbarIconButton` so they
+//          share one visual treatment.
 // Layer: View Component
-// Exports: SidebarHeaderView
+// Exports: SidebarHeaderView, SidebarOverflowMenuActions
+// Depends on: SwiftUI, UIKit, SidebarToolbarIconButton, RemodexIcon,
+//             AdaptiveGlassModifier, UIKitMenuButton, HapticFeedback
 
 import SwiftUI
+import UIKit
+
+struct SidebarOverflowMenuActions {
+    var isEnabled: Bool
+    var pendingAction: SidebarTopAction?
+    var onNewChat: () -> Void
+    var onQuickChat: () -> Void
+    var onNewProject: () -> Void
+    var onOpenTerminal: () -> Void
+    var onOpenSettings: () -> Void
+}
 
 struct SidebarHeaderView: View {
-    var showsCloseButton = false
-    var onClose: () -> Void = {}
+    var showsCloseButton: Bool = true
+    var onClose: () -> Void
+    var overflowActions: SidebarOverflowMenuActions
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image("AppLogo")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 26, height: 26)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        AdaptiveGlassContainer(spacing: 10) {
+            HStack(spacing: 10) {
+                appLogo
+                Text("Remodex")
+                    .font(AppFont.title3(weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
 
-            Text("Remodex")
-                .font(AppFont.title3(weight: .medium))
+                Spacer(minLength: 0)
 
-            Spacer(minLength: 0)
+                overflowMenuButton
 
-            if showsCloseButton {
-                // Mirrors the top-bar menu affordance so full-width sidebar presentations still
-                // have an obvious close target after the content shifts completely offscreen.
-                Button(action: onClose) {
-                    TwoLineHamburgerIcon()
-                        .foregroundStyle(.primary)
-                        .frame(width: 44, height: 44)
-                        .adaptiveGlass(.regular, in: Circle())
-                        .contentShape(Circle())
+                SidebarToolbarIconButton(
+                    icon: .systemImage("gearshape"),
+                    accessibilityLabel: "Settings",
+                    action: overflowActions.onOpenSettings
+                )
+
+                if showsCloseButton {
+                    hamburgerButton
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Close menu")
             }
         }
         .padding(.horizontal, 16)
         .padding(.top, 12)
-        .padding(.bottom, 8)
+        .padding(.bottom, 4)
+    }
+
+    private var appLogo: some View {
+        // Custom SF Symbol so the glyph picks up the same font-driven
+        // scaling SwiftUI gives native symbols; semibold has its own asset
+        // because interpolated weights are too subtle for this custom mark.
+        Image("remodex_symbol_semibold")
+            .font(.system(size: 20))
+            .foregroundStyle(.primary)
+    }
+
+    // Close affordance kept inside the sidebar so both drawer and full-width
+    // presentations share the same dismissal target.
+    private var hamburgerButton: some View {
+        SidebarToolbarIconButton(
+            icon: .custom { TwoLineHamburgerIcon() },
+            accessibilityLabel: "Close menu",
+            action: onClose
+        )
+    }
+
+    private var overflowMenuButton: some View {
+        // Routed through `UIKitMenuButton` so the leading glyphs render
+        // through `RemodexIcon.menuUIImage` at the SF Symbol menu glyph
+        // metric, matching the rest of the sidebar's UIKit-rendered menus.
+        UIKitMenuButton(
+            label: {
+                // Reuses the same toolbar button shell so the ellipsis trigger
+                // matches the surrounding settings + hamburger glyphs exactly.
+                SidebarToolbarIconButton(
+                    icon: .systemImage("ellipsis"),
+                    accessibilityLabel: "More actions",
+                    action: {}
+                )
+                .allowsHitTesting(false)
+            },
+            menu: { buildOverflowMenu() }
+        )
+        .disabled(!overflowActions.isEnabled)
+        .opacity(overflowActions.isEnabled ? 1 : 0.4)
+        .accessibilityLabel("More actions")
+    }
+
+    private func buildOverflowMenu() -> UIMenu {
+        UIMenu(
+            title: "",
+            options: [.displayInline],
+            children: [
+                overflowAction(title: "New Chat", systemName: "square.and.pencil") {
+                    overflowActions.onNewChat()
+                },
+                overflowAction(title: "Quick Chat", systemName: "message") {
+                    overflowActions.onQuickChat()
+                },
+                overflowAction(title: "New Project", systemName: "folder.badge.plus") {
+                    overflowActions.onNewProject()
+                },
+            ]
+        )
+    }
+
+    private func overflowAction(
+        title: String,
+        systemName: String,
+        handler: @escaping () -> Void
+    ) -> UIAction {
+        UIAction(
+            title: title,
+            image: RemodexIcon.menuUIImage(systemName: systemName)
+        ) { _ in
+            HapticFeedback.shared.triggerImpactFeedback(style: .light)
+            handler()
+        }
     }
 }
 
+#if DEBUG
 #Preview {
-    SidebarHeaderView(showsCloseButton: true)
+    SidebarHeaderView(
+        onClose: {},
+        overflowActions: SidebarOverflowMenuActions(
+            isEnabled: true,
+            pendingAction: nil,
+            onNewChat: {},
+            onQuickChat: {},
+            onNewProject: {},
+            onOpenTerminal: {},
+            onOpenSettings: {}
+        )
+    )
 }
+#endif

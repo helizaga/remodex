@@ -285,7 +285,9 @@ function createFakeCodexTransport() {
       this.emitClose();
     },
     emitClose() {
+      const previousExitCode = process.exitCode;
       listeners.close?.();
+      process.exitCode = previousExitCode;
     },
   };
 }

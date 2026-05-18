@@ -2,12 +2,13 @@
 // Purpose: Bottom bar with attachment/runtime/access menus, queue controls, and send button.
 // Layer: View Component
 // Exports: ComposerBottomBar
-// Depends on: SwiftUI, TurnComposerMetaMapper
+// Depends on: SwiftUI, TurnComposerMetaMapper, UIKitMenuButton, TurnComposerRuntimeUIKitMenuBuilder
 
 import SwiftUI
 
 struct ComposerBottomBar: View {
     @Environment(\.colorScheme) private var colorScheme
+    @AppStorage(UserBubbleColor.storageKey) private var userBubbleColorRawValue = UserBubbleColor.defaultStoredRawValue
     @State private var showsAllModelsSheet = false
 
     // Data
@@ -27,6 +28,7 @@ struct ComposerBottomBar: View {
     let isQueuePaused: Bool
     let activeTurnID: String?
     let isThreadRunning: Bool
+    let showsSendButton: Bool
     let voiceButtonPresentation: TurnComposerVoiceButtonPresentation
     let onTapAddImage: () -> Void
     let onTapTakePhoto: () -> Void
@@ -42,16 +44,27 @@ struct ComposerBottomBar: View {
     private var metaTextFont: Font { AppFont.subheadline() }
     private var metaSymbolFont: Font { AppFont.system(size: 11, weight: .regular) }
     private let metaVerticalPadding: CGFloat = 6
-    private let plusTapTargetSide: CGFloat = 22
+    private let composerIconSide: CGFloat = 22
+
+    private var selectedUserBubbleColor: UserBubbleColor {
+        UserBubbleColor(rawValue: userBubbleColorRawValue) ?? .default
+    }
+
+    // The send button is a CTA: treat the neutral "Default" palette the same
+    // as the "Primary" (.black) palette so it stays a bold label-colored circle
+    // regardless of which neutral the user picked.
+    private var sendButtonPaletteColor: UserBubbleColor {
+        selectedUserBubbleColor == .default ? .black : selectedUserBubbleColor
+    }
 
     private var sendButtonIconColor: Color {
         if isSendDisabled { return Color(.systemGray2) }
-        return Color(.systemBackground)
+        return sendButtonPaletteColor.bubbleForeground(for: colorScheme)
     }
 
     private var sendButtonBackgroundColor: Color {
         if isSendDisabled { return Color(.systemGray5) }
-        return Color(.label)
+        return sendButtonPaletteColor.bubbleBackground(for: colorScheme)
     }
 
     // MARK: - Body
@@ -59,6 +72,7 @@ struct ComposerBottomBar: View {
     var body: some View {
         HStack(spacing: 12) {
             attachmentMenu
+                .padding(.leading, 8)
             ComposerRuntimeMenuControl(
                 orderedModelOptions: orderedModelOptions,
                 selectedModelID: selectedModelID,
@@ -82,11 +96,12 @@ struct ComposerBottomBar: View {
                     HapticFeedback.shared.triggerImpactFeedback(style: .light)
                     onResumeQueue()
                 } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .font(AppFont.system(size: 12, weight: .bold))
-                        .foregroundStyle(Color(.systemBackground))
-                        .frame(width: 28, height: 28)
-                        .background(Color(.systemGray2), in: Circle())
+                    RemodexCircleBadge(
+                        systemName: "arrow.clockwise",
+                        foreground: Color(.systemBackground),
+                        background: Color(.systemGray2),
+                        diameter: 28
+                    )
                 }
                 .accessibilityLabel("Resume queued messages")
             }
@@ -111,35 +126,37 @@ struct ComposerBottomBar: View {
                     HapticFeedback.shared.triggerImpactFeedback()
                     onStopTurn(activeTurnID)
                 } label: {
-                    Image(systemName: "stop.fill")
-                        .font(AppFont.system(size: 12, weight: .bold))
-                        .foregroundStyle(Color(.systemBackground))
-                        .frame(width: 32, height: 32)
-                        .background(Color(.label), in: Circle())
+                    RemodexCircleBadge(
+                        systemName: "stop.fill",
+                        foreground: sendButtonPaletteColor.bubbleForeground(for: colorScheme),
+                        background: sendButtonPaletteColor.bubbleBackground(for: colorScheme)
+                    )
                 }
                 .accessibilityLabel("Stop current run")
             }
 
-            Button {
-                HapticFeedback.shared.triggerImpactFeedback()
-                onSend()
-            } label: {
-                Image(systemName: "arrow.up")
-                    .font(AppFont.system(size: 12, weight: .bold))
-                    .foregroundStyle(sendButtonIconColor)
-                    .frame(width: 32, height: 32)
-                    .background(sendButtonBackgroundColor, in: Circle())
-            }
-            .overlay(alignment: .topTrailing) {
-                if queuedCount > 0 {
-                    queueBadge
-                        .offset(x: 8, y: -8)
+            if showsSendButton {
+                Button {
+                    HapticFeedback.shared.triggerImpactFeedback()
+                    onSend()
+                } label: {
+                    RemodexCircleBadge(
+                        systemName: "arrow.up",
+                        foreground: sendButtonIconColor,
+                        background: sendButtonBackgroundColor
+                    )
                 }
+                .overlay(alignment: .topTrailing) {
+                    if queuedCount > 0 {
+                        queueBadge
+                            .offset(x: 8, y: -8)
+                    }
+                }
+                .disabled(isSendDisabled)
             }
-            .disabled(isSendDisabled)
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 4)
+        .padding(.horizontal, 8)
+        .padding(.bottom, 8)
         .padding(.top, 2)
         .sheet(isPresented: $showsAllModelsSheet) {
             AllModelsSheet(
@@ -161,22 +178,31 @@ struct ComposerBottomBar: View {
     private var voiceButtonLabel: some View {
         Group {
             if voiceButtonPresentation.showsProgress {
-                ProgressView()
-                    .tint(voiceButtonPresentation.foregroundColor)
-                    .frame(width: 32, height: 32)
-                    .background(voiceButtonPresentation.backgroundColor, in: Circle())
+                CircularIconBadge(
+                    foreground: voiceButtonPresentation.foregroundColor,
+                    background: voiceButtonPresentation.backgroundColor
+                ) {
+                    ProgressView()
+                }
             } else if voiceButtonPresentation.hasCircleBackground {
-                Image(systemName: voiceButtonPresentation.systemImageName)
-                    .font(AppFont.system(size: 12, weight: .bold))
-                    .foregroundStyle(voiceButtonPresentation.foregroundColor)
-                    .frame(width: 32, height: 32)
-                    .background(voiceButtonPresentation.backgroundColor, in: Circle())
+                // Keep circular voice states on the same icon pipeline as the
+                // rest of the composer chrome.
+                RemodexCircleBadge(
+                    systemName: voiceButtonPresentation.systemImageName,
+                    foreground: voiceButtonPresentation.foregroundColor,
+                    background: voiceButtonPresentation.backgroundColor
+                )
             } else {
-                Image(systemName: voiceButtonPresentation.systemImageName)
-                    .font(metaTextFont)
-                    .foregroundStyle(metaLabelColor)
-                    .frame(width: plusTapTargetSide, height: plusTapTargetSide)
-                    .contentShape(Rectangle())
+                // Use explicit size so the Central mic artwork compensates for
+                // its internal padding (glyph fills ~77% of the SVG viewBox)
+                // and renders at the same visual size as the SF `plus` glyph.
+                RemodexIcon.image(
+                    systemName: voiceButtonPresentation.systemImageName,
+                    size: composerIconSide
+                )
+                .foregroundStyle(metaLabelColor)
+                .frame(width: composerIconSide, height: composerIconSide)
+                .contentShape(Rectangle())
             }
         }
     }
@@ -185,6 +211,9 @@ struct ComposerBottomBar: View {
 
     private var attachmentMenu: some View {
         Menu {
+            // `RemodexIcon.menuLabel` keeps Central artwork in SwiftUI Menus
+            // by routing through `Label(_, image:)` for mapped assets and
+            // falling back to `Label(_, systemImage:)` for plain SF Symbols.
             Toggle(isOn: Binding(
                 get: { isPlanModeArmed },
                 set: { newValue in
@@ -192,7 +221,7 @@ struct ComposerBottomBar: View {
                     onSetPlanModeArmed(newValue)
                 }
             )) {
-                Label("Plan mode", systemImage: "checklist")
+                RemodexIcon.menuLabel("Plan mode", systemName: "checklist")
             }
 
             if runtimeState.supportsFastMode {
@@ -200,28 +229,34 @@ struct ComposerBottomBar: View {
                     HapticFeedback.shared.triggerImpactFeedback(style: .light)
                     toggleFastMode()
                 } label: {
+                    // Native SF bolt on purpose so the menu item matches the
+                    // speed badge / Speed submenu icon used elsewhere.
                     Label("Fast Mode", systemImage: fastModePlusMenuIconName)
                 }
             }
 
             Section {
-                Button("Photo library") {
+                Button {
                     HapticFeedback.shared.triggerImpactFeedback()
                     onTapAddImage()
+                } label: {
+                    RemodexIcon.menuLabel("Photo library", systemName: "photo")
                 }
                 .disabled(remainingAttachmentSlots == 0)
 
-                Button("Take a photo") {
+                Button {
                     HapticFeedback.shared.triggerImpactFeedback()
                     onTapTakePhoto()
+                } label: {
+                    RemodexIcon.menuLabel("Take a photo", systemName: "camera.fill")
                 }
                 .disabled(remainingAttachmentSlots == 0)
             }
         } label: {
-            Image(systemName: "plus")
-                .font(metaTextFont)
-                .fontWeight(.regular)
-                .frame(width: plusTapTargetSide, height: plusTapTargetSide)
+            RemodexIcon.image(systemName: "plus")
+                .font(AppFont.title3(weight: .regular))
+                .foregroundStyle(Color.primary)
+                .frame(width: composerIconSide, height: composerIconSide)
                 .contentShape(Capsule())
         }
         .tint(metaLabelColor)
@@ -231,7 +266,7 @@ struct ComposerBottomBar: View {
 
     private var planModeIndicator: some View {
         HStack(spacing: 5) {
-            Image(systemName: "checklist")
+            RemodexIcon.image(systemName: "checklist")
                 .font(metaSymbolFont)
             Text("Plan")
                 .font(metaTextFont)
@@ -260,7 +295,7 @@ struct ComposerBottomBar: View {
     private var queueBadge: some View {
         HStack(spacing: 3) {
             if isQueuePaused {
-                Image(systemName: "pause.fill")
+                RemodexIcon.image(systemName: "pause.fill")
                     .font(AppFont.system(size: 8, weight: .bold))
             }
             Text("\(queuedCount)")
@@ -288,8 +323,7 @@ private struct ComposerRuntimeMenuControl: View, Equatable {
 
     private let metaLabelColor = Color(.secondaryLabel)
     private var metaTextFont: Font { AppFont.subheadline() }
-    private var metaSymbolFont: Font { AppFont.system(size: 11, weight: .regular) }
-    private var metaChevronFont: Font { AppFont.system(size: 9, weight: .regular) }
+    private var leadingIconFont: Font { AppFont.subheadline() }
 
     static func == (lhs: ComposerRuntimeMenuControl, rhs: ComposerRuntimeMenuControl) -> Bool {
         lhs.orderedModelOptions == rhs.orderedModelOptions
@@ -300,86 +334,35 @@ private struct ComposerRuntimeMenuControl: View, Equatable {
             && lhs.runtimeState == rhs.runtimeState
     }
 
-    // One consolidated runtime pill: Effort + featured models + Speed as flat sections.
+    // Renders one consolidated runtime pill backed by a real UIKit UIMenu so we
+    // can use hierarchical Model / Intelligence / Speed rows with subtitles
+    // without hitting SwiftUI nested-Menu glitches.
     var body: some View {
-        Menu {
-            Section("Effort") {
-                if runtimeState.reasoningDisplayOptions.isEmpty {
-                    Text("No reasoning options")
-                } else {
-                    ForEach(runtimeState.reasoningDisplayOptions, id: \.id) { option in
-                        Button {
-                            HapticFeedback.shared.triggerImpactFeedback(style: .light)
-                            runtimeActions.selectReasoning(option.effort)
-                        } label: {
-                            if runtimeState.isSelectedReasoning(option.effort) {
-                                Label(option.title, systemImage: "checkmark")
-                            } else {
-                                Text(option.title)
-                            }
-                        }
-                        .disabled(runtimeState.reasoningMenuDisabled)
-                    }
-                }
-            }
-
-            Section("Change model") {
-                if isLoadingModels {
-                    Text("Loading models...")
-                } else if orderedModelOptions.isEmpty {
-                    Text("No models available")
-                } else {
-                    ForEach(featuredModelOptions, id: \.id) { model in
-                        Button {
-                            HapticFeedback.shared.triggerImpactFeedback(style: .light)
-                            runtimeActions.selectModel(model.id)
-                        } label: {
-                            modelMenuRow(for: model)
-                        }
-                    }
-
-                    if hasNonFeaturedModels {
-                        Button("Other models") {
-                            HapticFeedback.shared.triggerImpactFeedback(style: .light)
-                            DispatchQueue.main.async {
-                                showsAllModelsSheet = true
-                            }
-                        }
-                    }
-                }
-            }
-
-            if runtimeState.supportsFastMode {
-                Section("Speed") {
-                    Button {
-                        HapticFeedback.shared.triggerImpactFeedback(style: .light)
-                        runtimeActions.selectServiceTier(nil)
-                    } label: {
-                        if runtimeState.isSelectedServiceTier(nil) {
-                            Label("Normal", systemImage: "checkmark")
-                        } else {
-                            Text("Normal")
-                        }
-                    }
-
-                    ForEach(CodexServiceTier.allCases, id: \.rawValue) { tier in
-                        Button {
-                            HapticFeedback.shared.triggerImpactFeedback(style: .light)
-                            runtimeActions.selectServiceTier(tier)
-                        } label: {
-                            if runtimeState.isSelectedServiceTier(tier) {
-                                Label(tier.displayName, systemImage: "checkmark")
-                            } else {
-                                Text(tier.displayName)
-                            }
-                        }
-                    }
-                }
-            }
-        } label: {
+        UIKitMenuButton {
             composerMenuLabel(
-                title: compactRuntimeTitle,
+                modelPart: modelLabelPart,
+                effortPart: effortLabelPart,
                 leadingImageName: runtimeState.showsSpeedBadgeInModelMenu ? "bolt.fill" : nil
+            )
+        } menu: {
+            TurnComposerRuntimeUIKitMenuBuilder.makeMenu(
+                .init(
+                    runtimeState: runtimeState,
+                    runtimeActions: runtimeActions,
+                    orderedModelOptions: orderedModelOptions,
+                    selectedModelID: selectedModelID,
+                    selectedModelTitle: selectedModelTitle,
+                    isLoadingModels: isLoadingModels,
+                    isRuntimeSelectionLoading: isRuntimeSelectionLoading,
+                    featuredModelIdentifiers: Self.featuredModelIdentifiers,
+                    onRequestAllModelsSheet: {
+                        // Defer to the next runloop so the menu dismissal
+                        // animation isn't fighting the sheet presentation.
+                        DispatchQueue.main.async {
+                            showsAllModelsSheet = true
+                        }
+                    }
+                )
             )
         }
         .fixedSize(horizontal: true, vertical: false)
@@ -387,11 +370,17 @@ private struct ComposerRuntimeMenuControl: View, Equatable {
         .tint(metaLabelColor)
     }
 
-    private var compactRuntimeTitle: String {
+    // Split label parts so the model name and effort can carry different foreground styles.
+    private var modelLabelPart: String {
         if selectedModelID == nil {
             return isRuntimeSelectionLoading ? "Loading…" : "Select model"
         }
-        return "\(compactModelTitle) \(runtimeState.selectedReasoningTitle)"
+        return compactModelTitle
+    }
+
+    private var effortLabelPart: String? {
+        guard selectedModelID != nil else { return nil }
+        return runtimeState.selectedReasoningTitle
     }
 
     // Keeps the family suffix visible while shortening the common GPT prefix.
@@ -405,79 +394,46 @@ private struct ComposerRuntimeMenuControl: View, Equatable {
         return stripped.replacingOccurrences(of: "-", with: " ")
     }
 
-    @ViewBuilder
-    private func modelMenuRow(for model: CodexModelOption) -> some View {
-        HStack(spacing: 8) {
-            if selectedModelID == model.id {
-                Image(systemName: "checkmark")
-            }
-            if model.supportsServiceTier(.fast) {
-                Image(systemName: CodexServiceTier.fast.iconName)
-            }
-            Text(TurnComposerMetaMapper.modelTitle(for: model))
-        }
-    }
-
-    // The currently selected model is pinned alongside headline models.
-    private var featuredModelOptions: [CodexModelOption] {
-        var seenIDs = Set<String>()
-        var result: [CodexModelOption] = []
-
-        func append(_ model: CodexModelOption) {
-            guard seenIDs.insert(model.id).inserted else { return }
-            result.append(model)
-        }
-
-        for model in orderedModelOptions where Self.matchesFeaturedIdentifier(model) {
-            append(model)
-        }
-        if let selected = orderedModelOptions.first(where: { $0.id == selectedModelID }) {
-            append(selected)
-        }
-        return result
-    }
-
-    private var hasNonFeaturedModels: Bool {
-        orderedModelOptions.contains { model in
-            !featuredModelOptions.contains(where: { $0.id == model.id })
-        }
-    }
-
+    // Identifiers pinned to the top of the model submenu; the rest are reachable
+    // via "Other models…" so the menu stays glanceable as the list grows.
     private static let featuredModelIdentifiers: Set<String> = [
         "gpt-5.5",
         "gpt-5.4",
     ]
 
-    private static func matchesFeaturedIdentifier(_ model: CodexModelOption) -> Bool {
-        let normalizedID = model.id.lowercased()
-        let normalizedModel = model.model.lowercased()
-        return featuredModelIdentifiers.contains(normalizedID)
-            || featuredModelIdentifiers.contains(normalizedModel)
-    }
-
     private func composerMenuLabel(
-        title: String,
+        modelPart: String,
+        effortPart: String?,
         leadingImageName: String?
     ) -> some View {
         HStack(spacing: 6) {
             if let leadingImageName {
+                // Native SF Symbol on purpose: the Central lightning artwork
+                // reads as a different glyph from the system bolt that the
+                // user expects in the speed badge.
                 Image(systemName: leadingImageName)
-                    .font(metaSymbolFont)
+                    .font(leadingIconFont)
+                    .foregroundStyle(Color.primary)
             }
 
-            Text(title)
+            titleText(modelPart: modelPart, effortPart: effortPart)
                 .font(metaTextFont)
                 .fontWeight(.regular)
                 .lineLimit(1)
-
-            Image(systemName: "chevron.down")
-                .font(metaChevronFont)
         }
         .padding(.vertical, 6)
         .padding(.horizontal, 4)
-        .foregroundStyle(metaLabelColor)
         .fixedSize(horizontal: true, vertical: false)
         .contentShape(Rectangle())
+    }
+
+    // Concatenated Text lets each segment carry its own foreground style.
+    private func titleText(modelPart: String, effortPart: String?) -> Text {
+        let model = Text(modelPart).foregroundStyle(Color.primary)
+        guard let effortPart, !effortPart.isEmpty else { return model }
+        return model
+            + Text(" ")
+            + Text(effortPart).foregroundStyle(.tertiary)
     }
 }
 
@@ -492,6 +448,7 @@ private struct AllModelsSheet: View {
     let onSelect: (String) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    private let fastModeIconSide: CGFloat = 16
 
     var body: some View {
         NavigationStack {
@@ -500,11 +457,11 @@ private struct AllModelsSheet: View {
                     ProgressView("Loading models…")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if models.isEmpty {
-                    ContentUnavailableView(
-                        "No models available",
-                        systemImage: "square.stack.3d.up.slash",
-                        description: Text("Reconnect to your local Codex bridge to refresh the model list.")
-                    )
+                    ContentUnavailableView {
+                        RemodexIcon.label("No models available", systemName: "square.stack.3d.up.slash")
+                    } description: {
+                        Text("Reconnect to your local Codex bridge to refresh the model list.")
+                    }
                 } else {
                     List {
                         Section {
@@ -535,7 +492,7 @@ private struct AllModelsSheet: View {
     private func modelRow(for model: CodexModelOption) -> some View {
         let title = TurnComposerMetaMapper.modelTitle(for: model)
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: model.id == selectedModelID ? "checkmark.circle.fill" : "circle")
+            RemodexIcon.image(systemName: model.id == selectedModelID ? "checkmark.circle.fill" : "circle")
                 .font(.system(size: 18))
                 .foregroundStyle(model.id == selectedModelID ? Color.accentColor : Color(.tertiaryLabel))
                 .padding(.top, 2)
@@ -547,7 +504,8 @@ private struct AllModelsSheet: View {
                         .foregroundStyle(Color(.label))
                     if modelSupportsFastMode(model) {
                         Image(systemName: CodexServiceTier.fast.iconName)
-                            .font(AppFont.system(size: 11, weight: .regular))
+                            .font(.system(size: fastModeIconSide, weight: .regular))
+                            .frame(width: fastModeIconSide, height: fastModeIconSide)
                             .foregroundStyle(Color(.secondaryLabel))
                     }
                 }

@@ -443,7 +443,7 @@ enum UserBubbleColor: String, CaseIterable, Identifiable {
     // UIKit menu actions template SF Symbols by default, so provide an original-rendered swatch.
     var menuSwatchImage: UIImage {
         let configuration = UIImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
-        let image = UIImage(systemName: "circle.fill", withConfiguration: configuration) ?? UIImage()
+        let image = RemodexIcon.uiImage(systemName: "circle.fill", withConfiguration: configuration) ?? UIImage()
         return image.withTintColor(uiColor, renderingMode: .alwaysOriginal)
     }
 
@@ -466,6 +466,14 @@ enum UserBubbleColor: String, CaseIterable, Identifiable {
         default:
             return .white
         }
+    }
+
+    // CTA palette: collapse the neutral "Default" onto "Primary" (.black) so
+    // accent buttons (composer send, sidebar chat pill, scope picker selected
+    // chip, ...) stay a bold label-colored CTA regardless of which neutral the
+    // user picked for their message bubbles.
+    var ctaPalette: UserBubbleColor {
+        self == .default ? .black : self
     }
 
     func mentionForeground(for colorScheme: ColorScheme, fallback: Color) -> Color {

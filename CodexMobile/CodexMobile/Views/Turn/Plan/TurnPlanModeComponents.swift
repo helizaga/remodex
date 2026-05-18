@@ -269,7 +269,7 @@ struct ProposedPlanResultCard: View {
                             ProgressView()
                                 .controlSize(.small)
                         } else {
-                            Image(systemName: "arrow.right.circle.fill")
+                            RemodexIcon.image(systemName: "arrow.right.circle.fill")
                                 .font(AppFont.system(size: 14, weight: .semibold))
                         }
                         Text(isImplementationLocked ? "Starting implementation…" : "Implement plan")
@@ -446,7 +446,7 @@ struct StructuredUserInputAccessory: View {
 
                     Spacer(minLength: 0)
 
-                    Image(systemName: "chevron.up.circle.fill")
+                    RemodexIcon.image(systemName: "chevron.up.circle.fill")
                         .font(AppFont.system(size: 20, weight: .semibold))
                         .foregroundStyle(Color(.plan))
                 }
@@ -509,7 +509,7 @@ private struct PlanStepRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: statusSymbol)
+            RemodexIcon.image(systemName: statusSymbol)
                 .font(AppFont.system(size: 12, weight: .semibold))
                 .foregroundStyle(statusColor)
                 .padding(.top, 2)

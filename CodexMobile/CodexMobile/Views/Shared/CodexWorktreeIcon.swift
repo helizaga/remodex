@@ -11,11 +11,10 @@ struct CodexForkIcon: View {
     var pointSize: CGFloat = 13
 
     var body: some View {
-        Image("git-branch")
-            .renderingMode(.template)
-            .resizable()
-            .scaledToFit()
-            .frame(width: pointSize, height: pointSize)
+        // `remodex.fork` is a virtual key in RemodexIcon mapped to
+        // central-fork-code; routing through RemodexIcon keeps Dynamic Type
+        // scaling and the square anchor logic in one place.
+        RemodexIcon.image(systemName: "remodex.fork", size: pointSize)
     }
 }
 
@@ -24,52 +23,24 @@ struct CodexWorktreeIcon: View {
     var weight: Font.Weight = .regular
 
     var body: some View {
-        Image(uiImage: Self.menuImage(pointSize: pointSize, weight: uiSymbolWeight))
-            .renderingMode(.template)
-            .resizable()
-            .scaledToFit()
-            .frame(width: pointSize, height: pointSize)
-    }
-
-    private var uiSymbolWeight: UIImage.SymbolWeight {
-        switch weight {
-        case .ultraLight: return .ultraLight
-        case .thin: return .thin
-        case .light: return .light
-        case .medium: return .medium
-        case .semibold: return .semibold
-        case .bold: return .bold
-        case .heavy: return .heavy
-        case .black: return .black
-        default: return .regular
-        }
+        // Native SF Symbol: keeps the worktree icon aligned with the system
+        // appearance the rest of the OS uses for branch/worktree affordances.
+        // Rotated 90° so the trunk reads horizontally (handoff direction).
+        RemodexIcon.image(
+            systemName: "arrow.triangle.branch",
+            size: pointSize,
+            weight: weight
+        )
+        .rotationEffect(.degrees(90))
     }
 
     static func menuImage(pointSize: CGFloat = 13, weight: UIImage.SymbolWeight = .regular) -> UIImage {
-        let config = UIImage.SymbolConfiguration(pointSize: pointSize, weight: weight)
-        guard let symbol = UIImage(systemName: "arrow.triangle.branch", withConfiguration: config)?
+        let configuration = UIImage.SymbolConfiguration(pointSize: pointSize, weight: weight)
+        guard let symbol = UIImage(systemName: "arrow.triangle.branch", withConfiguration: configuration)?
             .withRenderingMode(.alwaysTemplate) else {
             return UIImage()
         }
-
-        let canvasSide = max(symbol.size.width, symbol.size.height)
-        let canvasSize = CGSize(width: canvasSide, height: canvasSide)
-        let renderer = UIGraphicsImageRenderer(size: canvasSize)
-
-        return renderer.image { _ in
-            let context = UIGraphicsGetCurrentContext()
-            context?.translateBy(x: canvasSize.width / 2, y: canvasSize.height / 2)
-            context?.rotate(by: .pi / 2)
-
-            let drawRect = CGRect(
-                x: -symbol.size.width / 2,
-                y: -symbol.size.height / 2,
-                width: symbol.size.width,
-                height: symbol.size.height
-            )
-            symbol.draw(in: drawRect)
-        }
-        .withRenderingMode(.alwaysTemplate)
+        return symbol.rotated(byDegrees: 90) ?? symbol
     }
 }
 
@@ -87,5 +58,32 @@ struct CodexWorktreeMenuLabelRow: View {
                 .frame(width: pointSize, height: pointSize)
             Text(title)
         }
+    }
+}
+
+private extension UIImage {
+    // Bitmap-level rotation so the rotated glyph is baked into the UIImage we
+    // hand off to UIKit menus (UIAction.image / Image(uiImage:)). Applying a
+    // SwiftUI `.rotationEffect` after the fact wouldn't survive the trip
+    // through UIKit menu rendering.
+    func rotated(byDegrees degrees: CGFloat) -> UIImage? {
+        let radians = degrees * .pi / 180
+        let rotatedSize = CGRect(origin: .zero, size: size)
+            .applying(CGAffineTransform(rotationAngle: radians))
+            .integral
+            .size
+        let renderer = UIGraphicsImageRenderer(size: rotatedSize)
+        let rendered = renderer.image { context in
+            let cgContext = context.cgContext
+            cgContext.translateBy(x: rotatedSize.width / 2, y: rotatedSize.height / 2)
+            cgContext.rotate(by: radians)
+            draw(in: CGRect(
+                x: -size.width / 2,
+                y: -size.height / 2,
+                width: size.width,
+                height: size.height
+            ))
+        }
+        return rendered.withRenderingMode(renderingMode)
     }
 }

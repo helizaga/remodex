@@ -2,7 +2,7 @@
 // Purpose: Renders timeline row groups and message-row accessories.
 // Layer: View Component
 // Exports: AssistantBlockAccessoryState, TurnTimelineRowsSection
-// Depends on: SwiftUI, TurnTimelineRenderProjection, MessageRow
+// Depends on: SwiftUI, TurnTimelineRenderProjection, MessageRow, CodexMessage
 
 import SwiftUI
 
@@ -14,6 +14,15 @@ struct AssistantBlockAccessoryState: Equatable {
     let blockRevertPresentation: AssistantRevertPresentation?
     let blockRevertMessage: CodexMessage?
 
+    static func == (lhs: AssistantBlockAccessoryState, rhs: AssistantBlockAccessoryState) -> Bool {
+        lhs.copyText == rhs.copyText
+            && lhs.showsRunningIndicator == rhs.showsRunningIndicator
+            && lhs.blockDiffText == rhs.blockDiffText
+            && lhs.blockDiffEntries == rhs.blockDiffEntries
+            && lhs.blockRevertPresentation == rhs.blockRevertPresentation
+            && blockRevertMessageSignature(lhs.blockRevertMessage) == blockRevertMessageSignature(rhs.blockRevertMessage)
+    }
+
     func replacingCopyText(_ copyText: String?) -> AssistantBlockAccessoryState {
         AssistantBlockAccessoryState(
             copyText: copyText,
@@ -23,6 +32,42 @@ struct AssistantBlockAccessoryState: Equatable {
             blockRevertPresentation: blockRevertPresentation,
             blockRevertMessage: blockRevertMessage
         )
+    }
+
+    func mergingRehomedAccessoryState(_ state: AssistantBlockAccessoryState) -> AssistantBlockAccessoryState {
+        AssistantBlockAccessoryState(
+            copyText: copyText ?? state.copyText,
+            showsRunningIndicator: showsRunningIndicator || state.showsRunningIndicator,
+            blockDiffText: blockDiffText ?? state.blockDiffText,
+            blockDiffEntries: blockDiffEntries ?? state.blockDiffEntries,
+            blockRevertPresentation: blockRevertPresentation ?? state.blockRevertPresentation,
+            blockRevertMessage: blockRevertMessage ?? state.blockRevertMessage
+        )
+    }
+
+    private static func blockRevertMessageSignature(_ message: CodexMessage?) -> AssistantBlockRevertMessageSignature? {
+        guard let message else { return nil }
+        return AssistantBlockRevertMessageSignature(message)
+    }
+}
+
+private struct AssistantBlockRevertMessageSignature: Equatable {
+    let id: String
+    let role: CodexMessageRole
+    let kind: CodexMessageKind
+    let turnId: String?
+    let itemId: String?
+    let isStreaming: Bool
+    let textSignature: CodexMessageTextRenderSignature
+
+    init(_ message: CodexMessage) {
+        self.id = message.id
+        self.role = message.role
+        self.kind = message.kind
+        self.turnId = message.turnId
+        self.itemId = message.itemId
+        self.isStreaming = message.isStreaming
+        self.textSignature = message.textRenderSignature
     }
 }
 
@@ -96,7 +141,7 @@ private struct TurnTimelineToolBurstView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 14) {
             ForEach(group.pinnedMessages) { message in
                 TurnTimelineMessageRow(
                     message: message,
@@ -123,7 +168,7 @@ private struct TurnTimelineToolBurstView: View {
                     }
                 } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: "chevron.right")
+                        RemodexIcon.image(systemName: "chevron.right")
                             .font(AppFont.system(size: 10, weight: .semibold))
                             .foregroundStyle(.secondary)
                             .rotationEffect(.degrees(isExpanded ? 90 : 0))
@@ -200,7 +245,7 @@ private struct TurnTimelinePreviousMessagesView: View {
                     Text(title)
                         .font(AppFont.body(weight: .regular))
                         .foregroundStyle(.secondary)
-                    Image(systemName: "chevron.right")
+                    RemodexIcon.image(systemName: "chevron.right")
                         .font(AppFont.system(size: 14, weight: .semibold))
                         .foregroundStyle(.secondary)
                         .rotationEffect(.degrees(isExpanded ? 90 : 0))
@@ -265,7 +310,7 @@ struct TurnTimelineRowsSection: View {
     let onLoadEarlierMessages: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 14) {
             if shouldWarmRecentTailProgressively {
                 HStack(spacing: 8) {
                     ProgressView()

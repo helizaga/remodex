@@ -17,6 +17,16 @@ extension CodexService {
     private static let maxTrustedReconnectFailures = 3
     private static let connectionBootstrapRequestTimeoutNanoseconds: UInt64 = 12_000_000_000
     private static let planModeProbeTimeoutNanoseconds: UInt64 = 5_000_000_000
+    private static let runtimeReadinessRetryDelays: [UInt64] = [
+        0,
+        100_000_000,
+        250_000_000,
+        500_000_000,
+        1_000_000_000,
+        2_000_000_000,
+        3_000_000_000,
+        5_000_000_000,
+    ]
     private static let trustedReconnectRecoveryMessage =
         "Secure reconnect could not be restored from the saved session. Try reconnecting again."
 
@@ -105,6 +115,7 @@ extension CodexService {
                 secureConnectionState = .encrypted
             }
 
+            startWebSocketKeepAliveLoop()
             startSyncLoop()
             // Push registration is best-effort and talks to the bridge, so it must not
             // hold the main connect path hostage when the managed backend is slow.
@@ -371,6 +382,30 @@ extension CodexService {
         }
     }
 
+    // Waits through the short connected-but-handshaking window before user actions hit runtime APIs.
+    func awaitRuntimeInitializedIfNeeded() async throws {
+        guard isConnected else {
+            throw CodexServiceError.invalidInput("Connect to runtime first.")
+        }
+        guard !isInitialized else {
+            return
+        }
+
+        for delay in Self.runtimeReadinessRetryDelays {
+            if delay > 0 {
+                try await Task.sleep(nanoseconds: delay)
+            }
+            if isConnected && isInitialized {
+                return
+            }
+            guard isConnected else {
+                throw CodexServiceError.invalidInput("Connect to runtime first.")
+            }
+        }
+
+        throw CodexServiceError.invalidInput("Runtime is still initializing. Wait a moment and retry.")
+    }
+
     // Converts a bridge-declared "your iPhone app is too old" initialize failure into
     // a direct connect error and surfaces the app-update recovery sheet.
     func incompatibleBridgeAppVersionError(from error: Error) -> CodexServiceError? {
@@ -492,10 +527,11 @@ extension CodexService {
 
     // Runs the post-connect sync work that is useful but not required to mark the socket usable.
     func performPostConnectSyncPass(preferredThreadId: String? = nil) async {
-        // Thread metadata drives the visible app shell, so do it before slower runtime option sync.
-        try? await listThreads()
+        // Paint recent chats first; a capped sidebar refresh runs after the shell is usable.
+        await syncThreadsList()
         scheduleRuntimeOptionRefresh()
         if await routePendingNotificationOpenIfPossible(refreshIfNeeded: false) {
+            scheduleCompleteThreadListHydration()
             return
         }
         let resolvedPreferredThreadId = normalizedInterruptIdentifier(preferredThreadId)
@@ -525,6 +561,18 @@ extension CodexService {
                     requestImmediateSync: activeThreadId == threadId
                 )
             }
+        }
+        scheduleCompleteThreadListHydration()
+    }
+
+    // Refreshes capped sidebar metadata without keeping initial reconnect in the loading state.
+    private func scheduleCompleteThreadListHydration() {
+        Task { @MainActor [weak self] in
+            guard let self, self.isConnected, self.isInitialized, !self.isLoadingThreads else {
+                return
+            }
+
+            try? await self.listThreads()
         }
     }
 
@@ -605,6 +653,8 @@ extension CodexService {
 
     // Removes the current socket reference before reconnect/teardown logic mutates shared state.
     private func cancelCurrentSocketConnection() {
+        stopWebSocketKeepAliveLoop()
+
         if let connection = webSocketConnection {
             connection.stateUpdateHandler = nil
             webSocketConnection = nil
@@ -633,6 +683,8 @@ extension CodexService {
         postConnectSyncTask?.cancel()
         postConnectSyncTask = nil
         postConnectSyncToken = nil
+        threadListFetchTaskByLimit.values.forEach { $0.task.cancel() }
+        threadListFetchTaskByLimit.removeAll()
         cancelAllPerThreadRefreshWork()
     }
 

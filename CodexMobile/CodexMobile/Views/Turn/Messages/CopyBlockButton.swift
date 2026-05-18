@@ -46,17 +46,16 @@ struct CopyBlockButton: View {
         HStack(spacing: 4) {
             Group {
                 if showCopiedFeedback {
-                    Image(systemName: "checkmark")
+                    RemodexIcon.image(systemName: "checkmark")
                         .font(AppFont.system(size: 11, weight: .medium))
                 } else {
                     Image("copy")
                         .renderingMode(.template)
                         .resizable()
                         .scaledToFit()
-                        .scaleEffect(x: -1, y: 1)
                 }
             }
-            .frame(width: 15, height: 15)
+            .frame(width: 20, height: 20)
             if showCopiedFeedback {
                 Text("Copied")
                     .font(AppFont.system(size: 11, weight: .medium))

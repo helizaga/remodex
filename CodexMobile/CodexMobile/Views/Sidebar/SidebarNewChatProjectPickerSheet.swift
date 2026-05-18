@@ -1,5 +1,6 @@
 // FILE: SidebarNewChatProjectPickerSheet.swift
-// Purpose: Minimal "Start new chat" sheet that lets the user pick a project, worktree, or Quick Chat.
+// Purpose: Minimal "Start new chat" sheet that lets the user pick a project,
+//          worktree, and optionally Quick Chat.
 // Layer: View
 // Exports: SidebarNewChatProjectPickerSheet
 // Depends on: SidebarProjectChoice, AppFont, CodexWorktreeIcon
@@ -8,6 +9,8 @@ import SwiftUI
 
 struct SidebarNewChatProjectPickerSheet: View {
     let choices: [SidebarProjectChoice]
+    var showsWithoutProjectOption = true
+    var showsWorktreeOptions = true
     let onSelectProject: (String) -> Void
     let onSelectWorktreeProject: (String) -> Void
     let onSelectWithoutProject: () -> Void
@@ -18,28 +21,6 @@ struct SidebarNewChatProjectPickerSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                Section {
-                    Button {
-                        onBrowseLocalFolder()
-                    } label: {
-                        projectRow(
-                            icon: AnyView(
-                                Image(systemName: "folder.badge.plus")
-                                    .font(AppFont.body(weight: .medium))
-                                    .foregroundStyle(.secondary)
-                            ),
-                            title: "Add Local Folder",
-                            subtitle: "Browse or create a folder on your Mac."
-                        )
-                    }
-                    .buttonStyle(.plain)
-                } header: {
-                    Text("Choose a project for this chat")
-                        .font(AppFont.caption())
-                        .foregroundStyle(.secondary)
-                        .textCase(nil)
-                }
-
                 if !choices.isEmpty {
                     Section("Local") {
                         ForEach(choices) { choice in
@@ -53,7 +34,7 @@ struct SidebarNewChatProjectPickerSheet: View {
                                             if choice.iconSystemName == "arrow.triangle.branch" {
                                                 CodexWorktreeIcon(pointSize: 16, weight: .medium)
                                             } else {
-                                                Image(systemName: choice.iconSystemName)
+                                                RemodexIcon.image(systemName: choice.iconSystemName)
                                                     .font(AppFont.body(weight: .medium))
                                             }
                                         }
@@ -67,42 +48,76 @@ struct SidebarNewChatProjectPickerSheet: View {
                         }
                     }
 
-                    Section("Worktree") {
-                        ForEach(choices) { choice in
-                            Button {
-                                dismiss()
-                                onSelectWorktreeProject(choice.projectPath)
-                            } label: {
-                                projectRow(
-                                    icon: AnyView(
-                                        CodexWorktreeIcon(pointSize: 16, weight: .medium)
-                                            .foregroundStyle(.secondary)
-                                    ),
-                                    title: choice.label,
-                                    subtitle: "Detached worktree from the default branch."
-                                )
+                    if showsWorktreeOptions {
+                        Section("Worktree") {
+                            ForEach(choices) { choice in
+                                Button {
+                                    dismiss()
+                                    onSelectWorktreeProject(choice.projectPath)
+                                } label: {
+                                    projectRow(
+                                        icon: AnyView(
+                                            CodexWorktreeIcon(pointSize: 16, weight: .medium)
+                                                .foregroundStyle(.secondary)
+                                        ),
+                                        title: choice.label,
+                                        subtitle: "Detached worktree from the default branch."
+                                    )
+                                }
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
+                    }
+                } else {
+                    Section {
+                        Text("No recent project chats yet.")
+                            .font(AppFont.body())
+                            .foregroundStyle(.secondary)
+                    } header: {
+                        Text("Local")
                     }
                 }
 
                 Section {
                     Button {
-                        dismiss()
-                        onSelectWithoutProject()
+                        onBrowseLocalFolder()
                     } label: {
                         projectRow(
                             icon: AnyView(
-                                Image(systemName: "bubble.left.and.bubble.right")
+                                RemodexIcon.image(systemName: "folder.badge.plus")
                                     .font(AppFont.body(weight: .medium))
                                     .foregroundStyle(.secondary)
                             ),
-                            title: "Quick Chat",
-                            subtitle: "Start a chat without a working directory."
+                            title: "Add Local Folder",
+                            subtitle: "Browse or create a folder on your Mac."
                         )
                     }
                     .buttonStyle(.plain)
+                } header: {
+                    Text("Add")
+                        .font(AppFont.caption())
+                        .foregroundStyle(.secondary)
+                        .textCase(nil)
+                }
+
+                if showsWithoutProjectOption {
+                    Section {
+                        Button {
+                            dismiss()
+                            onSelectWithoutProject()
+                        } label: {
+                            projectRow(
+                                icon: AnyView(
+                                    RemodexIcon.image(systemName: "bubble.left.and.bubble.right")
+                                        .font(AppFont.body(weight: .medium))
+                                        .foregroundStyle(.secondary)
+                                ),
+                                title: "Quick Chat",
+                                subtitle: "Start a chat without a working directory."
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
             }
             .listStyle(.insetGrouped)
@@ -143,7 +158,7 @@ struct SidebarNewChatProjectPickerSheet: View {
                 }
             }
 
-            Image(systemName: "chevron.right")
+            RemodexIcon.image(systemName: "chevron.right")
                 .font(AppFont.caption(weight: .semibold))
                 .foregroundStyle(.tertiary)
         }

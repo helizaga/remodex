@@ -16,9 +16,8 @@ private enum ThreadListHydrationPolicy {
 }
 
 extension CodexService {
-    // Polling keeps recent metadata fresh; full list loads are reserved for bootstrap/explicit refresh.
+    // Sidebar loads stay capped so reconnect/bootstrap cannot pull an entire local history at once.
     var recentActiveThreadListLimit: Int { 70 }
-    var recentArchivedThreadListLimit: Int { 10 }
 
     // Encodes manual approval replies using the app-server decision object shape.
     func approvalDecisionResult(_ decision: String) -> JSONValue {
@@ -86,20 +85,10 @@ extension CodexService {
         isLoadingThreads = true
         defer { isLoadingThreads = false }
 
-        // Sidebar metadata must be complete: capping thread/list hides older project chats.
-        async let activeThreadsFetch = fetchServerThreads(limit: limit)
-        async let archivedThreadsFetch = fetchServerThreads(limit: limit, archived: true)
+        let activeLimit = limit ?? recentActiveThreadListLimit
 
-        let activeThreads = try await activeThreadsFetch
-        let archivedThreads: [CodexThread]
-        do {
-            archivedThreads = try await archivedThreadsFetch
-        } catch {
-            debugSyncLog("thread/list archived fetch failed (non-fatal): \(error.localizedDescription)")
-            archivedThreads = []
-        }
-
-        reconcileLocalThreadsWithServer(activeThreads, serverArchivedThreads: archivedThreads)
+        let activeThreads = try await fetchCoalescedServerThreads(limit: activeLimit)
+        reconcileLocalThreadsWithServer(activeThreads)
 
         if activeThreadId == nil {
             activeThreadId = firstLiveThreadID()
@@ -200,6 +189,32 @@ extension CodexService {
     // Consumes the pending composer setup once the destination thread view appears.
     func consumePendingComposerAction(for threadId: String) -> CodexPendingThreadComposerAction? {
         pendingComposerActionByThreadID.removeValue(forKey: threadId)
+    }
+
+    // Reads an unsent local composer draft for the requested thread.
+    func composerDraft(for threadId: String) -> TurnComposerLocalDraft? {
+        composerDraftsByThreadID[threadId]
+    }
+
+    // Stores or clears an unsent composer draft, optionally flushing it to local disk.
+    func setComposerDraft(
+        _ draft: TurnComposerLocalDraft?,
+        for threadId: String,
+        persistToDisk: Bool = false
+    ) {
+        if let draft, !draft.isEmpty {
+            composerDraftsByThreadID[threadId] = draft
+        } else {
+            composerDraftsByThreadID.removeValue(forKey: threadId)
+        }
+
+        if persistToDisk {
+            persistComposerDrafts()
+        }
+    }
+
+    func persistComposerDrafts() {
+        composerDraftPersistence.save(composerDraftsByThreadID)
     }
 
     // Sends user input as a new turn against an existing (or newly created) thread.
@@ -775,7 +790,30 @@ enum CodexThreadStartProjectBinding {
 }
 
 extension CodexService {
-    func fetchServerThreads(limit: Int? = nil, archived: Bool = false) async throws -> [CodexThread] {
+    // Reuses an in-flight thread/list request for matching caps so launch sync and sidebar refresh share one RPC.
+    func fetchCoalescedServerThreads(limit: Int) async throws -> [CodexThread] {
+        if let existingFetch = threadListFetchTaskByLimit[limit] {
+            return try await existingFetch.task.value
+        }
+
+        let fetchID = UUID()
+        let task = Task { @MainActor in
+            defer {
+                if threadListFetchTaskByLimit[limit]?.id == fetchID {
+                    threadListFetchTaskByLimit[limit] = nil
+                }
+            }
+            return try await fetchServerThreads(limit: limit)
+        }
+        threadListFetchTaskByLimit[limit] = (id: fetchID, task: task)
+
+        return try await task.value
+    }
+
+    func fetchServerThreads(
+        limit: Int? = nil,
+        onPage: ((_ page: [CodexThread], _ accumulatedThreads: [CodexThread]) -> Void)? = nil
+    ) async throws -> [CodexThread] {
         var allThreads: [CodexThread] = []
         var nextCursor: JSONValue = .null
         var hasRequestedFirstPage = false
@@ -789,9 +827,6 @@ extension CodexService {
             ]
             if let limit {
                 params["limit"] = .integer(limit)
-            }
-            if archived {
-                params["archived"] = .bool(true)
             }
 
             let response = try await sendRequest(
@@ -813,7 +848,9 @@ extension CodexService {
                 throw CodexServiceError.invalidResponse("thread/list response missing data array")
             }
 
-            allThreads.append(contentsOf: page.compactMap { decodeModel(CodexThread.self, from: $0) })
+            let decodedPage = page.compactMap { decodeModel(CodexThread.self, from: $0) }
+            allThreads.append(contentsOf: decodedPage)
+            onPage?(decodedPage, allThreads)
             nextCursor = nextThreadListCursor(from: resultObject)
             hasRequestedFirstPage = true
         } while shouldContinueThreadListPagination(

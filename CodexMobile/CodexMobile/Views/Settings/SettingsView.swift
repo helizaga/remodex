@@ -24,6 +24,7 @@ struct SettingsView: View {
         }
         .listStyle(.insetGrouped)
         .font(AppFont.body())
+        .tint(.primary)
         .navigationTitle("Settings")
     }
 
@@ -101,9 +102,9 @@ private struct SettingsUsageCard: View {
 
 private struct SettingsAppearanceCard: View {
     @Binding var appFontStyle: AppFont.Style
-    @AppStorage("codex.useLiquidGlass") private var useLiquidGlass = true
+    @AppStorage(GlassPreference.storageKey) private var useLiquidGlass = true
     @AppStorage(UserBubbleColor.storageKey) private var userBubbleColorRawValue = UserBubbleColor.defaultStoredRawValue
-    private let settingsAccentColor = Color(.plan)
+    private let settingsAccentColor = Color.primary
 
     var body: some View {
         SettingsCard(title: "Appearance") {
@@ -266,7 +267,7 @@ private struct SettingsNotificationsCard: View {
     var body: some View {
         SettingsCard(title: "Notifications") {
             HStack(spacing: 10) {
-                Image(systemName: "bell.badge")
+                RemodexIcon.image(systemName: "bell.badge")
                     .foregroundStyle(.primary)
                 Text("Status")
                 Spacer()
@@ -334,7 +335,7 @@ private struct SettingsGPTAccountCard: View {
                     Label("Info", systemImage: "info.circle")
                         .foregroundStyle(.primary)
                     Spacer()
-                    Image(systemName: "chevron.right")
+                    RemodexIcon.image(systemName: "chevron.right")
                         .font(AppFont.caption(weight: .semibold))
                         .foregroundStyle(.tertiary)
                 }
@@ -498,7 +499,7 @@ private struct SettingsArchivedChatsCard: View {
                 ArchivedChatsView()
             } label: {
                 HStack {
-                    Label("Archived Chats", systemImage: "archivebox")
+                    RemodexIcon.label("Archived Chats", systemName: "archivebox")
                     Spacer()
                     if archivedCount > 0 {
                         Text("\(archivedCount)")
