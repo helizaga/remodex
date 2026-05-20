@@ -37,6 +37,7 @@ function createBridgeSecureTransport({
   deviceState,
   pairingTtlMs = DEFAULT_PAIRING_TTL_MS,
   onTrustedPhoneUpdate = null,
+  persistTrustedPhone = true,
 }) {
   let currentDeviceState = deviceState;
   let pendingHandshake = null;
@@ -390,7 +391,8 @@ function createBridgeSecureTransport({
       currentDeviceState = rememberTrustedPhone(
         currentDeviceState,
         pendingHandshake.phoneDeviceId,
-        pendingHandshake.phoneIdentityPublicKey
+        pendingHandshake.phoneIdentityPublicKey,
+        { persist: persistTrustedPhone }
       );
       if (previousTrustedPhonePublicKey !== pendingHandshake.phoneIdentityPublicKey) {
         onTrustedPhoneUpdate?.(currentDeviceState, {

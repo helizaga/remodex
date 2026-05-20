@@ -39,6 +39,11 @@ private enum MessageTextProcessingPolicy {
     static let largeTextByteLimit = 64_000
 }
 
+private enum DesktopMirroredRunningPolicy {
+    static let staleSnapshotGraceCount = 3
+    static let recentActivityGraceInterval: TimeInterval = 20
+}
+
 private extension Array where Element == CodexMessage {
     func messageIndexByID() -> [String: Int] {
         var result: [String: Int] = [:]
@@ -450,10 +455,53 @@ extension CodexService {
         lastMirroredRunningCatchupAtByThread.removeValue(forKey: threadId)
     }
 
+    // Keeps desktop-origin rollout runs authoritative across short stale server snapshots.
+    func markDesktopMirroredRunning(for threadId: String) {
+        desktopMirroredRunningThreadIDs.insert(threadId)
+        desktopMirroredRunningStaleSnapshotCountsByThread[threadId] = 0
+        desktopMirroredRunningLastActivityAtByThread[threadId] = Date()
+    }
+
+    func isDesktopMirroredRunning(_ threadId: String) -> Bool {
+        desktopMirroredRunningThreadIDs.contains(threadId)
+    }
+
+    func noteDesktopMirroredRunningActivity(for threadId: String) {
+        guard desktopMirroredRunningThreadIDs.contains(threadId) else {
+            return
+        }
+
+        desktopMirroredRunningStaleSnapshotCountsByThread[threadId] = 0
+        desktopMirroredRunningLastActivityAtByThread[threadId] = Date()
+    }
+
+    func shouldPreserveDesktopMirroredRunningAfterStaleSnapshot(for threadId: String) -> Bool {
+        guard desktopMirroredRunningThreadIDs.contains(threadId) else {
+            return false
+        }
+
+        let staleCount = desktopMirroredRunningStaleSnapshotCountsByThread[threadId] ?? 0
+        let lastActivityAt = desktopMirroredRunningLastActivityAtByThread[threadId] ?? Date()
+        let hasRecentMirrorActivity = Date().timeIntervalSince(lastActivityAt)
+            <= DesktopMirroredRunningPolicy.recentActivityGraceInterval
+        guard staleCount < DesktopMirroredRunningPolicy.staleSnapshotGraceCount || hasRecentMirrorActivity else {
+            desktopMirroredRunningThreadIDs.remove(threadId)
+            desktopMirroredRunningStaleSnapshotCountsByThread.removeValue(forKey: threadId)
+            desktopMirroredRunningLastActivityAtByThread.removeValue(forKey: threadId)
+            return false
+        }
+
+        desktopMirroredRunningStaleSnapshotCountsByThread[threadId] = staleCount + 1
+        return true
+    }
+
     // Clears running/fallback flags together when a thread finishes or disappears.
     func clearRunningState(for threadId: String) {
         runningThreadIDs.remove(threadId)
         protectedRunningFallbackThreadIDs.remove(threadId)
+        desktopMirroredRunningThreadIDs.remove(threadId)
+        desktopMirroredRunningStaleSnapshotCountsByThread.removeValue(forKey: threadId)
+        desktopMirroredRunningLastActivityAtByThread.removeValue(forKey: threadId)
         clearMirroredRunningCatchupNeeded(for: threadId)
         refreshBusyRepoRootsAndDependentTimelineStates()
         refreshThreadTimelineState(for: threadId)
@@ -464,6 +512,9 @@ extension CodexService {
     func clearAllRunningState() {
         runningThreadIDs.removeAll()
         protectedRunningFallbackThreadIDs.removeAll()
+        desktopMirroredRunningThreadIDs.removeAll()
+        desktopMirroredRunningStaleSnapshotCountsByThread.removeAll()
+        desktopMirroredRunningLastActivityAtByThread.removeAll()
         mirroredRunningCatchupThreadIDs.removeAll()
         lastMirroredRunningCatchupAtByThread.removeAll()
         refreshBusyRepoRootsAndDependentTimelineStates()
@@ -789,7 +840,7 @@ extension CodexService {
             return false
         }
         if shouldRequestImmediateSync {
-            requestImmediateActiveThreadSync(threadId: threadId)
+            requestImmediateActiveThreadSync(threadId: threadId, forceHistoryRefresh: true)
         }
         return true
     }
@@ -1302,10 +1353,15 @@ extension CodexService {
         text: String,
         turnId: String? = nil,
         attachments: [CodexImageAttachment] = [],
-        fileMentions: [String] = []
+        fileMentions: [String] = [],
+        skillMentions: [String] = [],
+        pluginMentions: [String] = []
     ) -> String {
         let trimmedText = Self.normalizedMessageText(text)
-        guard Self.hasMeaningfulHistoryText(trimmedText) || !attachments.isEmpty else {
+        guard Self.hasMeaningfulHistoryText(trimmedText)
+                || !attachments.isEmpty
+                || !skillMentions.isEmpty
+                || !pluginMentions.isEmpty else {
             return ""
         }
 
@@ -1314,6 +1370,8 @@ extension CodexService {
             role: .user,
             text: trimmedText,
             fileMentions: fileMentions,
+            skillMentions: skillMentions,
+            pluginMentions: pluginMentions,
             turnId: turnId,
             isStreaming: false,
             deliveryState: .pending,
@@ -1455,9 +1513,8 @@ extension CodexService {
                     turnId: resolvedTurnId,
                     fileChangePathKeys: incomingPathKeys
                 )
-                if let refreshedIndex = threadMessages.indices.first(where: { threadMessages[$0].id == keepID }) {
-                    threadMessages[refreshedIndex].orderIndex = CodexMessageOrderCounter.next()
-                }
+                // Preserve the row's original timeline slot. The render reducer handles
+                // trailing file-change cards inside their own turn without crossing later users.
                 threadMessages.sort(by: { $0.orderIndex < $1.orderIndex })
                 messagesByThread[threadId] = threadMessages
                 persistMessages()
@@ -2200,11 +2257,8 @@ extension CodexService {
                     }
                 }
                 if let finalIndex = threadMessages.indices.first(where: { threadMessages[$0].id == keepID }) {
-                    if kind == .fileChange {
-                        // File-change cards are intentionally trailed; other activity keeps
-                        // its original slot so late completion refreshes do not jump below the answer.
-                        threadMessages[finalIndex].orderIndex = CodexMessageOrderCounter.next()
-                    }
+                    // Keep refreshed file-change rows anchored to their original turn.
+                    // Intra-turn rendering still trails them after the assistant answer.
                     finalRawIndex = finalIndex
                 }
                 threadMessages.sort(by: { $0.orderIndex < $1.orderIndex })
@@ -4026,6 +4080,25 @@ extension CodexService {
         updateCurrentOutput(for: threadId)
     }
 
+    // Removes a known optimistic user row when text matching is not reliable, such as mention-only sends.
+    @discardableResult
+    func removeUserMessage(threadId: String, messageId: String) -> Bool {
+        guard !messageId.isEmpty,
+              var threadMessages = messagesByThread[threadId],
+              let index = findMessageIndex(threadId: threadId, messageId: messageId),
+              threadMessages.indices.contains(index),
+              threadMessages[index].role == .user else {
+            return false
+        }
+
+        threadMessages.remove(at: index)
+        messagesByThread[threadId] = threadMessages
+        messageIndexCacheByThread[threadId] = nil
+        persistMessages()
+        updateCurrentOutput(for: threadId)
+        return true
+    }
+
     // Marks streaming assistant state complete once turn/completed arrives.
     func markTurnCompleted(threadId: String, turnId: String?) {
         let resolvedTurnId = turnId ?? activeTurnIdByThread[threadId]
@@ -4681,7 +4754,63 @@ extension CodexService {
             return messages
         }
 
-        return Array(messages.suffix(limit))
+        let visibleTail = Array(messages.suffix(limit))
+        return visibleTailPreservingTurnArtifacts(
+            visibleTail: visibleTail,
+            omittedPrefix: messages.dropLast(limit)
+        )
+    }
+
+    // Desktop renders durable turn artifacts from early raw items. Preserve recent
+    // plan/file-change rows before the 80-message projection window drops them.
+    func visibleTailPreservingTurnArtifacts(
+        visibleTail: [CodexMessage],
+        omittedPrefix: ArraySlice<CodexMessage>
+    ) -> [CodexMessage] {
+        let visibleTurnIDs = Set(visibleTail.compactMap { message -> String? in
+            guard let turnId = message.turnId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !turnId.isEmpty else {
+                return nil
+            }
+            return turnId
+        })
+
+        let preservedArtifactKinds: Set<CodexMessageKind> = [.fileChange, .plan]
+        let visibleMessageIDs = Set(visibleTail.map(\.id))
+        let missingVisibleTurnArtifacts = omittedPrefix.filter { message in
+            guard isPreservableTurnArtifact(message, kinds: preservedArtifactKinds),
+                  let turnId = message.turnId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  visibleTurnIDs.contains(turnId),
+                  !visibleMessageIDs.contains(message.id) else {
+                return false
+            }
+            return true
+        }
+
+        let sameTurnArtifactIDs = Set(missingVisibleTurnArtifacts.map(\.id))
+        let recentOmittedArtifacts = omittedPrefix
+            .suffix(300)
+            .filter { message in
+                isPreservableTurnArtifact(message, kinds: preservedArtifactKinds)
+                    && !visibleMessageIDs.contains(message.id)
+                    && !sameTurnArtifactIDs.contains(message.id)
+            }
+            .suffix(8)
+
+        let preservedArtifacts = Array(missingVisibleTurnArtifacts) + Array(recentOmittedArtifacts)
+        guard !preservedArtifacts.isEmpty else {
+            return visibleTail
+        }
+
+        return (preservedArtifacts + visibleTail)
+            .sorted { $0.orderIndex < $1.orderIndex }
+    }
+
+    func isPreservableTurnArtifact(
+        _ message: CodexMessage,
+        kinds: Set<CodexMessageKind>
+    ) -> Bool {
+        message.role == .system && kinds.contains(message.kind)
     }
 
     // Refreshes every known timeline state when repo-busy status changes across threads.

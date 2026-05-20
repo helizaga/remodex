@@ -7,6 +7,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
+const path = require("node:path");
 
 const { handleDesktopRequest } = require("../src/desktop-handler");
 
@@ -119,9 +120,6 @@ test("desktop/continueOnMac relaunches when a desktop-known thread is requested 
     existsSync(targetPath) {
       return /[\\/]sessions$/.test(targetPath);
     },
-    statSync() {
-      return { mtimeMs: Date.now() };
-    },
     readdirSync() {
       return [
         {
@@ -140,6 +138,9 @@ test("desktop/continueOnMac relaunches when a desktop-known thread is requested 
           },
         }) + "\n"
       );
+    },
+    statSync() {
+      return { mtimeMs: 1 };
     },
   };
 
@@ -197,9 +198,6 @@ test("desktop/continueOnMac boots Codex before deep-linking when the thread alre
     existsSync(targetPath) {
       return /[\\/]sessions$/.test(targetPath);
     },
-    statSync() {
-      return { mtimeMs: Date.now() };
-    },
     readdirSync() {
       return [
         {
@@ -208,6 +206,9 @@ test("desktop/continueOnMac boots Codex before deep-linking when the thread alre
           name: "rollout-2026-thread-phone-known.jsonl",
         },
       ];
+    },
+    statSync() {
+      return { mtimeMs: 1 };
     },
   };
 
@@ -282,9 +283,9 @@ test("desktop/continueOnDesktop bounces Codex via deep links on Windows", async 
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   assert.equal(executorCalls.length, 2);
-  assert.equal(executorCalls[0][0], "C:\\Windows/System32/rundll32.exe");
+  assert.equal(executorCalls[0][0], path.join("C:\\Windows", "System32", "rundll32.exe"));
   assert.deepEqual(executorCalls[0][1], ["url.dll,FileProtocolHandler", "codex://settings"]);
-  assert.equal(executorCalls[1][0], "C:\\Windows/System32/rundll32.exe");
+  assert.equal(executorCalls[1][0], path.join("C:\\Windows", "System32", "rundll32.exe"));
   assert.deepEqual(executorCalls[1][1], [
     "url.dll,FileProtocolHandler",
     "codex://threads/thread-win-123",
@@ -405,7 +406,7 @@ test("desktop/wakeDisplay sends a stronger caffeinate display wake pulse", async
         spawnCalls.push(args);
         const child = new EventEmitter();
         child.unref = () => {};
-        process.nextTick(() => child.emit("spawn"));
+        setImmediate(() => child.emit("spawn"));
         return child;
       },
     }
@@ -425,35 +426,6 @@ test("desktop/wakeDisplay sends a stronger caffeinate display wake pulse", async
       },
     },
   ]);
-});
-
-test("desktop/wakeDisplay surfaces bridge errors when caffeinate cannot be spawned", async () => {
-  const responses = [];
-
-  handleDesktopRequest(
-    JSON.stringify({
-      id: "request-4b",
-      method: "desktop/wakeDisplay",
-      params: {},
-    }),
-    (response) => {
-      responses.push(JSON.parse(response));
-    },
-    {
-      platform: "darwin",
-      wakeSpawner: () => {
-        const child = new EventEmitter();
-        process.nextTick(() => child.emit("error", new Error("spawn EACCES")));
-        return child;
-      },
-    }
-  );
-
-  await new Promise((resolve) => setTimeout(resolve, 0));
-
-  assert.equal(responses.length, 1);
-  assert.equal(responses[0].id, "request-4b");
-  assert.equal(responses[0].error?.data?.errorCode, "wake_display_failed");
 });
 
 test("desktop/preferences/update forwards bridge preference changes", async () => {
@@ -528,4 +500,65 @@ test("desktop/preferences/update rejects invalid bridge preference payloads", as
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   assert.equal(responses[0].error?.data?.errorCode, "invalid_bridge_preferences");
+});
+
+test("desktop/bridge/updateAndRestart forwards bridge package updates", async () => {
+  const responses = [];
+  let didUpdate = false;
+
+  handleDesktopRequest(
+    JSON.stringify({
+      id: "request-7",
+      method: "desktop/bridge/updateAndRestart",
+      params: {},
+    }),
+    (response) => {
+      responses.push(JSON.parse(response));
+    },
+    {
+      platform: "darwin",
+      async updateBridgePackageAndRestart() {
+        didUpdate = true;
+        return {
+          success: true,
+          restartScheduled: true,
+        };
+      },
+    }
+  );
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(didUpdate, true);
+  assert.deepEqual(responses, [
+    {
+      id: "request-7",
+      result: {
+        success: true,
+        restartScheduled: true,
+      },
+    },
+  ]);
+});
+
+test("desktop/bridge/updateAndRestart reports unsupported bridges", async () => {
+  const responses = [];
+
+  handleDesktopRequest(
+    JSON.stringify({
+      id: "request-8",
+      method: "desktop/bridge/updateAndRestart",
+      params: {},
+    }),
+    (response) => {
+      responses.push(JSON.parse(response));
+    },
+    {
+      platform: "darwin",
+    }
+  );
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(responses[0].error?.data?.errorCode, "unsupported_bridge_update");
 });

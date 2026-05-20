@@ -6,8 +6,9 @@
 //          handoff used by the chat's system navigation bar. On iOS 18 it
 //          falls back to `safeAreaInset(edge:.top)` with an opaque header
 //          fill so nothing regresses. Body: native scroll with search +
-//          project / chat list, swapped for a centered connect/reconnect/scan-QR
-//          card when the relay is offline and no cached chats exist. The
+//          project / chat list, swapped for search + a status chip + a centered
+//          connect/reconnect/scan-QR card when the relay is offline and no
+//          cached chats exist. The
 //          Projects/Chats scope picker routes rootless chats separately from
 //          project groups. Bottom: SidebarBottomActionBar with the primary Chat
 //          FAB (glass on iOS 26, accent pill on iOS 18).
@@ -15,7 +16,8 @@
 // Exports: SidebarView
 // Depends on: CodexService, SidebarHeaderView, SidebarThreadListView,
 //             SidebarBottomActionBar, SidebarSearchField,
-//             SidebarConnectionEmptyStatePanel, SidebarConnectionEmptyStateFooter
+//             SidebarConnectionEmptyStatePanel, SidebarConnectionStatusBadge,
+//             SidebarConnectionEmptyStateFooter
 
 import SwiftUI
 
@@ -26,6 +28,7 @@ struct SidebarView<ConnectionEmptyStatePanel: View, ConnectionEmptyStateFooter: 
     @Binding var isSearchActive: Bool
     var showsInlineCloseButton: Bool = false
     var isVisible: Bool = true
+    let connectionPhase: CodexConnectionPhase
 
     let onClose: () -> Void
     let onOpenSettings: () -> Void
@@ -233,9 +236,18 @@ struct SidebarView<ConnectionEmptyStatePanel: View, ConnectionEmptyStateFooter: 
     }
 
     // Opens a draft composer first; the real thread is created only after the first send.
+    // Seeds the draft with the latest used project so the pill under the prompt has a sensible
+    // default the user can still change via the picker.
     private func handleNewChatButtonTap() {
         prepareSidebarForChatNavigation()
         onOpenNewChatDraft(.generalChat, defaultNewChatProjectPath)
+    }
+
+    // Bottom Chat pill is the fast rootless draft entry: no project preselection,
+    // no picker pill, and the real Codex-style cwd is minted on first send.
+    private func handleRootlessChatDraftTap() {
+        prepareSidebarForChatNavigation()
+        onOpenNewChatDraft(.generalChat, nil)
     }
 
     // Starts a chat without a working directory (cwd == nil) directly from the sidebar row.
@@ -453,16 +465,16 @@ struct SidebarView<ConnectionEmptyStatePanel: View, ConnectionEmptyStateFooter: 
         )
     }
 
+    private var defaultNewChatProjectPath: String? {
+        newChatProjectChoices.first?.projectPath
+    }
+
     // Keeps the chooser in sync with the same project buckets shown in the sidebar.
     private var newChatProjectChoices: [SidebarProjectChoice] {
         SidebarThreadGrouping.makeProjectChoices(
             from: codex.threads,
             projectlessRootPaths: projectlessChatRootPaths
         )
-    }
-
-    private var defaultNewChatProjectPath: String? {
-        newChatProjectChoices.first?.projectPath
     }
 
     private var sidebarGroupingScope: SidebarThreadGroupingScope {
@@ -554,16 +566,6 @@ struct SidebarView<ConnectionEmptyStatePanel: View, ConnectionEmptyStateFooter: 
                         .padding(.horizontal, 16)
                         .padding(.bottom, 8)
 
-                    if SidebarThreadsLoadingPresentation.shouldShowInlineStatus(
-                        isLoadingThreads: codex.isLoadingThreads,
-                        threadCount: codex.threads.count
-                    ) {
-                        SidebarThreadsInlineLoadingView()
-                            .padding(.horizontal, 16)
-                            .padding(.bottom, 8)
-                            .transition(.opacity)
-                    }
-
                     threadList
                 }
             }
@@ -575,15 +577,20 @@ struct SidebarView<ConnectionEmptyStatePanel: View, ConnectionEmptyStateFooter: 
         }
     }
 
-    // Keeps the search field at the top so the user can return to a filtered
-    // list as soon as chats sync, while centering the connect panel between
-    // the header and the safe-area footer.
+    // Keeps search + connection status in the same top rhythm as the normal
+    // Projects/Chats chips, while centering the connect panel between the
+    // header and the safe-area footer.
     private var connectionEmptyStateLayout: some View {
         VStack(spacing: 0) {
             SidebarSearchField(text: $searchText, isActive: $isSearchActive)
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
                 .padding(.bottom, 12)
+
+            SidebarConnectionStatusBadge(connectionPhase: connectionPhase)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
 
             Spacer(minLength: 0)
 
@@ -663,17 +670,27 @@ struct SidebarView<ConnectionEmptyStatePanel: View, ConnectionEmptyStateFooter: 
         }
     }
 
-    // Pairs the Projects/Chats chips with a trailing bulk folder control so the
-    // button stays visually anchored to the scope it affects.
+    // Keeps transient sync feedback inside the scope row so list fetches do not
+    // add a separate row and shift the chat list vertically.
     private var sidebarScopeRow: some View {
         let projectGroupIDs = visibleProjectGroupIDs
         let shouldShowToggle = selectedContentScope == .projects && !projectGroupIDs.isEmpty
         let areAllCollapsed = areAllProjectFoldersCollapsed(projectGroupIDs)
+        let shouldShowSyncStatus = SidebarThreadsLoadingPresentation.shouldShowInlineStatus(
+            isLoadingThreads: codex.isLoadingThreads,
+            threadCount: codex.threads.count
+        )
 
         return HStack(spacing: 12) {
-            SidebarContentScopePicker(selection: $selectedContentScope)
+            if shouldShowSyncStatus {
+                SidebarThreadsInlineLoadingView()
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+            } else {
+                SidebarContentScopePicker(selection: $selectedContentScope)
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+            }
 
-            if shouldShowToggle {
+            if shouldShowToggle && !shouldShowSyncStatus {
                 SidebarFolderExpansionToggleButton(
                     areAllFoldersCollapsed: areAllCollapsed,
                     action: { toggleAllProjectFolders(projectGroupIDs) }
@@ -687,7 +704,7 @@ struct SidebarView<ConnectionEmptyStatePanel: View, ConnectionEmptyStateFooter: 
         SidebarBottomActionBar(
             isChatEnabled: canCreateThread,
             isCreatingThread: isCreatingThread,
-            onTapChat: handleNewChatButtonTap,
+            onTapChat: handleRootlessChatDraftTap,
             onTapTerminal: openTerminal
         )
     }
@@ -790,14 +807,22 @@ private struct SidebarThreadsInlineLoadingView: View {
         HStack(spacing: 8) {
             ProgressView()
                 .controlSize(.small)
+                .scaleEffect(0.76)
+                .frame(width: 12, height: 12)
             Text("Syncing chats")
-                .font(AppFont.caption())
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 0)
+                .font(AppFont.callout(weight: .medium))
+                .foregroundStyle(Color.primary)
+                .lineLimit(1)
         }
-        .padding(.vertical, 6)
-        .padding(.horizontal, 10)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .adaptiveGlass(
+            .regular,
+            isInteractive: false,
+            fallbackMaterial: .ultraThinMaterial,
+            in: Capsule(style: .continuous)
+        )
+        .accessibilityLabel("Syncing chats")
     }
 }
 

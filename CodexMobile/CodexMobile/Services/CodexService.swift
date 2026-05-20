@@ -468,7 +468,7 @@ final class CodexService {
     // Runtime compatibility flag for `thread/start|turn/start.serviceTier` speed controls.
     var supportsServiceTier = true
     // Runtime compatibility flag for the bridge-owned voice transcription flow.
-    var supportsBridgeVoiceAuth = true
+    var supportsBridgeVoiceTranscription = true
     // Runtime compatibility flag for native `thread/fork` conversation branching.
     var supportsThreadFork = true
     // Runtime compatibility flag for `thread/turns/list` and `excludeTurns`.
@@ -646,6 +646,9 @@ final class CodexService {
     var supportsKeepAwakeWhileBridgeRuns: Bool {
         bridgeHostCapabilities.keepAwake
     }
+    var supportsBridgePackageUpdate: Bool {
+        bridgeHostCapabilities.bridgeUpdate
+    }
     var hostComputerLabel: String {
         bridgeHostPlatform.displayName
     }
@@ -657,6 +660,9 @@ final class CodexService {
     }
     var runningThreadWatchByID: [String: CodexRunningThreadWatch] = [:]
     var mirroredRunningCatchupThreadIDs: Set<String> = []
+    var desktopMirroredRunningThreadIDs: Set<String> = []
+    var desktopMirroredRunningStaleSnapshotCountsByThread: [String: Int] = [:]
+    var desktopMirroredRunningLastActivityAtByThread: [String: Date] = [:]
     var lastMirroredRunningCatchupAtByThread: [String: Date] = [:]
     var localNetworkAuthorizationStatus: LocalNetworkAuthorizationStatus = .unknown
     var backgroundTurnGraceTaskID: UIBackgroundTaskIdentifier = .invalid

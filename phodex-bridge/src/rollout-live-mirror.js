@@ -9,10 +9,12 @@ const crypto = require("crypto");
 const path = require("path");
 const { findRecentRolloutFileForContextRead, resolveSessionsRoot } = require("./rollout-watch");
 const { resolveCodexGeneratedImagesRoot } = require("./codex-home");
+const { buildApplyPatchFileChangeItem } = require("./apply-patch-changes");
 
 const DEFAULT_POLL_INTERVAL_MS = 700;
 const DEFAULT_LOOKUP_TIMEOUT_MS = 5_000;
 const DEFAULT_IDLE_TIMEOUT_MS = 60_000;
+const DEFAULT_ACTIVITY_HEARTBEAT_MS = 5_000;
 const DESKTOP_RESUME_METHODS = new Set(["thread/read", "thread/resume"]);
 
 // Observes desktop-authored rollout files and replays the currently active run as
@@ -27,6 +29,7 @@ function createRolloutLiveMirrorController({
   pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
   lookupTimeoutMs = DEFAULT_LOOKUP_TIMEOUT_MS,
   idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS,
+  activityHeartbeatMs = DEFAULT_ACTIVITY_HEARTBEAT_MS,
 } = {}) {
   const mirrorsByThreadId = new Map();
 
@@ -60,6 +63,7 @@ function createRolloutLiveMirrorController({
       pollIntervalMs,
       lookupTimeoutMs,
       idleTimeoutMs,
+      activityHeartbeatMs,
       onStop() {
         if (mirrorsByThreadId.get(threadId) === mirror) {
           mirrorsByThreadId.delete(threadId);
@@ -95,6 +99,7 @@ function createThreadRolloutLiveMirror({
   pollIntervalMs,
   lookupTimeoutMs,
   idleTimeoutMs,
+  activityHeartbeatMs,
   onStop = () => {},
 }) {
   const startedAt = now();
@@ -105,6 +110,7 @@ function createThreadRolloutLiveMirror({
   let lastSize = 0;
   let partialLine = "";
   let lastActivityAt = startedAt;
+  let lastHeartbeatAt = 0;
   let didBootstrap = false;
 
   const intervalId = setIntervalFn(tick, pollIntervalMs);
@@ -145,6 +151,7 @@ function createThreadRolloutLiveMirror({
         });
         lastSize = fileSize;
         lastActivityAt = currentTime;
+        lastHeartbeatAt = currentTime;
         if (state.isDesktopOrigin === false) {
           stop();
         }
@@ -155,6 +162,7 @@ function createThreadRolloutLiveMirror({
         const chunk = readFileSlice(rolloutPath, lastSize, fileSize, fsModule);
         lastSize = fileSize;
         lastActivityAt = currentTime;
+        lastHeartbeatAt = currentTime;
         if (!chunk) {
           return;
         }
@@ -164,6 +172,23 @@ function createThreadRolloutLiveMirror({
         partialLine = lines.pop() || "";
         processRolloutLines(lines, state, sendApplicationResponse);
         return;
+      }
+
+      if (
+        state.isDesktopOrigin !== false &&
+        state.activeTurnId &&
+        currentTime - lastHeartbeatAt >= activityHeartbeatMs
+      ) {
+        lastHeartbeatAt = currentTime;
+        sendApplicationResponse(
+          JSON.stringify(
+            createNotification("turn/activity", {
+              threadId: state.threadId,
+              turnId: state.activeTurnId,
+              id: state.activeTurnId,
+            })
+          )
+        );
       }
 
       if (currentTime - lastActivityAt >= idleTimeoutMs) {
@@ -210,7 +235,6 @@ function bootstrapFromExistingRollout({
   const lines = initialContents.split("\n");
   const activeRunLines = [];
   let insideActiveRun = false;
-  let activeTurnId = null;
   let pendingUserPreludeLine = null;
 
   for (const rawLine of lines) {
@@ -234,8 +258,6 @@ function bootstrapFromExistingRollout({
     }
     if (taskEventType === "task_started") {
       insideActiveRun = true;
-      activeTurnId =
-        readString(parsed?.payload?.turn_id) || readString(parsed?.payload?.turnId) || "";
       activeRunLines.length = 0;
       if (pendingUserPreludeLine) {
         activeRunLines.push(pendingUserPreludeLine);
@@ -251,7 +273,6 @@ function bootstrapFromExistingRollout({
     activeRunLines.push(line);
     if (taskEventType === "task_complete") {
       insideActiveRun = false;
-      activeTurnId = "";
       activeRunLines.length = 0;
       pendingUserPreludeLine = null;
     }
@@ -263,9 +284,6 @@ function bootstrapFromExistingRollout({
   }
 
   state.isDesktopOrigin = true;
-  if (activeTurnId) {
-    state.activeTurnId = activeTurnId;
-  }
   processRolloutLines(activeRunLines, state, sendApplicationResponse);
 }
 
@@ -314,23 +332,25 @@ function synthesizeNotificationsFromRolloutEntry(entry, state) {
     const eventType = readString(payload.type);
 
     if (eventType === "task_started") {
-      const turnId = readString(payload.turn_id) || readString(payload.turnId);
-      if (!turnId) {
-        return [];
-      }
-
+      const explicitTurnId = readString(payload.turn_id) || readString(payload.turnId);
+      const turnId = explicitTurnId || buildSyntheticTurnId(state, entry);
       state.activeTurnId = turnId;
+      state.activeTurnIdIsSynthetic = !explicitTurnId;
       state.reasoningItemId = buildSyntheticItemId("thinking", state.threadId, turnId);
       state.hasThinking = false;
       state.commandCalls.clear();
+      state.applyPatchCalls.clear();
+      state.emittedPatchApplyEndCalls.clear();
 
-      notifications.push(
-        createNotification("turn/started", {
-          threadId: state.threadId,
-          turnId,
-          id: turnId,
-        })
-      );
+      const startedParams = {
+        threadId: state.threadId,
+        remodexDesktopMirror: true,
+        remodexRolloutLiveMirror: true,
+      };
+      startedParams.turnId = turnId;
+      startedParams.id = turnId;
+      notifications.push(createNotification("turn/started", startedParams));
+      notifications.push(...flushPendingUserMessageNotifications(state, turnId));
       notifications.push(...ensureThinkingNotifications(state));
       return notifications;
     }
@@ -341,11 +361,19 @@ function synthesizeNotificationsFromRolloutEntry(entry, state) {
         return [];
       }
 
+      const turnId = resolveRolloutEventTurnId(state, payload);
+      if (!turnId) {
+        state.pendingUserMessages.push({
+          id: readString(payload.id),
+          message,
+        });
+        return [];
+      }
+
       notifications.push(
         createNotification("codex/event/user_message", {
           threadId: state.threadId,
-          turnId:
-            readString(payload.turn_id) || readString(payload.turnId) || state.activeTurnId || "",
+          turnId,
           message,
         })
       );
@@ -353,12 +381,12 @@ function synthesizeNotificationsFromRolloutEntry(entry, state) {
     }
 
     if (eventType === "task_complete") {
-      const turnId =
-        readString(payload.turn_id) || readString(payload.turnId) || state.activeTurnId;
+      const turnId = resolveRolloutEventTurnId(state, payload);
       if (!turnId) {
         return [];
       }
 
+      notifications.push(...turnFileChangeSnapshotNotifications(state, turnId));
       notifications.push(
         createNotification("turn/completed", {
           threadId: state.threadId,
@@ -367,6 +395,11 @@ function synthesizeNotificationsFromRolloutEntry(entry, state) {
         })
       );
       resetRunState(state);
+      return notifications;
+    }
+
+    if (eventType === "item_completed") {
+      notifications.push(...itemCompletedNotifications(state, payload));
       return notifications;
     }
 
@@ -389,8 +422,7 @@ function synthesizeNotificationsFromRolloutEntry(entry, state) {
       if (!message || !shouldMirrorAgentMessage(payload)) {
         return [];
       }
-      const turnId =
-        readString(payload.turn_id) || readString(payload.turnId) || state.activeTurnId || "";
+      const turnId = resolveRolloutEventTurnId(state, payload);
 
       notifications.push(
         createNotification("codex/event/agent_message", {
@@ -412,6 +444,11 @@ function synthesizeNotificationsFromRolloutEntry(entry, state) {
       return notifications;
     }
 
+    if (eventType === "patch_apply_end") {
+      notifications.push(...patchApplyEndNotifications(state, payload));
+      return notifications;
+    }
+
     return [];
   }
 
@@ -429,6 +466,11 @@ function synthesizeNotificationsFromRolloutEntry(entry, state) {
 
   if (itemType === "functioncall") {
     notifications.push(...toolStartNotifications(state, payload));
+    return notifications;
+  }
+
+  if (itemType === "customtoolcall") {
+    notifications.push(...customToolStartNotifications(state, payload));
     return notifications;
   }
 
@@ -485,6 +527,13 @@ function toolStartNotifications(state, payload) {
   }
 
   const argumentsObject = parseToolArguments(payload.arguments);
+  if (isInternalProgressPlanToolName(toolName)) {
+    return [
+      ...ensureThinkingNotifications(state),
+      ...planUpdateNotifications(state, argumentsObject),
+    ];
+  }
+
   state.commandCalls.set(callId, {
     toolName,
     command: resolveToolCommand(toolName, argumentsObject),
@@ -518,6 +567,119 @@ function toolStartNotifications(state, payload) {
       turnId: state.activeTurnId,
       call_id: callId,
       message: activityMessage,
+    }),
+  ];
+}
+
+function customToolStartNotifications(state, payload) {
+  if (!state.activeTurnId) {
+    return [];
+  }
+
+  const callId = readString(payload.call_id) || readString(payload.callId);
+  const toolName = readString(payload.name);
+  if (!callId || !toolName) {
+    return [];
+  }
+
+  const notifications = [...ensureThinkingNotifications(state)];
+  if (toolName === "apply_patch") {
+    const item = buildApplyPatchFileChangeItem({
+      callId,
+      patch: readString(payload.input),
+      status: readString(payload.status) || "completed",
+      idFallback: buildSyntheticItemId("file-change", state.threadId, state.activeTurnId, callId),
+    });
+    if (item) {
+      state.applyPatchCalls.set(callId, item);
+      notifications.push(
+        createNotification("codex/event/patch_apply_begin", {
+          threadId: state.threadId,
+          turnId: state.activeTurnId,
+          id: state.activeTurnId,
+          call_id: callId,
+          itemId: item.id,
+          status: "inProgress",
+          changes: item.changes,
+        })
+      );
+    }
+  }
+
+  const activityMessage = genericToolActivityMessage(toolName);
+  if (!activityMessage) {
+    return notifications;
+  }
+
+  return [
+    ...notifications,
+    createNotification("codex/event/background_event", {
+      threadId: state.threadId,
+      turnId: state.activeTurnId,
+      call_id: callId,
+      message: activityMessage,
+    }),
+  ];
+}
+
+function patchApplyEndNotifications(state, payload) {
+  const turnId = resolveRolloutEventTurnId(state, payload);
+  const callId = readString(payload.call_id) || readString(payload.callId);
+  if (!turnId || !callId || state.emittedPatchApplyEndCalls.has(callId)) {
+    return [];
+  }
+
+  const fileChangeItem = state.applyPatchCalls.get(callId);
+  const changes = Array.isArray(payload.changes) ? payload.changes : fileChangeItem?.changes || [];
+  if (changes.length === 0) {
+    return [];
+  }
+
+  state.emittedPatchApplyEndCalls.add(callId);
+  return [
+    ...ensureThinkingNotifications(state),
+    createNotification("codex/event/patch_apply_end", {
+      threadId: state.threadId,
+      turnId,
+      id: turnId,
+      call_id: callId,
+      itemId: fileChangeItem?.id || callId,
+      status: readString(payload.status) || fileChangeItem?.status || "completed",
+      success: payload.success !== false,
+      changes,
+    }),
+  ];
+}
+
+function turnFileChangeSnapshotNotifications(state, turnId) {
+  const patchEntries = Array.from(state.applyPatchCalls.entries());
+  if (!turnId || patchEntries.length === 0) {
+    return [];
+  }
+
+  const changes = patchEntries.flatMap(([, item]) =>
+    Array.isArray(item?.changes) ? item.changes : []
+  );
+  if (changes.length === 0) {
+    return [];
+  }
+
+  const [lastCallId, lastItem] = patchEntries[patchEntries.length - 1];
+  const itemId =
+    readString(lastItem?.id) ||
+    readString(lastCallId) ||
+    buildSyntheticItemId("file-change", state.threadId, turnId);
+  return [
+    createNotification("codex/event/patch_apply_end", {
+      threadId: state.threadId,
+      turnId,
+      id: turnId,
+      call_id: itemId,
+      itemId,
+      status: "completed",
+      success: true,
+      changes,
+      remodexTurnFileChangeSnapshot: true,
     }),
   ];
 }
@@ -621,6 +783,29 @@ function imageGenerationNotifications(state, payload, { preferCallId = false } =
   ];
 }
 
+function itemCompletedNotifications(state, payload) {
+  const item =
+    payload && typeof payload.item === "object" && !Array.isArray(payload.item)
+      ? payload.item
+      : null;
+  if (!item || normalizeRolloutItemType(item.type) !== "plan") {
+    return [];
+  }
+
+  const turnId = resolveRolloutEventTurnId(state, payload);
+  if (!turnId) {
+    return [];
+  }
+
+  return [
+    createNotification("item/completed", {
+      threadId: state.threadId,
+      turnId,
+      item,
+    }),
+  ];
+}
+
 function ensureThinkingNotifications(state) {
   if (!state.activeTurnId || state.hasThinking) {
     return [];
@@ -650,6 +835,10 @@ function createMirrorState(threadId) {
     reasoningItemId: null,
     hasThinking: false,
     commandCalls: new Map(),
+    applyPatchCalls: new Map(),
+    emittedPatchApplyEndCalls: new Set(),
+    pendingUserMessages: [],
+    activeTurnIdIsSynthetic: false,
   };
 }
 
@@ -699,6 +888,58 @@ function parseToolArguments(rawArguments) {
   return parsed && typeof parsed === "object" ? parsed : {};
 }
 
+function planUpdateNotifications(state, argumentsObject) {
+  const plan = normalizeProgressPlanSteps(argumentsObject.plan);
+  if (plan.length === 0) {
+    return [];
+  }
+
+  const params = {
+    threadId: state.threadId,
+    turnId: state.activeTurnId,
+    plan,
+  };
+  const explanation = readString(argumentsObject.explanation);
+  if (explanation) {
+    params.explanation = explanation;
+  }
+
+  return [createNotification("turn/plan/updated", params)];
+}
+
+function normalizeProgressPlanSteps(rawPlan) {
+  if (!Array.isArray(rawPlan)) {
+    return [];
+  }
+
+  return rawPlan.flatMap((rawStep) => {
+    if (!rawStep || typeof rawStep !== "object") {
+      return [];
+    }
+
+    const step = readString(rawStep.step);
+    const status = normalizeProgressPlanStatus(rawStep.status);
+    if (!step || !status) {
+      return [];
+    }
+
+    return [{ step, status }];
+  });
+}
+
+function normalizeProgressPlanStatus(rawStatus) {
+  const normalized = readString(rawStatus);
+  switch (normalized) {
+    case "pending":
+    case "in_progress":
+    case "inProgress":
+    case "completed":
+      return normalized;
+    default:
+      return "";
+  }
+}
+
 function resolveToolCommand(toolName, argumentsObject) {
   if (isCommandToolName(toolName)) {
     return (
@@ -730,6 +971,10 @@ function isCommandToolName(toolName) {
   return normalized === "exec_command" || normalized === "shell_command";
 }
 
+function isInternalProgressPlanToolName(toolName) {
+  return readString(toolName).toLowerCase() === "update_plan";
+}
+
 function genericToolActivityMessage(toolName) {
   switch (readString(toolName).toLowerCase()) {
     case "apply_patch":
@@ -748,13 +993,52 @@ function shouldMirrorAgentMessage(payload) {
   return phase !== "commentary";
 }
 
-function createNotification(method, params) {
-  return { method, params };
+function createNotification(method, params = {}) {
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    return { method, params };
+  }
+
+  return {
+    method,
+    params: {
+      remodexDesktopMirror: true,
+      remodexRolloutLiveMirror: true,
+      ...params,
+    },
+  };
+}
+
+function flushPendingUserMessageNotifications(state, turnId) {
+  const messages = state.pendingUserMessages.splice(0);
+  if (messages.length === 0) {
+    return [];
+  }
+
+  return messages.map((pending) =>
+    createNotification("codex/event/user_message", {
+      threadId: state.threadId,
+      turnId: turnId || state.activeTurnId || "",
+      message: pending.message,
+      ...(pending.id ? { id: pending.id } : {}),
+    })
+  );
 }
 
 function buildSyntheticItemId(kind, threadId, turnId, suffix = "") {
   const suffixPart = suffix ? `:${suffix}` : "";
   return `rollout-${kind}:${threadId}:${turnId}${suffixPart}`;
+}
+
+function buildSyntheticTurnId(state, entry) {
+  const timestamp = readString(entry?.timestamp) || "unknown";
+  return `rollout-turn:${state.threadId}:${timestamp}`;
+}
+
+function resolveRolloutEventTurnId(state, payload = {}) {
+  if (state.activeTurnIdIsSynthetic && state.activeTurnId) {
+    return state.activeTurnId;
+  }
+  return readString(payload.turn_id) || readString(payload.turnId) || state.activeTurnId || "";
 }
 
 function buildAgentMessageItemId(threadId, turnId, entry, message) {
@@ -791,6 +1075,10 @@ function resetRunState(state) {
   state.reasoningItemId = null;
   state.hasThinking = false;
   state.commandCalls.clear();
+  state.applyPatchCalls.clear();
+  state.emittedPatchApplyEndCalls.clear();
+  state.pendingUserMessages.length = 0;
+  state.activeTurnIdIsSynthetic = false;
 }
 
 function readThreadId(params) {

@@ -66,6 +66,7 @@ struct ContentView: View {
     @State private var sidebarSelectionSuppressedUntil: Date?
     @State private var activeNewChatDraftRoute: NewChatDraftRoute?
     @State private var isOpeningNewChatFromSidebar = false
+    @State private var threadIDsPendingInitialAssistantAnchor: Set<String> = []
     // Settings is presented as a `fullScreenCover` instead of being pushed
     // onto `navigationPath` so the gear button works even when the sidebar
     // header is hosted inside an iOS 26 `safeAreaBar`, whose Liquid Glass
@@ -509,6 +510,7 @@ struct ContentView: View {
             isSearchActive: $isSearchActive,
             showsInlineCloseButton: showsInlineCloseButton,
             isVisible: isVisible,
+            connectionPhase: homeConnectionPhase,
             onClose: onClose,
             onOpenSettings: {
                 openSettingsFromSidebar()
@@ -608,6 +610,10 @@ struct ContentView: View {
             TurnView(
                 thread: thread,
                 isWakingMacDisplayRecovery: isWakingSavedMacDisplay,
+                initialShouldAnchorToAssistantResponse: threadIDsPendingInitialAssistantAnchor.contains(thread.id),
+                onInitialAssistantAnchorConsumed: {
+                    threadIDsPendingInitialAssistantAnchor.remove(thread.id)
+                },
                 onOpenTerminal: { workingDirectory in
                     openTerminal(preferredWorkingDirectory: workingDirectory)
                 }
@@ -671,6 +677,10 @@ struct ContentView: View {
             TurnView(
                 thread: thread,
                 isWakingMacDisplayRecovery: isWakingSavedMacDisplay,
+                initialShouldAnchorToAssistantResponse: threadIDsPendingInitialAssistantAnchor.contains(thread.id),
+                onInitialAssistantAnchorConsumed: {
+                    threadIDsPendingInitialAssistantAnchor.remove(thread.id)
+                },
                 onOpenTerminal: { workingDirectory in
                     openTerminal(preferredWorkingDirectory: workingDirectory)
                 }
@@ -1053,7 +1063,7 @@ struct ContentView: View {
                 codex.lastErrorMessage = codex.userFacingTurnErrorMessageForFooter(from: error)
             }
 
-            codex.requestImmediateActiveThreadSync(threadId: thread.id)
+            codex.requestImmediateActiveThreadSync(threadId: thread.id, forceHistoryRefresh: true)
         }
     }
 
@@ -1068,30 +1078,37 @@ struct ContentView: View {
             preferredProjectPath: preferredProjectPath,
             source: source
         )
-        activeNewChatDraftRoute = route
         isOpeningNewChatFromSidebar = false
         selectedThread = nil
         codex.activeThreadId = nil
 
         if shouldPresentSidebarAsNavigation {
+            activeNewChatDraftRoute = nil
             navigationPath = [.newChatDraft(route)]
-        } else if isSidebarOpen || sidebarDragOffset > 0 {
-            closeSidebar()
+        } else {
+            activeNewChatDraftRoute = route
+            if isSidebarOpen || sidebarDragOffset > 0 {
+                closeSidebar()
+            }
         }
     }
 
     private func openThreadFromNewChatDraft(_ thread: CodexThread) {
-        activeNewChatDraftRoute = nil
         isOpeningNewChatFromSidebar = false
+        threadIDsPendingInitialAssistantAnchor.insert(thread.id)
         selectedThread = thread
         codex.activeThreadId = thread.id
         codex.markThreadAsViewed(thread.id)
 
         if shouldPresentSidebarAsNavigation {
-            navigationPath = [.thread(id: thread.id)]
+            Task { @MainActor in
+                await Task.yield()
+                guard selectedThread?.id == thread.id else { return }
+                navigationPath = [.thread(id: thread.id)]
+            }
+        } else {
+            activeNewChatDraftRoute = nil
         }
-
-        codex.requestImmediateActiveThreadSync(threadId: thread.id)
     }
 
     private func openTerminal(preferredWorkingDirectory: String?) {

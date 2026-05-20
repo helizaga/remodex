@@ -15,6 +15,7 @@ const {
   mergeBridgeStatusForDaemon,
   printMacOSBridgePairingQr,
   resetMacOSBridgePairing,
+  restartMacOSBridgeService,
   resolveLaunchAgentPlistPath,
   runMacOSBridgeService,
   startMacOSBridgeService,
@@ -28,6 +29,8 @@ const {
   writeBridgeStatus,
   writePairingSession,
 } = require("../src/daemon-state");
+
+const TEST_UID = typeof process.getuid === "function" ? process.getuid() : 501;
 
 test("buildLaunchAgentPlist points launchd at run-service with remodex state paths", () => {
   const plist = buildLaunchAgentPlist({
@@ -64,15 +67,12 @@ test("stopMacOSBridgeService clears stale pairing and status files", () => {
     writePairingSession({ sessionId: "session-1" });
     writeBridgeStatus({ state: "running", connectionStatus: "connected" });
 
-    let callCount = 0;
     stopMacOSBridgeService({
+      env: { ...process.env, UID: String(TEST_UID) },
       platform: "darwin",
       execFileSyncImpl() {
-        callCount += 1;
-        const error = new Error(callCount === 1 ? "Input/output error" : "Could not find service");
-        error.stderr = Buffer.from(
-          callCount === 1 ? "Boot-out failed: 5: Input/output error" : "Could not find service"
-        );
+        const error = new Error("Could not find service");
+        error.stderr = Buffer.from("Could not find service");
         throw error;
       },
     });
@@ -88,6 +88,7 @@ test("stopMacOSBridgeService terminates the recorded run-service process when la
 
     const killed = [];
     stopMacOSBridgeService({
+      env: { ...process.env, UID: String(TEST_UID) },
       platform: "darwin",
       execFileSyncImpl(command, args) {
         if (command === "launchctl") {
@@ -119,6 +120,7 @@ test("stopMacOSBridgeService does not kill an unrelated stale pid", () => {
 
     const killed = [];
     stopMacOSBridgeService({
+      env: { ...process.env, UID: String(TEST_UID) },
       platform: "darwin",
       execFileSyncImpl(command) {
         if (command === "launchctl") {
@@ -143,26 +145,32 @@ test("stopMacOSBridgeService does not kill an unrelated stale pid", () => {
 });
 
 test("stopMacOSBridgeService falls back to label bootout when plist bootout fails", () => {
-  withTempDaemonEnv(({ rootDir }) => {
+  withTempDaemonEnv(() => {
     const calls = [];
+
     stopMacOSBridgeService({
+      env: { ...process.env, UID: String(TEST_UID) },
       platform: "darwin",
-      env: { HOME: rootDir, REMODEX_DEVICE_STATE_DIR: rootDir },
-      execFileSyncImpl(_command, args) {
-        calls.push(args);
-        const error = new Error("Could not find service");
-        error.stderr = Buffer.from("Could not find service");
-        throw error;
+      execFileSyncImpl(command, args) {
+        calls.push([command, args]);
+        if (args[1] === `gui/${TEST_UID}`) {
+          const error = new Error("Input/output error");
+          error.stderr = Buffer.from("Bootstrap failed: 5: Input/output error");
+          throw error;
+        }
       },
     });
 
     assert.deepEqual(calls, [
       [
-        "bootout",
-        `gui/${process.getuid()}`,
-        path.join(rootDir, "Library", "LaunchAgents", "com.remodex.bridge.plist"),
+        "launchctl",
+        [
+          "bootout",
+          `gui/${TEST_UID}`,
+          path.join(process.env.HOME, "Library", "LaunchAgents", "com.remodex.bridge.plist"),
+        ],
       ],
-      ["bootout", `gui/${process.getuid()}/com.remodex.bridge`],
+      ["launchctl", ["bootout", `gui/${TEST_UID}/com.remodex.bridge`]],
     ]);
   });
 });
@@ -175,6 +183,7 @@ test("startMacOSBridgeService kickstarts the launch agent after bootstrap", () =
       HOME: rootDir,
       REMODEX_DEVICE_STATE_DIR: rootDir,
       REMODEX_RELAY: "ws://127.0.0.1:9000/relay",
+      UID: String(TEST_UID),
     };
 
     startMacOSBridgeService({
@@ -197,20 +206,102 @@ test("startMacOSBridgeService kickstarts the launch agent after bootstrap", () =
         [
           "launchctl",
           "bootout",
-          `gui/${process.getuid()}`,
+          `gui/${TEST_UID}`,
           path.join(rootDir, "Library", "LaunchAgents", "com.remodex.bridge.plist"),
         ],
-        ["launchctl", "bootout", `gui/${process.getuid()}/com.remodex.bridge`, undefined],
+        ["launchctl", "bootout", `gui/${TEST_UID}/com.remodex.bridge`, undefined],
         [
           "launchctl",
           "bootstrap",
-          `gui/${process.getuid()}`,
+          `gui/${TEST_UID}`,
           path.join(rootDir, "Library", "LaunchAgents", "com.remodex.bridge.plist"),
         ],
-        ["launchctl", "kickstart", "-k", `gui/${process.getuid()}/com.remodex.bridge`],
+        ["launchctl", "kickstart", "-k", `gui/${TEST_UID}/com.remodex.bridge`],
       ]
     );
     assert.equal(readDaemonConfig({ env })?.extraRelaySessions, undefined);
+  });
+});
+
+test("restartMacOSBridgeService kickstarts an existing LaunchAgent without relay config", async () => {
+  await withTempDaemonEnv(async ({ rootDir }) => {
+    const calls = [];
+    const env = {
+      ...process.env,
+      HOME: rootDir,
+      REMODEX_DEVICE_STATE_DIR: rootDir,
+      UID: String(TEST_UID),
+    };
+    const plistPath = path.join(rootDir, "Library", "LaunchAgents", "com.remodex.bridge.plist");
+    fs.mkdirSync(path.dirname(plistPath), { recursive: true });
+    fs.writeFileSync(plistPath, "<plist />", "utf8");
+
+    const result = await restartMacOSBridgeService({
+      env,
+      platform: "darwin",
+      execFileSyncImpl(command, args) {
+        calls.push([command, args]);
+      },
+    });
+
+    assert.equal(result.plistPath, plistPath);
+    assert.equal(result.pairingSession, null);
+    assert.deepEqual(calls, [
+      ["launchctl", ["kickstart", "-k", `gui/${TEST_UID}/com.remodex.bridge`]],
+    ]);
+  });
+});
+
+test("restartMacOSBridgeService can wait for the daemon to publish a fresh pairing QR", async () => {
+  await withTempDaemonEnv(async ({ rootDir }) => {
+    const calls = [];
+    const env = {
+      ...process.env,
+      HOME: rootDir,
+      REMODEX_DEVICE_STATE_DIR: rootDir,
+      UID: String(TEST_UID),
+    };
+    const plistPath = path.join(rootDir, "Library", "LaunchAgents", "com.remodex.bridge.plist");
+    fs.mkdirSync(path.dirname(plistPath), { recursive: true });
+    fs.writeFileSync(plistPath, "<plist />", "utf8");
+    writePairingSession(
+      {
+        createdAt: "2000-01-01T00:00:00.000Z",
+        pairingPayload: { sessionId: "stale-session" },
+      },
+      { env }
+    );
+
+    const result = await restartMacOSBridgeService({
+      env,
+      platform: "darwin",
+      pairingTimeoutMs: 200,
+      pairingPollIntervalMs: 5,
+      waitForPairing: true,
+      execFileSyncImpl(command, args) {
+        calls.push([command, args]);
+        writePairingSession(
+          {
+            pairingPayload: {
+              v: 2,
+              relay: "ws://127.0.0.1:9000/relay",
+              sessionId: "fresh-session",
+              macDeviceId: "mac-1",
+              macIdentityPublicKey: "mac-pub",
+              expiresAt: Date.now() + 60_000,
+            },
+            pairingCode: "PAIRME",
+          },
+          { env }
+        );
+      },
+    });
+
+    assert.equal(result.plistPath, plistPath);
+    assert.equal(result.pairingSession?.pairingPayload?.sessionId, "fresh-session");
+    assert.deepEqual(calls, [
+      ["launchctl", ["kickstart", "-k", `gui/${TEST_UID}/com.remodex.bridge`]],
+    ]);
   });
 });
 
@@ -247,17 +338,17 @@ test("printMacOSBridgePairingQr renders the daemon pairing session", () => {
 });
 
 test("resetMacOSBridgePairing stops the daemon before revoking persisted trust", () => {
-  withTempDaemonEnv(({ rootDir }) => {
+  withTempDaemonEnv(() => {
     writePairingSession({ sessionId: "session-reset" });
     writeBridgeStatus({ state: "running", connectionStatus: "connected" });
 
-    const stopCalls = [];
+    let stopCalls = 0;
     let resetCalls = 0;
     const result = resetMacOSBridgePairing({
+      env: { ...process.env, UID: String(TEST_UID) },
       platform: "darwin",
-      env: { HOME: rootDir, REMODEX_DEVICE_STATE_DIR: rootDir },
       execFileSyncImpl() {
-        stopCalls.push([...arguments[1]]);
+        stopCalls += 1;
         const error = new Error("Could not find service");
         error.stderr = Buffer.from("Could not find service");
         throw error;
@@ -268,14 +359,7 @@ test("resetMacOSBridgePairing stops the daemon before revoking persisted trust",
       },
     });
 
-    assert.deepEqual(stopCalls, [
-      [
-        "bootout",
-        `gui/${process.getuid()}`,
-        path.join(rootDir, "Library", "LaunchAgents", "com.remodex.bridge.plist"),
-      ],
-      ["bootout", `gui/${process.getuid()}/com.remodex.bridge`],
-    ]);
+    assert.equal(stopCalls, 2);
     assert.equal(resetCalls, 1);
     assert.equal(result.hadState, true);
     assert.equal(readPairingSession(), null);
@@ -288,10 +372,7 @@ test("runMacOSBridgeService records a clean error state instead of throwing when
     writePairingSession({ sessionId: "stale-session" });
 
     assert.doesNotThrow(() => {
-      runMacOSBridgeService({
-        env: process.env,
-        platform: "darwin",
-      });
+      runMacOSBridgeService({ env: process.env, platform: "darwin" });
     });
 
     assert.equal(readPairingSession(), null);
@@ -383,7 +464,7 @@ test("getMacOSBridgeServiceStatus reports launchd + runtime metadata together", 
 
     const status = getMacOSBridgeServiceStatus({
       platform: "darwin",
-      env: { HOME: rootDir, REMODEX_DEVICE_STATE_DIR: rootDir },
+      env: { HOME: rootDir, REMODEX_DEVICE_STATE_DIR: rootDir, UID: String(TEST_UID) },
       execFileSyncImpl() {
         return "pid = 55";
       },
@@ -404,9 +485,7 @@ function withTempDaemonEnv(run) {
   process.env.REMODEX_DEVICE_STATE_DIR = rootDir;
   process.env.HOME = rootDir;
 
-  try {
-    return run({ rootDir });
-  } finally {
+  const cleanup = () => {
     if (previousDir === undefined) {
       delete process.env.REMODEX_DEVICE_STATE_DIR;
     } else {
@@ -418,5 +497,17 @@ function withTempDaemonEnv(run) {
       process.env.HOME = previousHome;
     }
     fs.rmSync(rootDir, { recursive: true, force: true });
+  };
+
+  try {
+    const result = run({ rootDir });
+    if (result && typeof result.then === "function") {
+      return result.finally(cleanup);
+    }
+    cleanup();
+    return result;
+  } catch (error) {
+    cleanup();
+    throw error;
   }
 }

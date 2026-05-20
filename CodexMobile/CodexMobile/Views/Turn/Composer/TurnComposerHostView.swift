@@ -32,6 +32,7 @@ struct TurnComposerHostView: View {
     let onOpenFeedbackMail: () -> Void
     let onShowStatus: () -> Void
     let voiceButtonPresentation: TurnComposerVoiceButtonPresentation
+    var isVoiceInputActive: Bool = false
     let isVoiceRecording: Bool
     let voiceAudioLevels: [CGFloat]
     let voiceRecordingDuration: TimeInterval
@@ -94,6 +95,7 @@ struct TurnComposerHostView: View {
             composerMentionedPlugins: viewModel.composerMentionedPlugins,
             composerReviewSelection: viewModel.composerReviewSelection,
             isSubagentsSelectionArmed: viewModel.isSubagentsSelectionArmed,
+            isPlanModeArmed: viewModel.isPlanModeArmed,
             isVoiceRecording: isVoiceRecording,
             voiceAudioLevels: voiceAudioLevels,
             voiceRecordingDuration: voiceRecordingDuration
@@ -105,6 +107,8 @@ struct TurnComposerHostView: View {
         let runtimeActions = TurnComposerRuntimeActions.resolve(codex: codex)
         let selectedModelID = codex.visibleSelectedModelIDForComposer()
         let isRuntimeSelectionLoading = codex.isRuntimeSelectionLoadingForComposer()
+        let hasComposerWorkingDirectory = thread.gitWorkingDirectory != nil
+            && !SidebarThreadGrouping.isRootlessChatThread(thread)
 
         TurnComposerView(
             input: $viewModel.input,
@@ -113,7 +117,8 @@ struct TurnComposerHostView: View {
             autocompleteState: autocompleteState,
             remainingAttachmentSlots: viewModel.remainingAttachmentSlots,
             isComposerInteractionLocked: viewModel.isComposerInteractionLocked(activeTurnID: activeTurnID),
-            isSendDisabled: viewModel.isSendDisabled(isConnected: codex.isConnected, activeTurnID: activeTurnID),
+            isSendDisabled: isVoiceInputActive
+                || viewModel.isSendDisabled(isConnected: codex.isConnected, activeTurnID: activeTurnID),
             isSending: viewModel.isSending,
             isPlanModeArmed: viewModel.isPlanModeArmed,
             queuedCount: viewModel.queuedCount(codex: codex, threadID: thread.id),
@@ -121,7 +126,7 @@ struct TurnComposerHostView: View {
             activeTurnID: activeTurnID,
             isThreadRunning: isThreadRunning,
             isEmptyThread: isEmptyThread,
-            hasWorkingDirectory: thread.gitWorkingDirectory != nil,
+            hasWorkingDirectory: hasComposerWorkingDirectory,
             isWorktreeProject: isWorktreeProject,
             orderedModelOptions: orderedModelOptions,
             selectedModelID: selectedModelID,

@@ -24,11 +24,19 @@ const {
   nonceForDirection,
 } = require("../src/secure-transport");
 
+// Keeps unit handshakes from mutating the real Mac pairing trust store.
+function createTestBridgeSecureTransport(options) {
+  return createBridgeSecureTransport({
+    ...options,
+    persistTrustedPhone: false,
+  });
+}
+
 test("secure transport rejects plaintext JSON-RPC before the secure handshake", () => {
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
   const privateJwk = privateKey.export({ format: "jwk" });
   const publicJwk = publicKey.export({ format: "jwk" });
-  const secureTransport = createBridgeSecureTransport({
+  const secureTransport = createTestBridgeSecureTransport({
     sessionId: "session-1",
     relayUrl: "wss://relay.example/relay",
     deviceState: {
@@ -110,7 +118,7 @@ test("secure transport round-trips encrypted payloads after a trusted reconnect 
   const macIdentity = createOkpKeyPair("ed25519");
   const phoneIdentity = createOkpKeyPair("ed25519");
   const phoneEphemeral = createOkpKeyPair("x25519");
-  const secureTransport = createBridgeSecureTransport({
+  const secureTransport = createTestBridgeSecureTransport({
     sessionId: "session-2",
     relayUrl: "wss://relay.example/relay",
     deviceState: {
@@ -300,7 +308,7 @@ test("qr bootstrap allows a fresh QR scan to replace the trusted iPhone", () => 
   const firstPhoneEphemeral = createOkpKeyPair("x25519");
   const secondPhoneIdentity = createOkpKeyPair("ed25519");
   const secondPhoneEphemeral = createOkpKeyPair("x25519");
-  const secureTransport = createBridgeSecureTransport({
+  const secureTransport = createTestBridgeSecureTransport({
     sessionId: "session-3",
     relayUrl: "wss://relay.example/relay",
     deviceState: {
@@ -342,7 +350,7 @@ test("qr bootstrap starts a fresh replay window instead of leaking buffered mess
   const firstEphemeral = createOkpKeyPair("x25519");
   const secondEphemeral = createOkpKeyPair("x25519");
   const wireMessages = [];
-  const secureTransport = createBridgeSecureTransport({
+  const secureTransport = createTestBridgeSecureTransport({
     sessionId: "session-4",
     relayUrl: "wss://relay.example/relay",
     deviceState: {
@@ -395,7 +403,7 @@ test("rebinding the relay socket replays bridge output from the last phone ack",
   const macIdentity = createOkpKeyPair("ed25519");
   const phoneIdentity = createOkpKeyPair("ed25519");
   const phoneEphemeral = createOkpKeyPair("x25519");
-  const secureTransport = createBridgeSecureTransport({
+  const secureTransport = createTestBridgeSecureTransport({
     sessionId: "session-5",
     relayUrl: "wss://relay.example/relay",
     deviceState: {
@@ -492,7 +500,7 @@ test("resume replay does not advance the replay watermark before a phone ack", (
   const macIdentity = createOkpKeyPair("ed25519");
   const phoneIdentity = createOkpKeyPair("ed25519");
   const phoneEphemeral = createOkpKeyPair("x25519");
-  const secureTransport = createBridgeSecureTransport({
+  const secureTransport = createTestBridgeSecureTransport({
     sessionId: "session-6",
     relayUrl: "wss://relay.example/relay",
     deviceState: {
