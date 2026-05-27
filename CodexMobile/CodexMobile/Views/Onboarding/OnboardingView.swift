@@ -64,11 +64,11 @@ struct OnboardingView: View {
         .preferredColorScheme(.dark)
         .alert("Install Codex CLI First", isPresented: $isShowingCodexInstallReminder) {
             Button("Stay Here", role: .cancel) {}
-            Button("Continue Anyway") {
+            Button("Understood") {
                 advanceToNextPage()
             }
         } message: {
-            Text("Copy and paste \"\(codexInstallCommand)\" on your computer before moving on. Remodex will not work until Codex CLI is installed and available in your PATH.")
+            Text("Copy and paste \"\(codexInstallCommand)\" on your device before moving on. Remodex will not work until Codex CLI is installed and available in your PATH.")
         }
     }
 

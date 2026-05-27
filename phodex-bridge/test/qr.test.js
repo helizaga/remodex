@@ -25,7 +25,7 @@ test("createShortPairingCode emits a short human-friendly token", () => {
   assert.match(code, new RegExp(`^[${SHORT_PAIRING_CODE_ALPHABET}]+$`));
 });
 
-test("printQR does not print the full pairing JSON unless debug output is enabled", () => {
+test("printQR prints the short pairing code without the full pairing JSON by default", () => {
   const logs = captureConsoleLog(() => {
     printQR(
       {
@@ -44,13 +44,15 @@ test("printQR does not print the full pairing JSON unless debug output is enable
   });
 
   const output = logs.join("\n");
+  assert.match(output, /ABCDEFGHJK/);
   assert.match(output, /Pairing token: embedded in QR only/);
   assert.doesNotMatch(output, /Session ID:/);
+  assert.doesNotMatch(output, /RMX1:/);
   assert.doesNotMatch(output, /session-sensitive-long-value/);
   assert.doesNotMatch(output, /Pairing JSON/);
 });
 
-test("printQR can print the pairing JSON for explicit debug workflows", () => {
+test("printQR refuses to print raw pairing JSON even for debug workflows", () => {
   const logs = captureConsoleLog(() => {
     printQR(
       {
@@ -67,8 +69,9 @@ test("printQR can print the pairing JSON for explicit debug workflows", () => {
   });
 
   const output = logs.join("\n");
-  assert.match(output, /Pairing JSON \(debug only; same sensitive bytes as the QR\)/);
-  assert.match(output, /"sessionId":"session-debug"/);
+  assert.match(output, /Pairing JSON debug output is disabled/);
+  assert.doesNotMatch(output, /"sessionId":"session-debug"/);
+  assert.doesNotMatch(output, /ws:\/\/127\.0\.0\.1:9000\/relay/);
 });
 
 test("shouldPrintPairingJson accepts explicit flags and debug env aliases", () => {

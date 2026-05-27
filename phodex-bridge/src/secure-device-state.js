@@ -1,7 +1,7 @@
 // FILE: secure-device-state.js
-// Purpose: Persists canonical bridge identity, trusted-phone state, and last seen iPhone app version for local QR pairing.
+// Purpose: Persists canonical bridge identity, trusted mobile state, and last seen companion metadata for local QR pairing.
 // Layer: CLI helper
-// Exports: loadOrCreateBridgeDeviceState, readBridgeDeviceState, resetBridgeDeviceState, rememberTrustedPhone, rememberLastSeenPhoneAppVersion, getTrustedPhonePublicKey, resolveBridgeRelaySession
+// Exports: loadOrCreateBridgeDeviceState, readBridgeDeviceState, resetBridgeDeviceState, resetBridgeTrustState, rememberTrustedPhone, rememberLastSeenPhoneAppVersion, rememberLastSeenClientDeviceKind, getTrustedPhonePublicKey, resolveBridgeRelaySession
 // Depends on: fs, os, path, crypto, child_process
 
 const fs = require("fs");
@@ -76,6 +76,30 @@ function resetBridgeDeviceState() {
   };
 }
 
+// Clears trusted phones while preserving the Mac's stable identity across re-pairing.
+function resetBridgeTrustState() {
+  const existingState = readBridgeDeviceState();
+  if (!existingState) {
+    return {
+      hadState: false,
+      preservedMacIdentity: false,
+      clearedTrustedPhones: false,
+    };
+  }
+
+  const nextState = normalizeBridgeDeviceState({
+    ...existingState,
+    trustedPhones: {},
+  });
+  const clearedTrustedPhones = Object.keys(existingState.trustedPhones || {}).length > 0;
+  writeBridgeDeviceState(nextState);
+  return {
+    hadState: true,
+    preservedMacIdentity: true,
+    clearedTrustedPhones,
+  };
+}
+
 // Generates a fresh relay session for every bridge launch so QR pairing stays explicit per-run.
 function resolveBridgeRelaySession(state, { persist: _persist = true } = {}) {
   return {
@@ -126,6 +150,22 @@ function rememberLastSeenPhoneAppVersion(state, phoneAppVersion, { persist = tru
   return nextState;
 }
 
+function rememberLastSeenClientDeviceKind(state, deviceKind, { persist = true } = {}) {
+  const normalizedDeviceKind = normalizeDeviceKind(deviceKind);
+  if (!normalizedDeviceKind) {
+    return state;
+  }
+
+  const nextState = normalizeBridgeDeviceState({
+    ...state,
+    lastSeenDeviceKind: normalizedDeviceKind,
+  });
+  if (persist) {
+    writeBridgeDeviceState(nextState);
+  }
+  return nextState;
+}
+
 function getTrustedPhonePublicKey(state, phoneDeviceId) {
   const normalizedDeviceId = normalizeNonEmptyString(phoneDeviceId);
   if (!normalizedDeviceId) {
@@ -145,6 +185,7 @@ function createBridgeDeviceState() {
     macIdentityPublicKey: base64UrlToBase64(publicJwk.x),
     macIdentityPrivateKey: base64UrlToBase64(privateJwk.d),
     trustedPhones: {},
+    lastSeenDeviceKind: null,
     lastSeenPhoneAppVersion: null,
   };
 }
@@ -339,6 +380,9 @@ function normalizeBridgeDeviceState(rawState) {
   const macIdentityPrivateKey = normalizeNonEmptyString(rawState?.macIdentityPrivateKey);
   const lastSeenPhoneAppVersion =
     normalizeNonEmptyString(rawState?.lastSeenPhoneAppVersion) || null;
+  const lastSeenDeviceKind =
+    normalizeDeviceKind(rawState?.lastSeenDeviceKind) ||
+    inferLegacyDeviceKind({ lastSeenPhoneAppVersion });
 
   if (!macDeviceId || !macIdentityPublicKey || !macIdentityPrivateKey) {
     throw new Error("Bridge device state is incomplete");
@@ -362,8 +406,27 @@ function normalizeBridgeDeviceState(rawState) {
     macIdentityPublicKey,
     macIdentityPrivateKey,
     trustedPhones,
+    lastSeenDeviceKind,
     lastSeenPhoneAppVersion,
   };
+}
+
+function normalizeDeviceKind(value) {
+  const normalized = normalizeNonEmptyString(value).toLowerCase();
+  if (normalized === "ios" || normalized === "iphone") {
+    return "iphone";
+  }
+  if (normalized === "android") {
+    return "android";
+  }
+  if (normalized === "mac" || normalized === "macos" || normalized === "darwin") {
+    return "mac";
+  }
+  return normalized || null;
+}
+
+function inferLegacyDeviceKind({ lastSeenPhoneAppVersion } = {}) {
+  return lastSeenPhoneAppVersion ? "iphone" : null;
 }
 
 function bridgeStatesEqual(left, right) {
@@ -407,8 +470,10 @@ module.exports = {
   getTrustedPhonePublicKey,
   loadOrCreateBridgeDeviceState,
   readBridgeDeviceState,
+  rememberLastSeenClientDeviceKind,
   rememberLastSeenPhoneAppVersion,
   rememberTrustedPhone,
   resetBridgeDeviceState,
+  resetBridgeTrustState,
   resolveBridgeRelaySession,
 };

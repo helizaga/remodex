@@ -40,6 +40,8 @@ private struct MessageRowMessageSignature: Equatable {
     let fileMentions: [String]
     let skillMentions: [String]
     let pluginMentions: [String]
+    let createdAt: Date
+    let timeZoneIdentifier: String?
     let turnId: String?
     let itemId: String?
     let isStreaming: Bool
@@ -62,6 +64,8 @@ private struct MessageRowMessageSignature: Equatable {
         self.fileMentions = message.fileMentions
         self.skillMentions = message.skillMentions
         self.pluginMentions = message.pluginMentions
+        self.createdAt = message.createdAt
+        self.timeZoneIdentifier = message.timeZoneIdentifier
         self.turnId = message.turnId
         self.itemId = message.itemId
         self.isStreaming = message.isStreaming
@@ -331,6 +335,8 @@ struct MessageRow: View, Equatable {
     var planMatchingFingerprint: Int = 0
     // Disables timer-driven adornments while the user reads older content.
     var showsStreamingAnimations: Bool = true
+    // True while the sticky "Remodex is thinking" row is visible at the bottom of the timeline.
+    var protectsPendingIndicatorAnchor: Bool = false
     // Passed as init params so .equatable() can invalidate only for row-visible action state.
     var inlineCommitAndPushAction: (() -> Void)? = nil
     var inlineCommitAndPushPhase: InlineCommitAndPushPhase? = nil
@@ -340,7 +346,9 @@ struct MessageRow: View, Equatable {
     @State private var throttledAssistantDisplayText: String?
     @State private var pendingAssistantDisplayText: String?
     @State private var assistantDisplayUpdateTask: Task<Void, Never>?
+    @State private var assistantDisplaySyncTask: Task<Void, Never>?
     @State private var textExpansionLevel = 0
+    @State private var previewImage: PreviewImagePayload?
 
     static func == (lhs: MessageRow, rhs: MessageRow) -> Bool {
         MessageRowMessageSignature(lhs.message) == MessageRowMessageSignature(rhs.message)
@@ -352,6 +360,7 @@ struct MessageRow: View, Equatable {
             && lhs.currentWorkingDirectory == rhs.currentWorkingDirectory
             && lhs.planMatchingFingerprint == rhs.planMatchingFingerprint
             && lhs.showsStreamingAnimations == rhs.showsStreamingAnimations
+            && lhs.protectsPendingIndicatorAnchor == rhs.protectsPendingIndicatorAnchor
             && (lhs.inlineCommitAndPushAction != nil) == (rhs.inlineCommitAndPushAction != nil)
             && lhs.inlineCommitAndPushPhase == rhs.inlineCommitAndPushPhase
     }
@@ -362,13 +371,36 @@ struct MessageRow: View, Equatable {
 
     // Reuses the body-scoped display window so large clipped rows are not scanned twice.
     private func displayText(from window: TimelineTextClippingPolicy.DisplayWindow) -> String {
-        if message.role == .assistant,
-           message.isStreaming,
-           let throttledAssistantDisplayText {
-            return throttledAssistantDisplayText
+        if message.role == .assistant, message.isStreaming {
+            // Never fall back to the full live buffer before throttle/onAppear runs;
+            // that one frame paints the whole response height and then collapses.
+            if let throttledAssistantDisplayText {
+                return throttledAssistantDisplayText
+            }
+
+            // Let the first small chunk appear immediately so a fresh send does not
+            // feel stalled, while still blocking recovered/coalesced large buffers.
+            return shouldShowInitialStreamingText(window.text) ? window.text : ""
         }
 
         return window.text
+    }
+
+    private func shouldShowInitialStreamingText(_ text: String) -> Bool {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+        return text.utf8.count <= 512
+    }
+
+    private func shouldSynchronizeAssistantDisplayImmediately() -> Bool {
+        guard message.isStreaming else { return true }
+        if showsStreamingAnimations {
+            return true
+        }
+
+        let nextText = timelineDisplayWindow(for: message, expansionLevel: textExpansionLevel).text
+        return shouldShowInitialStreamingText(nextText)
     }
 
     var body: some View {
@@ -394,7 +426,6 @@ struct MessageRow: View, Equatable {
                             text: text,
                             actionText: actionText,
                             renderModel: renderModel,
-                            showsStreamingAnimations: showsStreamingAnimations,
                             subagentOpenAction: subagentOpenAction,
                             onSelectText: { selectableTextSheet = $0 }
                         )
@@ -427,13 +458,19 @@ struct MessageRow: View, Equatable {
         .sheet(item: $selectableTextSheet) { sheet in
             SelectableMessageTextSheet(state: sheet)
         }
+        .fullScreenCover(item: $previewImage) { payload in
+            ZoomableImagePreviewScreen(
+                payload: payload,
+                onDismiss: { previewImage = nil }
+            )
+        }
         .frame(maxWidth: .infinity, alignment: .leading)
         .clipped()
         .onAppear {
             synchronizeAssistantDisplayText(immediate: true)
         }
         .onChange(of: message.text) { _, _ in
-            synchronizeAssistantDisplayText(immediate: !message.isStreaming)
+            scheduleAssistantDisplayTextSync(immediate: shouldSynchronizeAssistantDisplayImmediately())
         }
         .onChange(of: message.isStreaming) { _, isStreaming in
             synchronizeAssistantDisplayText(immediate: !isStreaming)
@@ -442,6 +479,8 @@ struct MessageRow: View, Equatable {
             synchronizeAssistantDisplayText(immediate: true)
         }
         .onDisappear {
+            assistantDisplaySyncTask?.cancel()
+            assistantDisplaySyncTask = nil
             assistantDisplayUpdateTask?.cancel()
             assistantDisplayUpdateTask = nil
         }
@@ -513,13 +552,19 @@ struct MessageRow: View, Equatable {
         let assistantInlineContentSegments = usesCachedAssistantImageContent
             ? renderModel.assistantInlineContentSegments
             : []
-        let trailingAssistantImageReferences = assistantImageReferences.filter { !$0.isTemporaryScreenshotImage }
+        let trailingAssistantImageReferences = assistantImageReferences.filter {
+            !$0.isTemporaryScreenshotImage
+                && $0.canPreview(currentWorkingDirectory: currentWorkingDirectory)
+        }
         let visibleAssistantTextWithoutImageSyntax = assistantImageReferences.isEmpty
             ? visibleAssistantText
             : (renderModel.assistantTextWithoutImageSyntax ?? visibleAssistantText)
         let trimmedVisibleAssistantText = visibleAssistantTextWithoutImageSyntax
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let hasVisibleAssistantText = !trimmedVisibleAssistantText.isEmpty
+        let assistantImageAttachments = message.isStreaming
+            ? []
+            : message.attachments.filter(\.hasPreviewPayload)
         let rendersTemporaryImagesInline = !assistantInlineContentSegments.isEmpty
             && !message.isStreaming
             && mermaidContent == nil
@@ -529,6 +574,7 @@ struct MessageRow: View, Equatable {
             || proposedPlan != nil
             || !trailingAssistantImageReferences.isEmpty
             || rendersTemporaryImagesInline
+            || !assistantImageAttachments.isEmpty
         // Copy the full underlying text even when the rendered row is clipped.
         // Image-only artifact rows still avoid a duplicate copy affordance.
         let assistantCopyText: String? = {
@@ -601,21 +647,19 @@ struct MessageRow: View, Equatable {
                                 constrainsToAvailableWidth: true
                             )
                         case .image(let reference):
-                            AssistantMarkdownImagePreviewButton(
-                                reference: reference,
-                                currentWorkingDirectory: currentWorkingDirectory
-                            )
+                            if reference.canPreview(currentWorkingDirectory: currentWorkingDirectory) {
+                                AssistantMarkdownImagePreviewButton(
+                                    reference: reference,
+                                    currentWorkingDirectory: currentWorkingDirectory
+                                )
+                            }
                         }
                     }
                 } else if message.isStreaming {
-                    if hasVisibleAssistantText {
-                        StreamingAssistantMarkdownTextView(
-                            text: visibleAssistantTextWithoutImageSyntax,
-                            enablesSelection: enablesInlineMarkdownSelectionInTimeline,
-                            constrainsToAvailableWidth: true,
-                            animatesReveal: showsStreamingAnimations
-                        )
-                    }
+                    streamingAssistantContent(
+                        hasVisibleAssistantText: hasVisibleAssistantText,
+                        visibleAssistantTextWithoutImageSyntax: visibleAssistantTextWithoutImageSyntax
+                    )
                 } else {
                     if hasVisibleAssistantText {
                         MarkdownTextView(
@@ -636,6 +680,15 @@ struct MessageRow: View, Equatable {
                             )
                         }
                     }
+                }
+
+                if !assistantImageAttachments.isEmpty {
+                    UserAttachmentStrip(attachments: assistantImageAttachments) { tappedAttachment in
+                        if let image = AttachmentPreviewImageResolver.resolve(tappedAttachment) {
+                            previewImage = PreviewImagePayload(image: image)
+                        }
+                    }
+                    .padding(.top, trailingAssistantImageReferences.isEmpty ? 0 : 4)
                 }
             }
 
@@ -675,7 +728,23 @@ struct MessageRow: View, Equatable {
     // Assistant rows get their copy payload from the row text, so the accessory state
     // carries the copy permission separately from the potentially large text value.
     private func shouldRenderAssistantCopyAccessory(_ state: AssistantBlockAccessoryState) -> Bool {
-        state.showsRunningIndicator || state.allowsCopy
+        state.allowsCopy
+    }
+
+    @ViewBuilder
+    private func streamingAssistantContent(
+        hasVisibleAssistantText: Bool,
+        visibleAssistantTextWithoutImageSyntax: String
+    ) -> some View {
+        if hasVisibleAssistantText {
+            StreamingAssistantMarkdownTextView(
+                text: visibleAssistantTextWithoutImageSyntax,
+                enablesSelection: enablesInlineMarkdownSelectionInTimeline,
+                constrainsToAvailableWidth: true,
+                animatesReveal: showsStreamingAnimations,
+                protectsPendingIndicatorAnchor: protectsPendingIndicatorAnchor
+            )
+        }
     }
 
     private func expandVisibleText() {
@@ -718,8 +787,23 @@ struct MessageRow: View, Equatable {
 
     // Throttles only the assistant row's visible text during streaming so markdown/layout
     // work stays local to that cell instead of firing on every token delta.
+    private func scheduleAssistantDisplayTextSync(immediate: Bool) {
+        assistantDisplaySyncTask?.cancel()
+        // Streaming can deliver several String changes in one SwiftUI frame. Deferring
+        // this state write avoids the "onChange(of: String) updated multiple times"
+        // runtime warning while still applying the newest text on the next turn.
+        assistantDisplaySyncTask = Task { @MainActor in
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            synchronizeAssistantDisplayText(immediate: immediate)
+            assistantDisplaySyncTask = nil
+        }
+    }
+
     private func synchronizeAssistantDisplayText(immediate: Bool) {
         guard message.role == .assistant else {
+            assistantDisplaySyncTask?.cancel()
+            assistantDisplaySyncTask = nil
             throttledAssistantDisplayText = nil
             pendingAssistantDisplayText = nil
             assistantDisplayUpdateTask?.cancel()

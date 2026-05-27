@@ -45,6 +45,49 @@ final class CodexThreadProjectRoutingTests: XCTestCase {
         XCTAssertEqual(service.activeThreadId, "thread-new")
     }
 
+    func testRootlessStartUsesDocumentsCodexPathWhenRuntimeReturnsHomeCwd() async throws {
+        let service = makeService()
+        service.isConnected = true
+        service.isInitialized = true
+        let rootlessPath = "/Users/me/Documents/Codex/2026-05-25/i-just-created-this"
+        var requestedMethods: [String] = []
+
+        service.requestTransportOverride = { method, params in
+            requestedMethods.append(method)
+            switch method {
+            case "project/createRootlessChatRoot":
+                XCTAssertEqual(params?.objectValue?["promptHint"]?.stringValue, "i just created this")
+                return RPCMessage(
+                    id: .string(UUID().uuidString),
+                    result: .object(["path": .string(rootlessPath)]),
+                    includeJSONRPC: false
+                )
+            case "thread/start":
+                XCTAssertEqual(params?.objectValue?["cwd"]?.stringValue, rootlessPath)
+                return RPCMessage(
+                    id: .string(UUID().uuidString),
+                    result: .object([
+                        "thread": .object([
+                            "id": .string("thread-rootless"),
+                            "cwd": .string("/Users/me"),
+                        ]),
+                    ]),
+                    includeJSONRPC: false
+                )
+            default:
+                XCTFail("Unexpected method \(method)")
+                throw CodexServiceError.invalidResponse("Unexpected method \(method)")
+            }
+        }
+
+        let thread = try await service.startThreadIfReady(rootlessChatPromptHint: "i just created this")
+
+        XCTAssertEqual(requestedMethods, ["project/createRootlessChatRoot", "thread/start"])
+        XCTAssertEqual(thread.cwd, rootlessPath)
+        XCTAssertEqual(service.thread(for: "thread-rootless")?.cwd, rootlessPath)
+        XCTAssertEqual(service.currentAuthoritativeProjectPath(for: "thread-rootless"), rootlessPath)
+    }
+
     func testMoveThreadToProjectPathKeepsRebindWhenResumeFailsOnlyBecauseRolloutIsMissing() async throws {
         let service = makeService()
         let originalThread = CodexThread(
@@ -202,6 +245,51 @@ final class CodexThreadProjectRoutingTests: XCTestCase {
 
         XCTAssertEqual(resumeResponses, [worktreePath, "/tmp/remodex-local"])
         XCTAssertEqual(service.associatedManagedWorktreePath(for: "thread-1"), worktreePath)
+    }
+
+    func testManagedWorktreeAssociationIsScopedPerMac() {
+        let suiteName = "CodexThreadProjectRoutingTests.macScope.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        defaults.removePersistentDomain(forName: suiteName)
+        let service = makeService(defaults: defaults)
+        let macA = "mac-a-\(UUID().uuidString)"
+        let macB = "mac-b-\(UUID().uuidString)"
+
+        service.setCurrentTrustedMacDeviceId(macA)
+        service.rememberAssociatedManagedWorktreePath("/tmp/worktree-a", for: "thread-a")
+        service.planSessionSourceByThread["thread-a"] = .requested
+
+        service.setCurrentTrustedMacDeviceId(macB)
+        service.loadMacScopedDefaultsState(for: macB)
+        service.rememberAssociatedManagedWorktreePath("/tmp/worktree-b", for: "thread-b")
+        service.planSessionSourceByThread["thread-b"] = .compatibilityFallback
+
+        service.setCurrentTrustedMacDeviceId(macA)
+        service.loadMacScopedDefaultsState(for: macA)
+        XCTAssertEqual(service.associatedManagedWorktreePath(for: "thread-a"), "/tmp/worktree-a")
+        XCTAssertNil(service.associatedManagedWorktreePath(for: "thread-b"))
+        XCTAssertEqual(service.planSessionSourceByThread["thread-a"], .requested)
+        XCTAssertNil(service.planSessionSourceByThread["thread-b"])
+
+        service.setCurrentTrustedMacDeviceId(macB)
+        service.loadMacScopedDefaultsState(for: macB)
+        XCTAssertEqual(service.associatedManagedWorktreePath(for: "thread-b"), "/tmp/worktree-b")
+        XCTAssertNil(service.associatedManagedWorktreePath(for: "thread-a"))
+        XCTAssertEqual(service.planSessionSourceByThread["thread-b"], .compatibilityFallback)
+        XCTAssertNil(service.planSessionSourceByThread["thread-a"])
+    }
+
+    func testClearInMemoryMacScopedStateClearsAuthoritativeProjectPathTransitions() {
+        let service = makeService()
+
+        service.beginAuthoritativeProjectPathTransition(
+            threadId: "thread-1",
+            projectPath: "/tmp/remodex-worktree"
+        )
+
+        service.clearInMemoryMacScopedState()
+
+        XCTAssertNil(service.currentAuthoritativeProjectPath(for: "thread-1"))
     }
 
     func testProjectlessThreadResumeDoesNotInjectCwd() async throws {

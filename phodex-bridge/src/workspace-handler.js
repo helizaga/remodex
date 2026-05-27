@@ -35,6 +35,7 @@ const IMAGE_MIME_TYPES_BY_EXTENSION = new Map([
   [".jpg", "image/jpeg"],
   [".jpeg", "image/jpeg"],
   [".png", "image/png"],
+  [".svg", "image/svg+xml"],
   [".gif", "image/gif"],
   [".webp", "image/webp"],
   [".heic", "image/heic"],
@@ -252,9 +253,12 @@ async function workspaceReadImage(params) {
     };
   }
 
-  const data = maxPixelDimension
-    ? await readPreviewImageData(realImagePath, maxPixelDimension, stat.size)
-    : await fs.promises.readFile(realImagePath);
+  const data =
+    mimeType === "image/svg+xml"
+      ? await readSVGPreviewData(realImagePath, stat.size)
+      : maxPixelDimension
+        ? await readPreviewImageData(realImagePath, maxPixelDimension, stat.size)
+        : await fs.promises.readFile(realImagePath);
   return {
     ...result,
     dataByteLength: data.length,
@@ -278,7 +282,7 @@ async function sniffImageMimeType(filePath) {
   try {
     const handle = await fs.promises.open(filePath, "r");
     try {
-      header = Buffer.alloc(16);
+      header = Buffer.alloc(512);
       const read = await handle.read(header, 0, header.length, 0);
       header = header.subarray(0, read.bytesRead);
     } finally {
@@ -311,8 +315,20 @@ async function sniffImageMimeType(filePath) {
   ) {
     return "image/webp";
   }
+  if (looksLikeSVGHeader(header)) {
+    return "image/svg+xml";
+  }
 
   return null;
+}
+
+function looksLikeSVGHeader(header) {
+  const sample = header
+    .toString("utf8")
+    .replace(/^\uFEFF/, "")
+    .trimStart()
+    .toLowerCase();
+  return sample.startsWith("<svg") || (sample.startsWith("<?xml") && sample.includes("<svg"));
 }
 
 async function realTemporaryImageRoots() {
@@ -322,6 +338,12 @@ async function realTemporaryImageRoots() {
     candidates.push("/tmp");
     candidates.push(
       path.join(os.homedir(), "Library", "Caches", "com.raycast-x.macos", "clipboard")
+    );
+    candidates.push(
+      path.join(os.homedir(), "Library", "Application Support", "CleanShot", "media")
+    );
+    candidates.push(
+      path.join(os.homedir(), "Library", "Application Support", "CleanShot X", "media")
     );
   }
 
@@ -499,6 +521,17 @@ async function readPreviewImageData(imagePath, maxPixelDimension, originalByteLe
     "image_preview_too_large",
     "This image preview is still too large to send to the phone."
   );
+}
+
+// SVGs are already compact vector source; send them as-is so the phone can render them in WebKit.
+async function readSVGPreviewData(imagePath, originalByteLength) {
+  if (originalByteLength > MAX_IMAGE_PREVIEW_READ_BYTES) {
+    throw workspaceError(
+      "image_too_large",
+      "This SVG is too large to send to the phone. Open it on the Mac or move a smaller preview into the workspace."
+    );
+  }
+  return fs.promises.readFile(imagePath);
 }
 
 function previewPixelDimensionCandidates(maxPixelDimension) {

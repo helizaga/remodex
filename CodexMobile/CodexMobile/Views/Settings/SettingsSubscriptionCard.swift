@@ -9,70 +9,47 @@ import SwiftUI
 
 struct SettingsSubscriptionCard: View {
     @Environment(SubscriptionService.self) private var subscriptions
-    @State private var isPresentingPaywall = false
-    @State private var isPresentingOfferCodeRedemption = false
+    let onShowPaywall: () -> Void
+    let onRedeemCode: () -> Void
 
     private var subscriptionsDisabledForFork: Bool {
         !AppEnvironment.requiresProSubscription
     }
 
     var body: some View {
-        SettingsCard(title: subscriptionsDisabledForFork ? "Fork Access" : "Remodex Pro") {
-            HStack {
-                Text("Status")
-                Spacer()
-                Text(subscriptionsDisabledForFork ? "Unlocked" : (subscriptions.hasProAccess ? "Active" : "Free"))
-                    .foregroundStyle((subscriptionsDisabledForFork || subscriptions.hasProAccess) ? .green : .secondary)
-            }
-
-            if subscriptionsDisabledForFork {
-                Text("This fork is unlocked by default. Paywall and Pro restrictions are disabled for local-first installs.")
-                    .font(AppFont.caption())
-                    .foregroundStyle(.secondary)
-            } else if subscriptions.hasProAccess {
-                Text("Your Pro access is active. You can still restore purchases or manage the purchase from Apple.")
-                    .font(AppFont.caption())
-                    .foregroundStyle(.secondary)
-            } else {
-                Text("Open the custom paywall to choose a monthly, yearly, or lifetime plan.")
-                    .font(AppFont.caption())
-                    .foregroundStyle(.secondary)
-            }
+        SettingsCard(
+            title: subscriptionsDisabledForFork ? "Fork Access" : "Remodex Pro",
+            footer: subscriptionFooter
+        ) {
+            SettingsValueRow(
+                title: subscriptionsDisabledForFork ? "Status" : "Plan",
+                value: subscriptionsDisabledForFork ? "Unlocked" : (subscriptions.hasProAccess ? "Active" : "Free"),
+                valueColor: (subscriptionsDisabledForFork || subscriptions.hasProAccess) ? .green : .secondary
+            )
 
             if !subscriptionsDisabledForFork {
-                SettingsButton(subscriptions.hasProAccess ? "View Pro" : "Upgrade to Pro") {
-                    isPresentingPaywall = true
+                SettingsButton(subscriptions.hasProAccess ? "View Pro Benefits" : "Upgrade to Pro") {
+                    onShowPaywall()
                 }
 
                 SettingsButton("Redeem Code") {
-                    isPresentingOfferCodeRedemption = true
+                    onRedeemCode()
                 }
                 .disabled(subscriptions.isPurchasing || subscriptions.isRestoring)
 
-                SettingsButton(subscriptions.isRestoring ? "Restoring..." : "Restore Purchases", isLoading: subscriptions.isRestoring) {
+                SettingsButton(
+                    subscriptions.isRestoring ? "Restoring..." : "Restore Purchases",
+                    isLoading: subscriptions.isRestoring
+                ) {
                     Task {
                         await subscriptions.restorePurchases()
                     }
                 }
-                .disabled(subscriptions.isPurchasing || subscriptions.isRestoring)
+                .disabled(subscriptions.isPurchasing)
             }
 
             if let error = subscriptions.lastErrorMessage, !error.isEmpty {
-                Text(error)
-                    .font(AppFont.caption())
-                    .foregroundStyle(.red)
-            }
-        }
-        .sheet(isPresented: $isPresentingPaywall) {
-            RevenueCatPaywallView()
-        }
-        .offerCodeRedemption(isPresented: $isPresentingOfferCodeRedemption) { result in
-            Task {
-                if case .failure = result {
-                    await subscriptions.refreshCustomerInfoSilently()
-                } else {
-                    await subscriptions.syncPurchasesAfterOfferCodeRedemption()
-                }
+                SettingsInlineMessage(text: error, tint: .red)
             }
         }
         .task {
@@ -81,5 +58,14 @@ struct SettingsSubscriptionCard: View {
             }
             await subscriptions.bootstrap()
         }
+    }
+
+    private var subscriptionFooter: String {
+        if subscriptionsDisabledForFork {
+            return "This fork is unlocked by default. Paywall and Pro restrictions are disabled for local-first installs."
+        }
+        return subscriptions.hasProAccess
+            ? "Manage billing through your Apple ID subscription settings."
+            : "Unlock voice mode, unlimited threads, and more."
     }
 }

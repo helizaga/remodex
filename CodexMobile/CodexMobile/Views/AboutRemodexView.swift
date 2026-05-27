@@ -6,44 +6,35 @@
 import SwiftUI
 
 struct AboutRemodexView: View {
-    @Environment(\.dismiss) private var dismiss
-
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 36) {
-                    header
-                    howItWorksSection
-                    Divider().opacity(0.3)
-                    architectureDiagram
-                    Divider().opacity(0.3)
-                    relaySection
-                    Divider().opacity(0.3)
-                    appServerSection
-                    Divider().opacity(0.3)
-                    pairingSection
-                    Divider().opacity(0.3)
-                    encryptionSection
-                    Divider().opacity(0.3)
-                    gitSection
-                    Divider().opacity(0.3)
-                    resilienceSection
-                    Divider().opacity(0.3)
-                    desktopSection
-                    footer
-                }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 40)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 36) {
+                header
+                howItWorksSection
+                Divider().opacity(0.3)
+                architectureDiagram
+                Divider().opacity(0.3)
+                relaySection
+                Divider().opacity(0.3)
+                appServerSection
+                Divider().opacity(0.3)
+                pairingSection
+                Divider().opacity(0.3)
+                encryptionSection
+                Divider().opacity(0.3)
+                gitSection
+                Divider().opacity(0.3)
+                resilienceSection
+                Divider().opacity(0.3)
+                desktopSection
+                footer
             }
-            .font(AppFont.body())
-            .navigationTitle("About Remodex")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 40)
         }
+        .font(AppFont.body())
+        .navigationTitle("About Remodex")
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     // MARK: - Header
@@ -61,7 +52,7 @@ struct AboutRemodexView: View {
             calloutCard(
                 icon: "desktopcomputer",
                 color: .cyan,
-                text: "The Codex runtime stays on your computer. Your phone is a secure remote control connected through a relay."
+                text: "The Codex runtime stays on your device. Your phone is a secure remote control connected through a relay."
             )
         }
         .padding(.top, 8)
@@ -73,11 +64,11 @@ struct AboutRemodexView: View {
         VStack(alignment: .leading, spacing: 14) {
             sectionTitle("How It Works")
 
-            bodyText("Your computer runs a lightweight **bridge** that connects to a **relay server** over WebSocket.")
+            bodyText("Your device runs a lightweight **bridge** that connects to a **relay server** over WebSocket.")
 
             bulletList([
                 "You send a prompt from your phone",
-                "It travels through the relay to the bridge on your computer",
+                "It travels through the relay to the bridge on your device",
                 "The bridge forwards it to `codex app-server` via JSON-RPC",
                 "Responses stream back the same path in real time",
             ])
@@ -85,7 +76,7 @@ struct AboutRemodexView: View {
             calloutCard(
                 icon: "lock.shield.fill",
                 color: .green,
-                text: "All execution happens locally on your computer — code generation, tool use, file edits. Nothing runs on the relay."
+                text: "All execution happens locally on your device — code generation, tool use, file edits. Nothing runs on the relay."
             )
         }
     }
@@ -97,8 +88,8 @@ struct AboutRemodexView: View {
             sectionTitle("Architecture")
 
             VStack(spacing: 0) {
-                diagramStep(from: "Remodex iOS", to: "Bridge (Mac)", via: "WebSocket")
-                diagramStep(from: "Bridge (Mac)", to: "codex app-server", via: "JSON-RPC")
+                diagramStep(from: "Remodex iOS", to: "Bridge (Device)", via: "WebSocket")
+                diagramStep(from: "Bridge (Device)", to: "codex app-server", via: "JSON-RPC")
                 diagramStep(from: "codex app-server", to: "~/.codex/sessions", via: "JSONL rollout", isLast: true)
             }
             .padding(16)
@@ -149,9 +140,9 @@ struct AboutRemodexView: View {
         VStack(alignment: .leading, spacing: 14) {
             sectionTitle("The Relay")
 
-            bodyText("A lightweight WebSocket server that routes messages between your iPhone and your computer.")
+            bodyText("A lightweight WebSocket server that routes messages between your iPhone and your device.")
 
-            iconRow("arrow.triangle.2.circlepath", "Handles session discovery so your phone finds the computer's live session")
+            iconRow("arrow.triangle.2.circlepath", "Handles session discovery so your phone finds the device's live session")
             iconRow("eye.slash.fill", "Never sees decrypted message contents after the handshake")
             iconRow("tag.fill", "Only observes connection metadata — session IDs, device IDs, timing")
 
@@ -199,7 +190,7 @@ struct AboutRemodexView: View {
 
             bodyText("Scan it once from this app. After the handshake:")
 
-            iconRow("checkmark.shield.fill", "iPhone saves the computer as a **trusted device** in Keychain")
+            iconRow("checkmark.shield.fill", "iPhone saves the bridge as a **trusted device** in Keychain")
             iconRow("desktopcomputer", "Bridge persists your phone's identity locally")
             iconRow("arrow.clockwise", "Later launches auto-reconnect — no QR needed")
 
@@ -232,7 +223,7 @@ struct AboutRemodexView: View {
         VStack(alignment: .leading, spacing: 14) {
             sectionTitle("Git & Workspace")
 
-            bodyText("The bridge handles **git commands** from your phone locally on the Mac:")
+            bodyText("The bridge handles **git commands** from your phone locally on the paired device:")
 
             HStack(alignment: .top, spacing: 24) {
                 VStack(alignment: .leading, spacing: 6) {
@@ -278,12 +269,12 @@ struct AboutRemodexView: View {
         VStack(alignment: .leading, spacing: 14) {
             sectionTitle("Desktop App Integration")
 
-            bodyText("Threads from your phone are persisted as JSONL rollout files, so they appear in **Codex.app** on your computer.")
+            bodyText("Threads from your phone are persisted as JSONL rollout files, so they appear in **Codex.app** on your device.")
 
             calloutCard(
                 icon: "macbook.and.iphone",
                 color: .blue,
-                text: "The desktop app doesn't live-reload external writes. Use the desktop app handoff button in Remodex to continue the current thread on your computer."
+                text: "The desktop app doesn't live-reload external writes. Use the desktop app handoff button in Remodex to continue the current thread on your device."
             )
         }
     }
@@ -405,5 +396,7 @@ struct AboutRemodexView: View {
 }
 
 #Preview {
-    AboutRemodexView()
+    NavigationStack {
+        AboutRemodexView()
+    }
 }

@@ -5,13 +5,14 @@
 // Depends on: child_process, fs, os, path, ./bridge, ./daemon-state, ./codex-desktop-refresher, ./qr, ./secure-device-state
 
 const { execFileSync } = require("child_process");
+const { createHash } = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { startBridge } = require("./bridge");
 const { readBridgeConfig } = require("./codex-desktop-refresher");
 const { printQR } = require("./qr");
-const { resetBridgeDeviceState } = require("./secure-device-state");
+const { readBridgeDeviceState, resetBridgeTrustState } = require("./secure-device-state");
 const {
   clearBridgeStatus,
   clearPairingSession,
@@ -209,7 +210,7 @@ function resetMacOSBridgePairing({
   platform = process.platform,
   execFileSyncImpl = execFileSync,
   fsImpl = fs,
-  resetBridgePairingImpl = resetBridgeDeviceState,
+  resetBridgePairingImpl = resetBridgeTrustState,
 } = {}) {
   assertDarwinPlatform(platform);
   stopMacOSBridgeService({
@@ -273,6 +274,7 @@ function getMacOSBridgeServiceStatus({
     daemonConfig: readDaemonConfig({ env, fsImpl }),
     bridgeStatus: readBridgeStatus({ env, fsImpl }),
     pairingSession: readPairingSession({ env, fsImpl }),
+    trustedDevice: buildTrustedDeviceSummary(readBridgeDeviceState()),
     stdoutLogPath: resolveBridgeStdoutLogPath({ env }),
     stderrLogPath: resolveBridgeStderrLogPath({ env }),
   };
@@ -283,12 +285,20 @@ function printMacOSBridgeServiceStatus(options = {}) {
   const bridgeState = status.bridgeStatus?.state || "unknown";
   const connectionStatus = status.bridgeStatus?.connectionStatus || "unknown";
   const pairingCreatedAt = status.pairingSession?.createdAt || "none";
+  const activeDevice = status.bridgeStatus?.activeDevice || status.bridgeStatus?.activePhone;
+  const trustedPhoneCount = status.trustedDevice?.trustedPhoneCount || 0;
+  const activeDeviceName = formatDeviceKind(activeDevice?.deviceKind) || "device";
+  const trustedDeviceName = formatDeviceKind(status.trustedDevice?.lastSeenDeviceKind) || "device";
   console.log(`[remodex] Service label: ${status.label}`);
   console.log(`[remodex] Installed: ${status.installed ? "yes" : "no"}`);
   console.log(`[remodex] Launchd loaded: ${status.launchdLoaded ? "yes" : "no"}`);
   console.log(`[remodex] PID: ${status.launchdPid || status.bridgeStatus?.pid || "unknown"}`);
   console.log(`[remodex] Bridge state: ${bridgeState}`);
   console.log(`[remodex] Connection: ${connectionStatus}`);
+  console.log(
+    `[remodex] Active ${activeDeviceName}: ${activeDevice?.connected ? activeDevice.phoneFingerprint || "yes" : "no"}`
+  );
+  console.log(`[remodex] Trusted ${trustedDeviceName}: ${trustedPhoneCount > 0 ? "yes" : "no"}`);
   console.log(`[remodex] Pairing payload: ${pairingCreatedAt}`);
   console.log(`[remodex] Stdout log: ${status.stdoutLogPath}`);
   console.log(`[remodex] Stderr log: ${status.stderrLogPath}`);
@@ -599,7 +609,49 @@ function normalizeNonEmptyString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
+function buildTrustedDeviceSummary(deviceState) {
+  const trustedPhoneEntries = Object.entries(deviceState?.trustedPhones || {}).filter(
+    ([phoneDeviceId, publicKey]) =>
+      normalizeNonEmptyString(phoneDeviceId) && normalizeNonEmptyString(publicKey)
+  );
+  const firstTrustedPhoneId = trustedPhoneEntries[0]?.[0] || "";
+  const lastSeenPhoneAppVersion =
+    normalizeNonEmptyString(deviceState?.lastSeenPhoneAppVersion) || null;
+  return {
+    macDeviceFingerprint: shortFingerprint(deviceState?.macDeviceId),
+    trustedPhoneCount: trustedPhoneEntries.length,
+    trustedPhoneFingerprint: shortFingerprint(firstTrustedPhoneId),
+    lastSeenDeviceKind:
+      normalizeNonEmptyString(deviceState?.lastSeenDeviceKind) ||
+      (lastSeenPhoneAppVersion ? "iphone" : null),
+    lastSeenPhoneAppVersion,
+  };
+}
+
+function formatDeviceKind(deviceKind) {
+  const normalized = normalizeNonEmptyString(deviceKind).toLowerCase();
+  if (normalized === "iphone") {
+    return "iPhone";
+  }
+  if (normalized === "android") {
+    return "Android";
+  }
+  if (normalized === "mac") {
+    return "Mac";
+  }
+  return "";
+}
+
+function shortFingerprint(value) {
+  const normalized = normalizeNonEmptyString(value);
+  if (!normalized) {
+    return null;
+  }
+  return createHash("sha256").update(normalized).digest("hex").slice(0, 8);
+}
+
 module.exports = {
+  buildTrustedDeviceSummary,
   buildLaunchAgentPlist,
   getMacOSBridgeServiceStatus,
   mergeBridgeStatusForDaemon,

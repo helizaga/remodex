@@ -15,6 +15,11 @@ private enum ThreadListHydrationPolicy {
     static let requestTimeoutNanoseconds: UInt64 = 12_000_000_000
 }
 
+struct CodexPreAppendedTurnMessage: Sendable {
+    let messageID: String
+    let automaticTitleSeed: String?
+}
+
 extension CodexService {
     // Sidebar loads stay capped so reconnect/bootstrap cannot pull an entire local history at once.
     var recentActiveThreadListLimit: Int { 70 }
@@ -83,7 +88,10 @@ extension CodexService {
 
     func listThreads(limit: Int? = nil) async throws {
         isLoadingThreads = true
-        defer { isLoadingThreads = false }
+        defer {
+            isLoadingThreads = false
+            flushPendingRuntimeOptionRefreshIfPossible()
+        }
 
         let activeLimit = limit ?? recentActiveThreadListLimit
 
@@ -150,7 +158,7 @@ extension CodexService {
                     throw CodexServiceError.invalidResponse("thread/start response missing thread")
                 }
 
-                let thread = CodexThreadStartProjectBinding.applyPreferredProjectFallback(
+                let thread = CodexThreadStartProjectBinding.applyPreferredProjectBinding(
                     to: decodedThread,
                     preferredProjectPath: normalizedPreferredProjectPath
                 )
@@ -167,6 +175,13 @@ extension CodexService {
                 hydratedThreadIDs.insert(thread.id)
                 initialTurnsLoadedByThreadID.insert(thread.id)
                 upsertThread(thread, treatAsServerState: true)
+                if let normalizedPreferredProjectPath,
+                   decodedThread.normalizedProjectPath != normalizedPreferredProjectPath {
+                    beginAuthoritativeProjectPathTransition(
+                        threadId: thread.id,
+                        projectPath: normalizedPreferredProjectPath
+                    )
+                }
                 if let normalizedProjectPath = thread.normalizedProjectPath,
                    CodexThread.projectIconSystemName(for: normalizedProjectPath) == "arrow.triangle.branch" {
                     rememberAssociatedManagedWorktreePath(normalizedProjectPath, for: thread.id)
@@ -214,7 +229,14 @@ extension CodexService {
     }
 
     func persistComposerDrafts() {
-        composerDraftPersistence.save(composerDraftsByThreadID)
+        guard !suspendAutomaticMacScopedPersistence else {
+            return
+        }
+
+        composerDraftPersistence.save(
+            composerDraftsByThreadID,
+            macDeviceId: currentMacScopedPersistenceDeviceId
+        )
     }
 
     // Sends user input as a new turn against an existing (or newly created) thread.
@@ -226,6 +248,8 @@ extension CodexService {
         mentionMentions: [CodexTurnMention] = [],
         fileMentions: [String] = [],
         shouldAppendUserMessage: Bool = true,
+        preAppendedUserMessageID: String? = nil,
+        automaticTitleSeedOverride: String? = nil,
         collaborationMode: CodexCollaborationModeKind? = nil,
         preservePlanSessionState: Bool = false
     ) async throws {
@@ -252,17 +276,22 @@ extension CodexService {
             skillMentions: skillMentions,
             mentionMentions: mentionMentions
         )
-        let preResumeTitleSeed = shouldAppendUserMessage
-            ? automaticThreadTitleSeedIfNeeded(
-                userInput: outgoingDisplayText,
-                attachments: attachments,
-                threadId: initialThreadId
-            )
-            : nil
+        let normalizedPreAppendedUserMessageID = normalizedInterruptIdentifier(preAppendedUserMessageID)
+        let shouldAppendOnContinuation = shouldAppendUserMessage || normalizedPreAppendedUserMessageID != nil
+        let preResumeTitleSeed = resolvedAutomaticThreadTitleSeed(
+            override: automaticTitleSeedOverride,
+            shouldEvaluate: shouldAppendUserMessage && normalizedPreAppendedUserMessageID == nil,
+            userInput: outgoingDisplayText,
+            attachments: attachments,
+            threadId: initialThreadId
+        )
         // Put the user's bubble in the timeline before any resume/network work so
         // sends feel instant while the runtime catches up in the background.
-        let preResumePendingMessageId = shouldAppendUserMessage
-            ? appendUserMessage(
+        let preResumePendingMessageId: String
+        if let normalizedPreAppendedUserMessageID {
+            preResumePendingMessageId = normalizedPreAppendedUserMessageID
+        } else if shouldAppendUserMessage {
+            preResumePendingMessageId = appendUserMessage(
                 threadId: initialThreadId,
                 text: outgoingDisplayText,
                 attachments: attachments,
@@ -277,7 +306,9 @@ extension CodexService {
                     return normalized.isEmpty ? nil : normalized
                 }
             )
-            : ""
+        } else {
+            preResumePendingMessageId = ""
+        }
 
         do {
             try await ensureThreadResumed(threadId: initialThreadId)
@@ -303,7 +334,7 @@ extension CodexService {
                     mentionMentions: mentionMentions,
                     fileMentions: fileMentions,
                     to: continuationThread.id,
-                    shouldAppendUserMessage: shouldAppendUserMessage,
+                    shouldAppendUserMessage: shouldAppendOnContinuation,
                     collaborationMode: effectiveCollaborationMode
                 )
                 activeThreadId = continuationThread.id
@@ -348,7 +379,7 @@ extension CodexService {
                     mentionMentions: mentionMentions,
                     fileMentions: fileMentions,
                     to: continuationThread.id,
-                    shouldAppendUserMessage: shouldAppendUserMessage,
+                    shouldAppendUserMessage: shouldAppendOnContinuation,
                     collaborationMode: effectiveCollaborationMode
                 )
                 activeThreadId = continuationThread.id
@@ -359,6 +390,129 @@ extension CodexService {
         }
 
         activeThreadId = initialThreadId
+    }
+
+    // Lets the New Chat handoff publish the first user row before the real
+    // TurnView appears, while `startTurn` still owns the single `turn/start`.
+    func preAppendOutgoingUserMessage(
+        userInput: String,
+        threadId: String,
+        attachments: [CodexImageAttachment] = [],
+        skillMentions: [CodexTurnSkillMention] = [],
+        mentionMentions: [CodexTurnMention] = [],
+        fileMentions: [String] = []
+    ) -> CodexPreAppendedTurnMessage? {
+        let normalizedThreadID = normalizedInterruptIdentifier(threadId) ?? threadId
+        let outgoingDisplayText = displayTextForOutgoingTurn(
+            userInput: userInput.trimmingCharacters(in: .whitespacesAndNewlines),
+            skillMentions: skillMentions,
+            mentionMentions: mentionMentions
+        )
+        let automaticTitleSeed = resolvedAutomaticThreadTitleSeed(
+            override: nil,
+            shouldEvaluate: true,
+            userInput: outgoingDisplayText,
+            attachments: attachments,
+            threadId: normalizedThreadID
+        )
+        let messageID = appendUserMessage(
+            threadId: normalizedThreadID,
+            text: outgoingDisplayText,
+            attachments: attachments,
+            fileMentions: fileMentions,
+            skillMentions: skillMentions.compactMap {
+                let rawName = $0.name ?? $0.id
+                let normalized = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+                return normalized.isEmpty ? nil : normalized
+            },
+            pluginMentions: mentionMentions.compactMap {
+                let normalized = $0.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                return normalized.isEmpty ? nil : normalized
+            }
+        )
+
+        guard !messageID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return CodexPreAppendedTurnMessage(
+            messageID: messageID,
+            automaticTitleSeed: automaticTitleSeed
+        )
+    }
+
+    // Carries a draft-thread pending row into the real thread created by thread/start.
+    func movePreAppendedOutgoingUserMessage(
+        _ preAppendedMessage: CodexPreAppendedTurnMessage?,
+        from sourceThreadID: String,
+        to targetThreadID: String
+    ) -> CodexPreAppendedTurnMessage? {
+        guard let preAppendedMessage,
+              let messageID = normalizedInterruptIdentifier(preAppendedMessage.messageID),
+              let normalizedSourceThreadID = normalizedInterruptIdentifier(sourceThreadID),
+              let normalizedTargetThreadID = normalizedInterruptIdentifier(targetThreadID) else {
+            return nil
+        }
+        guard normalizedSourceThreadID != normalizedTargetThreadID else {
+            return preAppendedMessage
+        }
+        guard var sourceMessages = messagesByThread[normalizedSourceThreadID],
+              let sourceIndex = sourceMessages.firstIndex(where: { $0.id == messageID }),
+              sourceMessages[sourceIndex].role == .user else {
+            return nil
+        }
+
+        let sourceMessage = sourceMessages.remove(at: sourceIndex)
+        let automaticTitleSeed = resolvedAutomaticThreadTitleSeed(
+            override: preAppendedMessage.automaticTitleSeed,
+            shouldEvaluate: true,
+            userInput: sourceMessage.text,
+            attachments: sourceMessage.attachments,
+            threadId: normalizedTargetThreadID
+        )
+        let movedMessage = CodexMessage(
+            id: sourceMessage.id,
+            threadId: normalizedTargetThreadID,
+            role: sourceMessage.role,
+            kind: sourceMessage.kind,
+            assistantPhase: sourceMessage.assistantPhase,
+            text: sourceMessage.text,
+            fileMentions: sourceMessage.fileMentions,
+            skillMentions: sourceMessage.skillMentions,
+            pluginMentions: sourceMessage.pluginMentions,
+            createdAt: sourceMessage.createdAt,
+            turnId: sourceMessage.turnId,
+            itemId: sourceMessage.itemId,
+            isStreaming: sourceMessage.isStreaming,
+            deliveryState: sourceMessage.deliveryState,
+            attachments: sourceMessage.attachments,
+            planState: sourceMessage.planState,
+            planPresentation: sourceMessage.planPresentation,
+            proposedPlan: sourceMessage.proposedPlan,
+            subagentAction: sourceMessage.subagentAction,
+            structuredUserInputRequest: sourceMessage.structuredUserInputRequest,
+            orderIndex: sourceMessage.orderIndex
+        )
+
+        if sourceMessages.isEmpty {
+            messagesByThread.removeValue(forKey: normalizedSourceThreadID)
+        } else {
+            messagesByThread[normalizedSourceThreadID] = sourceMessages
+        }
+
+        var targetMessages = messagesByThread[normalizedTargetThreadID] ?? []
+        targetMessages.removeAll { $0.id == movedMessage.id }
+        targetMessages.append(movedMessage)
+        targetMessages.sort(by: { $0.orderIndex < $1.orderIndex })
+        messagesByThread[normalizedTargetThreadID] = targetMessages
+        messageIndexCacheByThread[normalizedSourceThreadID] = nil
+        messageIndexCacheByThread[normalizedTargetThreadID] = nil
+        persistMessages()
+        updateCurrentOutput(for: normalizedSourceThreadID)
+        updateCurrentOutput(for: normalizedTargetThreadID)
+        return CodexPreAppendedTurnMessage(
+            messageID: messageID,
+            automaticTitleSeed: automaticTitleSeed
+        )
     }
 
     // Removes the optimistic row by id first because structured mention-only rows may not match raw composer text.
@@ -484,6 +638,18 @@ extension CodexService {
         }
     }
 
+    // Interrupts every active or protected run before switching to a different Mac context.
+    func interruptAllRunningTurnsBeforeMacSwitch() async throws {
+        let candidateThreadIDs = runningThreadIDs
+            .union(protectedRunningFallbackThreadIDs)
+            .union(activeTurnIdByThread.keys)
+            .sorted()
+
+        for threadID in candidateThreadIDs {
+            try await interruptTurn(turnId: nil, threadId: threadID)
+        }
+    }
+
     // Queries server-side fuzzy file search using stable RPC (non-experimental).
     func fuzzyFileSearch(
         query: String,
@@ -566,7 +732,21 @@ extension CodexService {
             throw CodexServiceError.invalidResponse("skills/list response missing result.data[].skills")
         }
 
-        let dedupedByName = Dictionary(grouping: decodedSkills) { $0.normalizedName }
+        var allSkills = decodedSkills
+        if !normalizedCwds.isEmpty {
+            var globalParams: RPCObject = [:]
+            if forceReload {
+                globalParams["forceReload"] = .bool(true)
+            }
+            // Some runtimes return only cwd-scoped skills when `cwds` is present; merge the
+            // global list so personal skills remain discoverable from project threads.
+            if let globalResponse = try? await sendRequest(method: "skills/list", params: .object(globalParams)),
+               let globalSkills = decodeSkillMetadata(from: globalResponse.result) {
+                allSkills.append(contentsOf: globalSkills)
+            }
+        }
+
+        let dedupedByName = Dictionary(grouping: allSkills) { $0.normalizedName }
             .compactMap { _, bucket -> CodexSkillMetadata? in
                 bucket.first(where: { $0.enabled }) ?? bucket.first
             }
@@ -837,16 +1017,21 @@ enum CodexThreadStartProjectBinding {
         return params
     }
 
-    // Preserves project grouping even when older servers omit cwd in thread/start result.
-    static func applyPreferredProjectFallback(to thread: CodexThread, preferredProjectPath: String?) -> CodexThread {
-        guard thread.normalizedProjectPath == nil,
-              let preferredProjectPath else {
+    // Treats the requested cwd as authoritative for newly-created chats so a
+    // stale app-server process cwd cannot leak into sidebar project grouping.
+    static func applyPreferredProjectBinding(to thread: CodexThread, preferredProjectPath: String?) -> CodexThread {
+        guard let preferredProjectPath,
+              thread.normalizedProjectPath != preferredProjectPath else {
             return thread
         }
 
         var patchedThread = thread
         patchedThread.cwd = preferredProjectPath
         return patchedThread
+    }
+
+    static func applyPreferredProjectFallback(to thread: CodexThread, preferredProjectPath: String?) -> CodexThread {
+        applyPreferredProjectBinding(to: thread, preferredProjectPath: preferredProjectPath)
     }
 }
 
@@ -1257,13 +1442,13 @@ extension CodexService {
             skillMentions: skillMentions,
             mentionMentions: mentionMentions
         )
-        let automaticTitleSeed = automaticTitleSeedOverride ?? (shouldAppendUserMessage
-            ? automaticThreadTitleSeedIfNeeded(
-                userInput: outgoingDisplayText,
-                attachments: attachments,
-                threadId: threadId
-            )
-            : nil)
+        let automaticTitleSeed = resolvedAutomaticThreadTitleSeed(
+            override: automaticTitleSeedOverride,
+            shouldEvaluate: shouldAppendUserMessage,
+            userInput: outgoingDisplayText,
+            attachments: attachments,
+            threadId: threadId
+        )
         let pendingMessageId: String
         if let preAppendedUserMessageID,
            !preAppendedUserMessageID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -1490,6 +1675,28 @@ extension CodexService {
         }
     }
 
+    // Centralizes first-message title seeding so optimistic rows, moved draft rows,
+    // and direct turn starts all preserve the same overwrite rules.
+    private func resolvedAutomaticThreadTitleSeed(
+        override: String?,
+        shouldEvaluate: Bool,
+        userInput: String,
+        attachments: [CodexImageAttachment],
+        threadId: String
+    ) -> String? {
+        if let override {
+            return override
+        }
+        guard shouldEvaluate else {
+            return nil
+        }
+        return automaticThreadTitleSeedIfNeeded(
+            userInput: userInput,
+            attachments: attachments,
+            threadId: threadId
+        )
+    }
+
     private func automaticThreadTitleSeedIfNeeded(
         userInput: String,
         attachments: [CodexImageAttachment],
@@ -1540,6 +1747,7 @@ extension CodexService {
         mentionMentions: [CodexTurnMention] = [],
         fileMentions: [String] = [],
         shouldAppendUserMessage: Bool = true,
+        preAppendedUserMessageID: String? = nil,
         collaborationMode: CodexCollaborationModeKind? = nil
     ) async throws {
         let normalizedThreadID = normalizedInterruptIdentifier(threadId) ?? threadId
@@ -1551,8 +1759,12 @@ extension CodexService {
             threadId: normalizedThreadID,
             collaborationMode: effectiveRequestedCollaborationMode
         )
-        let pendingMessageId = shouldAppendUserMessage
-            ? appendUserMessage(
+        let normalizedPreAppendedUserMessageID = normalizedInterruptIdentifier(preAppendedUserMessageID)
+        let pendingMessageId: String
+        if let normalizedPreAppendedUserMessageID {
+            pendingMessageId = normalizedPreAppendedUserMessageID
+        } else if shouldAppendUserMessage {
+            pendingMessageId = appendUserMessage(
                 threadId: normalizedThreadID,
                 text: displayTextForOutgoingTurn(
                     userInput: userInput,
@@ -1571,7 +1783,9 @@ extension CodexService {
                     return normalized.isEmpty ? nil : normalized
                 }
             )
-            : ""
+        } else {
+            pendingMessageId = ""
+        }
         var resolvedExpectedTurnID = normalizedInterruptIdentifier(expectedTurnId)
         if resolvedExpectedTurnID == nil {
             do {
@@ -1865,8 +2079,8 @@ extension CodexService {
         let trimmedText = userInput.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedText.isEmpty {
             let fallbackText = legacyTextForStructuredMentions(
-                skillMentions: includeStructuredSkillItems ? [] : skillMentions,
-                mentionMentions: includeStructuredMentionItems ? [] : mentionMentions
+                skillMentions: skillMentions,
+                mentionMentions: mentionMentions
             )
             inputItems.append(
                 .object([
@@ -1876,8 +2090,8 @@ extension CodexService {
             )
         } else {
             let fallbackText = legacyTextForStructuredMentions(
-                skillMentions: includeStructuredSkillItems ? [] : skillMentions,
-                mentionMentions: includeStructuredMentionItems ? [] : mentionMentions
+                skillMentions: skillMentions,
+                mentionMentions: mentionMentions
             )
             if !fallbackText.isEmpty {
                 inputItems.append(
@@ -1936,44 +2150,76 @@ extension CodexService {
         return inputItems
     }
 
-    // Gives mention-only sends a visible local row and a text fallback for runtimes without structured items.
+    // Keeps the local bubble human-only; the turn/start payload still carries legacy text
+    // fallbacks so desktop Codex can read structured mentions.
     private func displayTextForOutgoingTurn(
         userInput: String,
         skillMentions: [CodexTurnSkillMention],
         mentionMentions: [CodexTurnMention]
     ) -> String {
         var trimmedInput = userInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        var humanTextProbe = trimmedInput
 
         for mention in skillMentions {
             let rawName = mention.name ?? mention.id
             let normalizedName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !normalizedName.isEmpty else { continue }
-            trimmedInput = Self.removeBoundedMentionToken("$\(normalizedName)", from: trimmedInput)
+            let displayName = Self.displayNameForMentionToken(normalizedName)
+            humanTextProbe = Self.removeBoundedMentionToken("$\(normalizedName)", from: humanTextProbe)
+            humanTextProbe = Self.removeBoundedMentionToken("/\(normalizedName)", from: humanTextProbe)
+            humanTextProbe = Self.removeBoundedMentionToken(displayName, from: humanTextProbe)
+            trimmedInput = Self.replacingBoundedMentionToken("$\(normalizedName)", with: displayName, in: trimmedInput)
+            trimmedInput = Self.replacingBoundedMentionToken("/\(normalizedName)", with: displayName, in: trimmedInput)
         }
 
         for mention in mentionMentions {
             let normalizedName = mention.name.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !normalizedName.isEmpty else { continue }
+            humanTextProbe = Self.removeBoundedMentionToken("@\(normalizedName)", from: humanTextProbe)
             trimmedInput = Self.removeBoundedMentionToken("@\(normalizedName)", from: trimmedInput)
         }
 
-        trimmedInput = trimmedInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        let legacyText = legacyTextForStructuredMentions(
-            skillMentions: skillMentions,
-            mentionMentions: mentionMentions
-        )
-
-        guard !trimmedInput.isEmpty else {
-            return legacyText
+        guard !humanTextProbe.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return ""
         }
 
+        trimmedInput = trimmedInput.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmedInput
+    }
+
+    nonisolated static func displayNameForMentionToken(_ rawName: String) -> String {
+        let parts = rawName
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(omittingEmptySubsequences: true) { $0 == "-" || $0 == "_" }
+            .map { part -> String in
+                let token = String(part)
+                return token.prefix(1).uppercased() + token.dropFirst().lowercased()
+            }
+        return parts.isEmpty ? rawName : parts.joined(separator: " ")
+    }
+
+    nonisolated static func replacingBoundedMentionToken(_ token: String, with replacement: String, in text: String) -> String {
+        let escaped = NSRegularExpression.escapedPattern(for: token)
+        guard let regex = try? NSRegularExpression(
+            pattern: "(?<!\\S)" + escaped + "(?=[\\s,.;:!?)\\]}>]|$)",
+            options: [.caseInsensitive]
+        ) else {
+            return text
+        }
+
+        let range = NSRange(text.startIndex..., in: text)
+        return regex.stringByReplacingMatches(
+            in: text,
+            options: [],
+            range: range,
+            withTemplate: NSRegularExpression.escapedTemplate(for: replacement)
+        )
     }
 
     nonisolated static func removeBoundedMentionToken(_ token: String, from text: String) -> String {
         let escaped = NSRegularExpression.escapedPattern(for: token)
         guard let regex = try? NSRegularExpression(
-            pattern: escaped + "(?:[\\s,.;:!?)\\]}>]|$)",
+            pattern: "(?<!\\S)" + escaped + "(?:[\\s,.;:!?)\\]}>]|$)",
             options: [.caseInsensitive]
         ) else {
             return text
@@ -2000,13 +2246,26 @@ extension CodexService {
             .split(separator: " ")
             .map(String.init)
             .filter { token in
-                !text.localizedCaseInsensitiveContains(token)
+                !textContainsLegacyMentionToken(text, token: token)
             }
         guard !missingTokens.isEmpty else {
             return text
         }
 
         return "\(text)\n\n\(missingTokens.joined(separator: " "))"
+    }
+
+    private func textContainsLegacyMentionToken(_ text: String, token: String) -> Bool {
+        if text.localizedCaseInsensitiveContains(token) {
+            return true
+        }
+
+        if token.hasPrefix("$") {
+            let slashToken = "/" + token.dropFirst()
+            return text.localizedCaseInsensitiveContains(slashToken)
+        }
+
+        return false
     }
 
     private func legacyTextForStructuredMentions(

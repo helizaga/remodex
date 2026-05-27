@@ -57,6 +57,8 @@ struct TurnComposerAttachmentIntakePlan {
 
 struct QueuedTurnDraft: Identifiable {
     let id: String
+    // Points at the optimistic timeline bubble shown while this draft waits behind a running turn.
+    let preAppendedMessageID: String?
     let text: String
     let attachments: [CodexImageAttachment]
     let skillMentions: [CodexTurnSkillMention]
@@ -74,6 +76,7 @@ struct QueuedTurnDraft: Identifiable {
 
     init(
         id: String,
+        preAppendedMessageID: String? = nil,
         text: String,
         attachments: [CodexImageAttachment],
         skillMentions: [CodexTurnSkillMention],
@@ -88,6 +91,7 @@ struct QueuedTurnDraft: Identifiable {
         createdAt: Date
     ) {
         self.id = id
+        self.preAppendedMessageID = preAppendedMessageID
         self.text = text
         self.attachments = attachments
         self.skillMentions = skillMentions
@@ -100,6 +104,26 @@ struct QueuedTurnDraft: Identifiable {
         self.rawAttachments = rawAttachments
         self.rawSubagentsSelectionArmed = rawSubagentsSelectionArmed
         self.createdAt = createdAt
+    }
+
+    // Carries the optimistic row id without rebuilding queue payloads at call sites.
+    func withPreAppendedMessageID(_ messageID: String?) -> QueuedTurnDraft {
+        QueuedTurnDraft(
+            id: id,
+            preAppendedMessageID: messageID,
+            text: text,
+            attachments: attachments,
+            skillMentions: skillMentions,
+            mentionMentions: mentionMentions,
+            collaborationMode: collaborationMode,
+            rawInput: rawInput,
+            rawFileMentions: rawFileMentions,
+            rawSkillMentions: rawSkillMentions,
+            rawPluginMentions: rawPluginMentions,
+            rawAttachments: rawAttachments,
+            rawSubagentsSelectionArmed: rawSubagentsSelectionArmed,
+            createdAt: createdAt
+        )
     }
 }
 
@@ -114,13 +138,13 @@ struct TurnComposerLocalDraft: Codable, Equatable, Sendable {
     let isSubagentsSelectionArmed: Bool
     let updatedAt: Date
 
-    var isEmpty: Bool {
+    nonisolated var isEmpty: Bool {
         input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && mentionedFiles.isEmpty
             && mentionedSkills.isEmpty
             && mentionedPlugins.isEmpty
             && attachments.isEmpty
-            && reviewSelection == nil
+            && (reviewSelection.map { _ in false } ?? true)
             && !isPlanModeArmed
             && !isSubagentsSelectionArmed
     }
@@ -226,6 +250,7 @@ final class TurnViewModel {
     var isSkillAutocompleteVisible = false
     var isSkillAutocompleteLoading = false
     var skillAutocompleteQuery = ""
+    var skillAutocompleteTrigger = "$"
     var pluginAutocompleteItems: [CodexPluginMetadata] = []
     var isPluginAutocompleteVisible = false
     var isPluginAutocompleteLoading = false
@@ -273,7 +298,19 @@ final class TurnViewModel {
         if gitRepoSync?.hasPushRemote != true || !(gitRepoSync?.isDirty == true || gitRepoSync?.canPush == true) {
             disabledActions.insert(.commitAndPush)
         }
+        if !canUpdateRepositoryFromRemote {
+            disabledActions.insert(.syncNow)
+        }
         return disabledActions
+    }
+    var canUpdateRepositoryFromRemote: Bool {
+        guard let repoSync = gitRepoSync, repoSync.isGitRepository else {
+            return false
+        }
+
+        // Normal Update is only for fast-forwardable remote work. Diverged branches
+        // stay disabled here so the user must choose an explicit rebase/merge path.
+        return ["behind_only", "dirty_and_behind"].contains(repoSync.state)
     }
     // Keeps PR creation tied to live Git state instead of chat-local remembered branch state.
     var createPullRequestValidationMessage: String? {
@@ -338,15 +375,17 @@ final class TurnViewModel {
         return dangerousStates.contains(sync.state) || (sync.isDirty && sync.state == "no_upstream")
     }
 
-    // Keeps git mutations scoped to an idle, explicitly bound local repo.
+    // Keeps git mutations scoped to an explicitly bound local repo. Repo-level
+    // write actions can opt out of the idle-turn gate; branch/worktree routing keeps it.
     func canRunGitAction(
         isConnected: Bool,
         isThreadRunning: Bool,
-        hasGitWorkingDirectory: Bool
+        hasGitWorkingDirectory: Bool,
+        requiresIdleThread: Bool = true
     ) -> Bool {
         isConnected
             && hasGitWorkingDirectory
-            && !isThreadRunning
+            && (!requiresIdleThread || !isThreadRunning)
             && !isRunningGitAction
             && !isSwitchingGitBranch
             && !isCreatingGitWorktree
@@ -365,6 +404,7 @@ final class TurnViewModel {
     @ObservationIgnored var pendingGitWorktreeOpenHandler: ((GitCreateWorktreeResult) -> Void)?
     @ObservationIgnored var pendingManagedGitWorktreeOpenHandler: ((GitCreateManagedWorktreeResult) -> Void)?
     @ObservationIgnored private var cachedSkillSearchIndexByRoot: [String: [TurnSkillSearchIndexEntry]] = [:]
+    @ObservationIgnored private var forceRefreshedSkillMissKeys: Set<String> = []
     @ObservationIgnored private var cachedPluginSearchIndexByRoot: [String: [TurnPluginSearchIndexEntry]] = [:]
     @ObservationIgnored var unsupportedSkillsAutocompleteRoots: Set<String> = []
     @ObservationIgnored var unsupportedPluginsAutocompleteRoots: Set<String> = []
@@ -514,10 +554,19 @@ final class TurnViewModel {
         queuedDrafts(codex: codex, threadID: threadID)
     }
 
-    func removeQueuedDraft(id: String, codex: CodexService, threadID: String) {
+    func removeQueuedDraft(
+        id: String,
+        codex: CodexService,
+        threadID: String,
+        removeOptimisticMessage: Bool = true
+    ) {
         var drafts = queuedDrafts(codex: codex, threadID: threadID)
+        let removedDraft = drafts.first { $0.id == id }
         drafts.removeAll { $0.id == id }
         setQueuedDrafts(drafts, codex: codex, threadID: threadID)
+        if removeOptimisticMessage {
+            removeQueuedDraftOptimisticMessageIfNeeded(removedDraft, codex: codex, threadID: threadID)
+        }
     }
 
     // Moves one queued row back into the composer so the user can edit/resend it manually.
@@ -533,6 +582,7 @@ final class TurnViewModel {
 
         let draft = drafts.remove(at: draftIndex)
         setQueuedDrafts(drafts, codex: codex, threadID: threadID)
+        removeQueuedDraftOptimisticMessageIfNeeded(draft, codex: codex, threadID: threadID)
         restoreComposerState(from: draft)
         clearComposerAutocomplete()
         shouldAnchorToAssistantResponse = false
@@ -831,12 +881,19 @@ final class TurnViewModel {
         let normalizedRoot = normalizedAutocompleteRoot(for: thread)
         let cacheKey = autocompleteCacheKey(forRoot: normalizedRoot)
         skillAutocompleteQuery = query
+        skillAutocompleteTrigger = String(token.trigger)
         let hasCachedSkillIndex = cachedSkillSearchIndexByRoot[cacheKey] != nil
         let rootIsUnsupported = unsupportedSkillsAutocompleteRoots.contains(cacheKey)
         isSkillAutocompleteLoading = !hasCachedSkillIndex && !rootIsUnsupported
         if let cachedIndex = cachedSkillSearchIndexByRoot[cacheKey] {
             skillAutocompleteItems = filteredSkillAutocompleteItems(for: query, indexedSkills: cachedIndex)
-            isSkillAutocompleteVisible = !skillAutocompleteItems.isEmpty
+            let shouldRefreshCachedMiss = shouldRefreshSkillAutocompleteMiss(
+                query: query,
+                cachedItems: skillAutocompleteItems,
+                cacheKey: cacheKey
+            )
+            isSkillAutocompleteLoading = shouldRefreshCachedMiss
+            isSkillAutocompleteVisible = !skillAutocompleteItems.isEmpty || shouldRefreshCachedMiss
         } else {
             skillAutocompleteItems = []
             isSkillAutocompleteVisible = isSkillAutocompleteLoading
@@ -868,7 +925,32 @@ final class TurnViewModel {
 
                 let indexedSkills: [TurnSkillSearchIndexEntry]
                 if let cachedIndex = self.cachedSkillSearchIndexByRoot[cacheKey] {
-                    indexedSkills = cachedIndex
+                    let cachedItems = self.filteredSkillAutocompleteItems(
+                        for: expectedQuery,
+                        indexedSkills: cachedIndex
+                    )
+                    if self.shouldRefreshSkillAutocompleteMiss(
+                        query: expectedQuery,
+                        cachedItems: cachedItems,
+                        cacheKey: cacheKey
+                    ) {
+                        let listedSkills = try await codex.listSkills(
+                            cwds: normalizedRoot.map { [$0] },
+                            forceReload: true
+                        )
+                        guard !Task.isCancelled else { return }
+                        indexedSkills = listedSkills
+                            .filter { $0.enabled }
+                            .map(TurnSkillSearchIndexEntry.init(skill:))
+                        self.cachedSkillSearchIndexByRoot[cacheKey] = indexedSkills
+                        self.rememberSkillAutocompleteMissRefresh(
+                            query: expectedQuery,
+                            cacheKey: cacheKey,
+                            indexedSkills: indexedSkills
+                        )
+                    } else {
+                        indexedSkills = cachedIndex
+                    }
                 } else {
                     let listedSkills = try await codex.listSkills(
                         cwds: normalizedRoot.map { [$0] },
@@ -879,6 +961,7 @@ final class TurnViewModel {
                         .filter { $0.enabled }
                         .map(TurnSkillSearchIndexEntry.init(skill:))
                     self.cachedSkillSearchIndexByRoot[cacheKey] = indexedSkills
+                    self.clearSkillAutocompleteMissRefreshes(cacheKey: cacheKey)
                 }
 
                 guard !Task.isCancelled else { return }
@@ -1048,7 +1131,7 @@ final class TurnViewModel {
         resetPluginAutocompleteState()
     }
 
-    // Replaces `$query` with `$skill` and stores the selected skill mention for turn/start.
+    // Replaces `$query` or `/query` with the selected skill token and stores the turn/start mention.
     func onSelectSkillAutocomplete(_ skill: CodexSkillMetadata) {
         clearComposerReviewSelectionIfNeededForNonReviewContent()
 
@@ -1098,6 +1181,14 @@ final class TurnViewModel {
         }
 
         guard let token = Self.trailingSlashCommandToken(in: text) else {
+            if case .commands = slashCommandPanelState {
+                resetSlashCommandState()
+            }
+            return
+        }
+
+        let matchingCommands = TurnComposerSlashCommand.filtered(matching: token.query)
+        guard token.query.isEmpty || !matchingCommands.isEmpty else {
             if case .commands = slashCommandPanelState {
                 resetSlashCommandState()
             }
@@ -1172,6 +1263,7 @@ final class TurnViewModel {
     func removeMentionedSkill(id: String) {
         if let mention = composerMentionedSkills.first(where: { $0.id == id }) {
             input = Self.removeBoundedToken("$\(mention.name)", from: input)
+            input = Self.removeBoundedToken("/\(mention.name)", from: input)
         }
         composerMentionedSkills.removeAll(where: { $0.id == id })
     }
@@ -1309,11 +1401,16 @@ final class TurnViewModel {
             return
         }
 
-        let queuedDraft = pendingSend.rawReviewSelection == nil
+        let initialQueuedDraft = pendingSend.rawReviewSelection == nil
             ? makeQueuedDraft(from: pendingSend)
             : nil
         let threadBusy = isThreadBusy(codex: codex, threadID: threadID)
         let queuePaused = isQueuePaused(codex: codex, threadID: threadID)
+        // Busy-state refresh may wait on the runtime. Publish the queued bubble
+        // before any await so follow-ups appear above the first assistant block.
+        let queuedDraft = threadBusy
+            ? initialQueuedDraft.map { preAppendQueuedDraftMessageIfNeeded($0, codex: codex, threadID: threadID) }
+            : initialQueuedDraft
 
         subscriptions?.consumeFreeSendAttemptIfNeeded()
         isSending = true
@@ -1335,6 +1432,9 @@ final class TurnViewModel {
                 return
             }
 
+            let preAppendedMessage = queuedDraft?.preAppendedMessageID.map {
+                CodexPreAppendedTurnMessage(messageID: $0, automaticTitleSeed: nil)
+            }
             if queuePaused, let queuedDraft {
                 appendQueuedDraft(queuedDraft, codex: codex, threadID: threadID)
                 clearLocalDraft(codex: codex, threadID: threadID, persistToDisk: true)
@@ -1343,7 +1443,12 @@ final class TurnViewModel {
                 return
             }
 
-            await performTurnSend(pendingSend, codex: codex, threadID: threadID)
+            await performTurnSend(
+                pendingSend,
+                codex: codex,
+                threadID: threadID,
+                preAppendedMessage: preAppendedMessage
+            )
         }
     }
 
@@ -1368,6 +1473,11 @@ final class TurnViewModel {
         isSending = true
         isPlanModeArmed = false
         shouldAnchorToAssistantResponse = true
+        let draftPreAppendedMessage = preAppendNewThreadUserMessageIfNeeded(
+            pendingSend,
+            codex: codex,
+            threadID: draftThreadID
+        )
         clearComposer()
 
         // Forwards the raw user input as the rootless chat slug hint so the
@@ -1383,10 +1493,22 @@ final class TurnViewModel {
                     preferredProjectPath: preferredProjectPath,
                     rootlessChatPromptHint: rootlessChatPromptHint
                 )
+                let preAppendedMessage = movePreAppendedNewThreadUserMessageIfNeeded(
+                    draftPreAppendedMessage,
+                    pendingSend: pendingSend,
+                    codex: codex,
+                    draftThreadID: draftThreadID,
+                    threadID: thread.id
+                )
                 onThreadCreated(thread)
 
                 do {
-                    try await dispatchPendingSend(pendingSend, codex: codex, threadID: thread.id)
+                    try await dispatchPendingSend(
+                        pendingSend,
+                        codex: codex,
+                        threadID: thread.id,
+                        preAppendedMessage: preAppendedMessage
+                    )
                     clearLocalDraft(codex: codex, threadID: draftThreadID, persistToDisk: true)
                     clearLocalDraft(codex: codex, threadID: thread.id, persistToDisk: true)
                 } catch {
@@ -1394,6 +1516,11 @@ final class TurnViewModel {
                     codex.lastErrorMessage = codex.userFacingTurnErrorMessageForFooter(from: error)
                 }
             } catch {
+                discardPreAppendedNewThreadUserMessage(
+                    draftPreAppendedMessage,
+                    codex: codex,
+                    draftThreadID: draftThreadID
+                )
                 restorePendingSendOnFailure(
                     pendingSend,
                     error: error,
@@ -1475,13 +1602,72 @@ final class TurnViewModel {
         )
     }
 
+    // Moves the immediate draft bubble onto the real thread; falls back to appending
+    // there if the draft row was pruned before thread/start returned.
+    private func movePreAppendedNewThreadUserMessageIfNeeded(
+        _ draftPreAppendedMessage: CodexPreAppendedTurnMessage?,
+        pendingSend: PendingTurnSend,
+        codex: CodexService,
+        draftThreadID: String,
+        threadID: String
+    ) -> CodexPreAppendedTurnMessage? {
+        if let movedMessage = codex.movePreAppendedOutgoingUserMessage(
+            draftPreAppendedMessage,
+            from: draftThreadID,
+            to: threadID
+        ) {
+            return movedMessage
+        }
+
+        return preAppendNewThreadUserMessageIfNeeded(
+            pendingSend,
+            codex: codex,
+            threadID: threadID
+        )
+    }
+
+    // Cleans up the draft-only optimistic row if thread/start itself fails.
+    private func discardPreAppendedNewThreadUserMessage(
+        _ draftPreAppendedMessage: CodexPreAppendedTurnMessage?,
+        codex: CodexService,
+        draftThreadID: String
+    ) {
+        guard let draftPreAppendedMessage else { return }
+        codex.removeUserMessage(
+            threadId: draftThreadID,
+            messageId: draftPreAppendedMessage.messageID
+        )
+    }
+
+    // Pre-publishes the first New Chat user row before ContentView swaps in TurnView.
+    // Reviews use their own runtime event stream, so only normal turns get a row here.
+    private func preAppendNewThreadUserMessageIfNeeded(
+        _ pendingSend: PendingTurnSend,
+        codex: CodexService,
+        threadID: String
+    ) -> CodexPreAppendedTurnMessage? {
+        guard pendingSend.rawReviewSelection == nil else {
+            return nil
+        }
+
+        return codex.preAppendOutgoingUserMessage(
+            userInput: pendingSend.payload,
+            threadId: threadID,
+            attachments: pendingSend.attachments,
+            skillMentions: pendingSend.skillMentions,
+            mentionMentions: pendingSend.mentionMentions,
+            fileMentions: confirmedFileMentionPaths(from: pendingSend.rawFileMentions)
+        )
+    }
+
     // Routes a PendingTurnSend through the right runtime call (review vs turn)
     // so sendNewThread doesn't have to duplicate the review branch from
     // performTurnSend. Errors bubble to the caller for context-specific recovery.
     private func dispatchPendingSend(
         _ pendingSend: PendingTurnSend,
         codex: CodexService,
-        threadID: String
+        threadID: String,
+        preAppendedMessage: CodexPreAppendedTurnMessage? = nil
     ) async throws {
         if let reviewSelection = pendingSend.rawReviewSelection {
             try await codex.startReview(
@@ -1497,6 +1683,9 @@ final class TurnViewModel {
                 skillMentions: pendingSend.skillMentions,
                 mentionMentions: pendingSend.mentionMentions,
                 fileMentions: confirmedFileMentionPaths(from: pendingSend.rawFileMentions),
+                shouldAppendUserMessage: preAppendedMessage == nil,
+                preAppendedUserMessageID: preAppendedMessage?.messageID,
+                automaticTitleSeedOverride: preAppendedMessage?.automaticTitleSeed,
                 collaborationMode: pendingSend.collaborationMode
             )
         }
@@ -1552,6 +1741,8 @@ final class TurnViewModel {
                     skillMentions: nextDraft.skillMentions,
                     mentionMentions: nextDraft.mentionMentions,
                     fileMentions: confirmedFileMentionPaths(from: nextDraft.rawFileMentions),
+                    shouldAppendUserMessage: nextDraft.preAppendedMessageID == nil,
+                    preAppendedUserMessageID: nextDraft.preAppendedMessageID,
                     collaborationMode: nextDraft.collaborationMode
                 )
                 codex.lastErrorMessage = nil
@@ -1606,9 +1797,11 @@ final class TurnViewModel {
                         skillMentions: draft.skillMentions,
                         mentionMentions: draft.mentionMentions,
                         fileMentions: confirmedFileMentionPaths(from: draft.rawFileMentions),
+                        shouldAppendUserMessage: draft.preAppendedMessageID == nil,
+                        preAppendedUserMessageID: draft.preAppendedMessageID,
                         collaborationMode: draft.collaborationMode
                     )
-                    removeQueuedDraft(id: id, codex: codex, threadID: threadID)
+                    removeQueuedDraft(id: id, codex: codex, threadID: threadID, removeOptimisticMessage: false)
                     return
                 }
 
@@ -1624,17 +1817,14 @@ final class TurnViewModel {
                     skillMentions: draft.skillMentions,
                     mentionMentions: draft.mentionMentions,
                     fileMentions: confirmedFileMentionPaths(from: draft.rawFileMentions),
-                    shouldAppendUserMessage: true,
+                    shouldAppendUserMessage: draft.preAppendedMessageID == nil,
+                    preAppendedUserMessageID: draft.preAppendedMessageID,
                     collaborationMode: draft.collaborationMode
                 )
-                removeQueuedDraft(id: id, codex: codex, threadID: threadID)
+                removeQueuedDraft(id: id, codex: codex, threadID: threadID, removeOptimisticMessage: false)
             } catch {
                 shouldAnchorToAssistantResponse = false
-                codex.removeLatestFailedUserMessage(
-                    threadId: threadID,
-                    matchingText: draft.text,
-                    matchingAttachments: draft.attachments
-                )
+                clearQueuedDraftOptimisticMessage(id: id, draft: draft, codex: codex, threadID: threadID)
                 codex.lastErrorMessage = codex.userFacingTurnErrorMessageForFooter(from: error)
             }
         }
@@ -1792,19 +1982,20 @@ final class TurnViewModel {
         )
     }
 
-    // Extracts only a final `$query` token at the end of composer text.
+    // Extracts only a final `$query` or `/query` token at the end of composer text.
     static func trailingSkillAutocompleteToken(in text: String) -> TurnTrailingSkillAutocompleteToken? {
-        guard let token = trailingToken(in: text, trigger: "$", allowsEmptyQuery: true) else {
+        guard let token = trailingToken(in: text, triggers: ["$", "/"], allowsEmptyQuery: true) else {
             return nil
         }
 
-        // Reject pure-numeric queries like `$100`, `$42` — not skill names.
+        // Reject pure-numeric queries like `$100`, `/42` — not skill names.
         guard token.query.isEmpty || token.query.contains(where: { $0.isLetter }) else {
             return nil
         }
 
         return TurnTrailingSkillAutocompleteToken(
             query: token.query,
+            trigger: token.trigger,
             tokenRange: token.tokenRange
         )
     }
@@ -2022,7 +2213,7 @@ final class TurnViewModel {
         }
 
         var updated = text
-        updated.replaceSubrange(token.tokenRange, with: "$\(trimmedSkill) ")
+        updated.replaceSubrange(token.tokenRange, with: "\(token.trigger)\(trimmedSkill) ")
         return updated
     }
 
@@ -2085,7 +2276,7 @@ final class TurnViewModel {
             return nil
         }
 
-        return TurnTrailingToken(query: query, tokenRange: tokenStart..<text.endIndex)
+        return TurnTrailingToken(query: query, trigger: "@", tokenRange: tokenStart..<text.endIndex)
     }
 
     // Allows flexible file aliases while keeping common Swift attributes out of file search.
@@ -2093,10 +2284,10 @@ final class TurnViewModel {
         TurnFileMentionHeuristics.isAllowedAutocompleteQuery(query)
     }
 
-    // Shared parser for final-token autocomplete triggers (`@`, `$`).
+    // Shared parser for final-token autocomplete triggers (`@`, `$`, `/`).
     private static func trailingToken(
         in text: String,
-        trigger: Character,
+        triggers: Set<Character>,
         allowsEmptyQuery: Bool = false
     ) -> TurnTrailingToken? {
         guard !text.isEmpty else {
@@ -2114,7 +2305,8 @@ final class TurnViewModel {
             return nil
         }
 
-        guard text[tokenStart] == trigger else {
+        let trigger = text[tokenStart]
+        guard triggers.contains(trigger) else {
             return nil
         }
 
@@ -2125,7 +2317,7 @@ final class TurnViewModel {
             return nil
         }
 
-        return TurnTrailingToken(query: query, tokenRange: tokenStart..<text.endIndex)
+        return TurnTrailingToken(query: query, trigger: trigger, tokenRange: tokenStart..<text.endIndex)
     }
 
     private static func appendNormalizedFileMentionAliases(
@@ -2278,16 +2470,70 @@ final class TurnViewModel {
             || message.contains("code -32601")
     }
 
-    // Filters pre-indexed skills using a single normalized search blob to reduce per-keystroke work.
+    // Filters pre-indexed skills while ranking name matches above description-only matches.
     private func filteredSkillAutocompleteItems(
         for query: String,
         indexedSkills: [TurnSkillSearchIndexEntry]
     ) -> [CodexSkillMetadata] {
-        let needle = query.lowercased()
-        let filtered = indexedSkills.lazy
-            .filter { needle.isEmpty || $0.searchBlob.contains(needle) }
-            .map(\.skill)
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !needle.isEmpty else {
+            return Array(indexedSkills.lazy.map(\.skill).prefix(maxSkillAutocompleteItems))
+        }
+
+        let filtered = indexedSkills.enumerated().compactMap { offset, entry -> (Int, Int, CodexSkillMetadata)? in
+            guard let score = entry.matchScore(for: needle) else {
+                return nil
+            }
+            return (score, offset, entry.skill)
+        }
+            .sorted { lhs, rhs in
+                if lhs.0 != rhs.0 {
+                    return lhs.0 < rhs.0
+                }
+                return lhs.1 < rhs.1
+            }
+            .map { $0.2 }
         return Array(filtered.prefix(maxSkillAutocompleteItems))
+    }
+
+    private func shouldRefreshSkillAutocompleteMiss(
+        query: String,
+        cachedItems: [CodexSkillMetadata],
+        cacheKey: String
+    ) -> Bool {
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedQuery.isEmpty,
+              cachedItems.isEmpty,
+              !unsupportedSkillsAutocompleteRoots.contains(cacheKey),
+              !forceRefreshedSkillMissKeys.contains(skillAutocompleteMissRefreshKey(query: trimmedQuery, cacheKey: cacheKey)) else {
+            return false
+        }
+
+        return true
+    }
+
+    private func rememberSkillAutocompleteMissRefresh(
+        query: String,
+        cacheKey: String,
+        indexedSkills: [TurnSkillSearchIndexEntry]
+    ) {
+        let refreshedItems = filteredSkillAutocompleteItems(for: query, indexedSkills: indexedSkills)
+        let refreshKey = skillAutocompleteMissRefreshKey(query: query, cacheKey: cacheKey)
+        if refreshedItems.isEmpty {
+            forceRefreshedSkillMissKeys.insert(refreshKey)
+        } else {
+            forceRefreshedSkillMissKeys.remove(refreshKey)
+        }
+    }
+
+    private func clearSkillAutocompleteMissRefreshes(cacheKey: String) {
+        let prefix = "\(cacheKey)\u{0}"
+        forceRefreshedSkillMissKeys = Set(forceRefreshedSkillMissKeys.filter { !$0.hasPrefix(prefix) })
+    }
+
+    private func skillAutocompleteMissRefreshKey(query: String, cacheKey: String) -> String {
+        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return "\(cacheKey)\u{0}\(normalizedQuery)"
     }
 
     private func filteredPluginAutocompleteItems(
@@ -2356,7 +2602,11 @@ final class TurnViewModel {
 
         isPlanModeArmed = false
         shouldAnchorToAssistantResponse = true
-        appendQueuedDraft(queuedDraft, codex: codex, threadID: threadID)
+        appendQueuedDraft(
+            preAppendQueuedDraftMessageIfNeeded(queuedDraft, codex: codex, threadID: threadID),
+            codex: codex,
+            threadID: threadID
+        )
         clearLocalDraft(codex: codex, threadID: threadID, persistToDisk: true)
     }
 
@@ -2364,10 +2614,16 @@ final class TurnViewModel {
     private func performTurnSend(
         _ pendingSend: PendingTurnSend,
         codex: CodexService,
-        threadID: String
+        threadID: String,
+        preAppendedMessage: CodexPreAppendedTurnMessage? = nil
     ) async {
         do {
-            try await dispatchPendingSend(pendingSend, codex: codex, threadID: threadID)
+            try await dispatchPendingSend(
+                pendingSend,
+                codex: codex,
+                threadID: threadID,
+                preAppendedMessage: preAppendedMessage
+            )
             clearLocalDraft(codex: codex, threadID: threadID, persistToDisk: true)
         } catch {
             restorePendingSendOnFailure(
@@ -2462,9 +2718,85 @@ final class TurnViewModel {
         setQueuedDrafts(drafts, codex: codex, threadID: threadID)
     }
 
+    // Shows queued follow-ups in the transcript immediately, then reuses the same row
+    // when the queue flushes so the bubble does not duplicate at assistant completion.
+    private func preAppendQueuedDraftMessageIfNeeded(
+        _ draft: QueuedTurnDraft,
+        codex: CodexService,
+        threadID: String
+    ) -> QueuedTurnDraft {
+        guard draft.preAppendedMessageID == nil else {
+            return draft
+        }
+
+        let messageID = codex.appendUserMessage(
+            threadId: threadID,
+            text: draft.text,
+            attachments: draft.attachments,
+            fileMentions: confirmedFileMentionPaths(from: draft.rawFileMentions),
+            skillMentions: draft.skillMentions.compactMap {
+                let rawName = $0.name ?? $0.id
+                let normalized = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+                return normalized.isEmpty ? nil : normalized
+            },
+            pluginMentions: draft.mentionMentions.compactMap {
+                let normalized = $0.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                return normalized.isEmpty ? nil : normalized
+            }
+        )
+
+        return messageID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? draft
+            : draft.withPreAppendedMessageID(messageID)
+    }
+
+    private func removeQueuedDraftOptimisticMessageIfNeeded(
+        _ draft: QueuedTurnDraft?,
+        codex: CodexService,
+        threadID: String
+    ) {
+        guard let messageID = draft?.preAppendedMessageID else {
+            return
+        }
+        _ = codex.removeUserMessage(threadId: threadID, messageId: messageID)
+    }
+
+    private func clearQueuedDraftOptimisticMessage(
+        id: String,
+        draft: QueuedTurnDraft,
+        codex: CodexService,
+        threadID: String
+    ) {
+        if let messageID = draft.preAppendedMessageID {
+            _ = codex.removeUserMessage(threadId: threadID, messageId: messageID)
+            replaceQueuedDraft(id: id, with: draft.withPreAppendedMessageID(nil), codex: codex, threadID: threadID)
+            return
+        }
+
+        codex.removeLatestFailedUserMessage(
+            threadId: threadID,
+            matchingText: draft.text,
+            matchingAttachments: draft.attachments
+        )
+    }
+
     private func prependQueuedDraft(_ draft: QueuedTurnDraft, codex: CodexService, threadID: String) {
         var drafts = queuedDrafts(codex: codex, threadID: threadID)
         drafts.insert(draft, at: 0)
+        setQueuedDrafts(drafts, codex: codex, threadID: threadID)
+    }
+
+    private func replaceQueuedDraft(
+        id: String,
+        with replacement: QueuedTurnDraft,
+        codex: CodexService,
+        threadID: String
+    ) {
+        var drafts = queuedDrafts(codex: codex, threadID: threadID)
+        guard let index = drafts.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        drafts[index] = replacement
         setQueuedDrafts(drafts, codex: codex, threadID: threadID)
     }
 
@@ -2505,6 +2837,7 @@ final class TurnViewModel {
         isSkillAutocompleteVisible = false
         isSkillAutocompleteLoading = false
         skillAutocompleteQuery = ""
+        skillAutocompleteTrigger = "$"
     }
 
     private func resetPluginAutocompleteState() {
@@ -2725,12 +3058,10 @@ final class TurnViewModel {
                         if let status = pullResult.status {
                             applyGitRepoSync(status)
                         }
-                    } else if result.state == "diverged" || result.state == "dirty_and_behind" {
+                    } else if result.state == "dirty_and_behind" {
                         gitSyncAlert = TurnGitSyncAlert(
-                            title: result.state == "diverged" ? "Branch diverged from remote" : "Local changes need attention",
-                            message: result.state == "diverged"
-                                ? "Local and remote history both moved. Pull with rebase to reconcile them?"
-                                : "You have local changes and the remote branch moved ahead. Pull with rebase only if you're ready to reconcile those changes.",
+                            title: "Local changes need attention",
+                            message: "You have local changes and the remote branch moved ahead. Pull with rebase only if you're ready to reconcile those changes.",
                             action: .pullRebase
                         )
                     }
@@ -3118,6 +3449,7 @@ struct TurnTrailingFileAutocompleteToken: Equatable {
 
 struct TurnTrailingSkillAutocompleteToken: Equatable {
     let query: String
+    let trigger: Character
     let tokenRange: Range<String.Index>
 }
 
@@ -3128,23 +3460,40 @@ struct TurnTrailingPluginAutocompleteToken: Equatable {
 
 private struct TurnTrailingToken: Equatable {
     let query: String
+    let trigger: Character
     let tokenRange: Range<String.Index>
 }
 
 private struct TurnSkillSearchIndexEntry: Equatable {
     let skill: CodexSkillMetadata
-    let searchBlob: String
+    let name: String
+    let displayName: String
+    let description: String
 
     init(skill: CodexSkillMetadata) {
         self.skill = skill
-        let name = skill.name.lowercased()
-        let displayName = SkillDisplayNameFormatter.displayName(for: skill.name).lowercased()
-        let description = skill.description?.lowercased() ?? ""
-        if description.isEmpty {
-            self.searchBlob = "\(name)\n\(displayName)"
-        } else {
-            self.searchBlob = "\(name)\n\(displayName)\n\(description)"
+        self.name = skill.name.lowercased()
+        self.displayName = SkillDisplayNameFormatter.displayName(for: skill.name).lowercased()
+        self.description = skill.description?.lowercased() ?? ""
+    }
+
+    func matchScore(for needle: String) -> Int? {
+        if name == needle || displayName == needle {
+            return 0
         }
+        if name.hasPrefix(needle) || displayName.hasPrefix(needle) {
+            return 1
+        }
+        if name.contains(needle) || displayName.contains(needle) {
+            return 2
+        }
+        if description.hasPrefix(needle) {
+            return 3
+        }
+        if description.contains(needle) {
+            return 4
+        }
+        return nil
     }
 }
 

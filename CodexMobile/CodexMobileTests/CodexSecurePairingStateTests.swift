@@ -10,19 +10,7 @@ import XCTest
 
 @MainActor
 final class CodexSecurePairingStateTests: XCTestCase {
-    private func makeService() -> CodexService {
-        let suiteName = "CodexSecurePairingStateTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
-        defaults.removePersistentDomain(forName: suiteName)
-        return CodexService(
-            defaults: defaults,
-            messagePersistence: .disabled,
-            aiChangeSetPersistence: .disabled,
-            userNotificationCenter: CodexNoopUserNotificationCenter(),
-            remoteNotificationRegistrar: CodexNoopRemoteNotificationRegistrar(),
-            secureStateBootstrap: .ephemeral
-        )
-    }
+    private static var retainedServices: [CodexService] = []
 
     override func setUp() {
         super.setUp()
@@ -152,6 +140,177 @@ final class CodexSecurePairingStateTests: XCTestCase {
         )
     }
 
+    func testTrustMacPromotesCurrentTrustedMacDeviceId() {
+        let service = makeService()
+        let macDeviceID = "mac-\(UUID().uuidString)"
+
+        service.trustMac(
+            deviceId: macDeviceID,
+            publicKey: Data(repeating: 6, count: 32).base64EncodedString(),
+            relayURL: "wss://relay.local/relay",
+            displayName: "Desk Mac"
+        )
+
+        XCTAssertEqual(service.normalizedCurrentTrustedMacDeviceId, macDeviceID)
+        XCTAssertEqual(
+            SecureStore.readString(for: CodexSecureKeys.currentTrustedMacDeviceId),
+            macDeviceID
+        )
+    }
+
+    func testInitializationMigratesCurrentTrustedMacDeviceIdFromRelayMacDeviceId() {
+        let macDeviceID = "mac-\(UUID().uuidString)"
+        let publicKey = Data(repeating: 12, count: 32).base64EncodedString()
+
+        SecureStore.writeCodable(
+            CodexTrustedMacRegistry(
+                records: [
+                    macDeviceID: CodexTrustedMacRecord(
+                        macDeviceId: macDeviceID,
+                        macIdentityPublicKey: publicKey,
+                        lastPairedAt: Date()
+                    )
+                ]
+            ),
+            for: CodexSecureKeys.trustedMacRegistry
+        )
+        SecureStore.writeString(macDeviceID, for: CodexSecureKeys.relayMacDeviceId)
+
+        let service = makeService()
+
+        XCTAssertEqual(service.normalizedCurrentTrustedMacDeviceId, macDeviceID)
+        XCTAssertEqual(
+            SecureStore.readString(for: CodexSecureKeys.currentTrustedMacDeviceId),
+            macDeviceID
+        )
+    }
+
+    func testInitializationDoesNotInventCurrentTrustedMacWhenLegacyPointersAreUnknown() {
+        let knownMacDeviceID = "mac-\(UUID().uuidString)"
+
+        SecureStore.writeCodable(
+            CodexTrustedMacRegistry(
+                records: [
+                    knownMacDeviceID: CodexTrustedMacRecord(
+                        macDeviceId: knownMacDeviceID,
+                        macIdentityPublicKey: Data(repeating: 13, count: 32).base64EncodedString(),
+                        lastPairedAt: Date()
+                    )
+                ]
+            ),
+            for: CodexSecureKeys.trustedMacRegistry
+        )
+        SecureStore.writeString("mac-missing", for: CodexSecureKeys.lastTrustedMacDeviceId)
+
+        let service = makeService()
+
+        XCTAssertNil(service.normalizedCurrentTrustedMacDeviceId)
+        XCTAssertNil(SecureStore.readString(for: CodexSecureKeys.currentTrustedMacDeviceId))
+    }
+
+    func testInitializationMigratesCurrentTrustedMacDeviceIdFromLastTrustedMacDeviceId() {
+        let macDeviceID = "mac-\(UUID().uuidString)"
+        let publicKey = Data(repeating: 14, count: 32).base64EncodedString()
+
+        SecureStore.writeCodable(
+            CodexTrustedMacRegistry(
+                records: [
+                    macDeviceID: CodexTrustedMacRecord(
+                        macDeviceId: macDeviceID,
+                        macIdentityPublicKey: publicKey,
+                        lastPairedAt: Date()
+                    )
+                ]
+            ),
+            for: CodexSecureKeys.trustedMacRegistry
+        )
+        SecureStore.writeString(macDeviceID, for: CodexSecureKeys.lastTrustedMacDeviceId)
+
+        let service = makeService()
+
+        XCTAssertEqual(service.normalizedCurrentTrustedMacDeviceId, macDeviceID)
+        XCTAssertEqual(
+            SecureStore.readString(for: CodexSecureKeys.currentTrustedMacDeviceId),
+            macDeviceID
+        )
+    }
+
+    func testClearSavedRelaySessionFallsBackToCurrentTrustedMacState() {
+        let service = makeService()
+        let macDeviceID = "mac-\(UUID().uuidString)"
+        let publicKey = Data(repeating: 15, count: 32).base64EncodedString()
+
+        service.trustedMacRegistry.records[macDeviceID] = CodexTrustedMacRecord(
+            macDeviceId: macDeviceID,
+            macIdentityPublicKey: publicKey,
+            lastPairedAt: Date(),
+            relayURL: "wss://relay.local/relay"
+        )
+        service.setCurrentTrustedMacDeviceId(macDeviceID)
+        service.relaySessionId = "saved-session"
+        service.relayUrl = "wss://relay.local/relay"
+        service.relayMacDeviceId = macDeviceID
+        service.relayMacIdentityPublicKey = publicKey
+
+        service.clearSavedRelaySession()
+
+        XCTAssertEqual(service.secureConnectionState, .liveSessionUnresolved)
+        XCTAssertEqual(service.secureMacFingerprint, codexSecureFingerprint(for: publicKey))
+        XCTAssertNil(service.normalizedRelaySessionId)
+    }
+
+    func testInitializationMigratesLegacyMacScopedDefaultsIntoCurrentMacScope() throws {
+        let macDeviceID = "mac-\(UUID().uuidString)"
+        let suiteName = "CodexSecurePairingStateTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        defaults.removePersistentDomain(forName: suiteName)
+
+        let legacyPlanSources = try JSONEncoder().encode(["thread-1": CodexPlanSessionSource.requested])
+        let legacyWorktreePaths = try JSONEncoder().encode(["thread-1": "/tmp/worktree"])
+        let legacyTurnTerminalStates = try JSONEncoder().encode(["turn-1": CodexTurnTerminalState.completed])
+        defaults.set(legacyPlanSources, forKey: CodexService.planSessionSourcesDefaultsKey)
+        defaults.set(legacyWorktreePaths, forKey: CodexService.associatedManagedWorktreePathsDefaultsKey)
+        defaults.set(["deleted-thread"], forKey: CodexService.locallyDeletedThreadIDsKey)
+        defaults.set(legacyTurnTerminalStates, forKey: CodexService.turnTerminalStatesDefaultsKey)
+
+        SecureStore.writeCodable(
+            CodexTrustedMacRegistry(
+                records: [
+                    macDeviceID: CodexTrustedMacRecord(
+                        macDeviceId: macDeviceID,
+                        macIdentityPublicKey: Data(repeating: 16, count: 32).base64EncodedString(),
+                        lastPairedAt: Date()
+                    )
+                ]
+            ),
+            for: CodexSecureKeys.trustedMacRegistry
+        )
+        SecureStore.writeString(macDeviceID, for: CodexSecureKeys.currentTrustedMacDeviceId)
+
+        let service = makeService(defaults: defaults)
+
+        XCTAssertEqual(service.planSessionSourceByThread["thread-1"], .requested)
+        XCTAssertEqual(service.associatedManagedWorktreePath(for: "thread-1"), "/tmp/worktree")
+        XCTAssertEqual(service.locallyDeletedThreadIDs, Set(["deleted-thread"]))
+        XCTAssertEqual(service.turnTerminalState(for: "turn-1"), .completed)
+        XCTAssertNil(defaults.object(forKey: CodexService.planSessionSourcesDefaultsKey))
+        XCTAssertNil(defaults.object(forKey: CodexService.associatedManagedWorktreePathsDefaultsKey))
+        XCTAssertNil(defaults.object(forKey: CodexService.locallyDeletedThreadIDsKey))
+        XCTAssertNil(defaults.object(forKey: CodexService.turnTerminalStatesDefaultsKey))
+        XCTAssertNotNil(
+            defaults.data(forKey: service.macScopedDefaultsKey(CodexService.planSessionSourcesDefaultsKey, macDeviceId: macDeviceID))
+        )
+        XCTAssertNotNil(
+            defaults.data(forKey: service.macScopedDefaultsKey(CodexService.associatedManagedWorktreePathsDefaultsKey, macDeviceId: macDeviceID))
+        )
+        XCTAssertNotNil(
+            defaults.array(forKey: service.macScopedDefaultsKey(CodexService.locallyDeletedThreadIDsKey, macDeviceId: macDeviceID))
+        )
+        XCTAssertNotNil(
+            defaults.data(forKey: service.macScopedDefaultsKey(CodexService.turnTerminalStatesDefaultsKey, macDeviceId: macDeviceID))
+        )
+    }
+
     // Clears the persisted relay session keys touched by secure reconnect tests.
     private func clearStoredSecureRelayState() {
         SecureStore.deleteValue(for: CodexSecureKeys.relaySessionId)
@@ -161,6 +320,30 @@ final class CodexSecurePairingStateTests: XCTestCase {
         SecureStore.deleteValue(for: CodexSecureKeys.relayProtocolVersion)
         SecureStore.deleteValue(for: CodexSecureKeys.relayLastAppliedBridgeOutboundSeq)
         SecureStore.deleteValue(for: CodexSecureKeys.trustedMacRegistry)
+        SecureStore.deleteValue(for: CodexSecureKeys.currentTrustedMacDeviceId)
         SecureStore.deleteValue(for: CodexSecureKeys.lastTrustedMacDeviceId)
+    }
+
+    private func makeService(defaults: UserDefaults? = nil) -> CodexService {
+        let resolvedDefaults: UserDefaults
+        if let defaults {
+            resolvedDefaults = defaults
+        } else {
+            let suiteName = "CodexSecurePairingStateTests.\(UUID().uuidString)"
+            let isolatedDefaults = UserDefaults(suiteName: suiteName) ?? .standard
+            isolatedDefaults.removePersistentDomain(forName: suiteName)
+            resolvedDefaults = isolatedDefaults
+        }
+
+        let service = CodexService(
+            defaults: resolvedDefaults,
+            messagePersistence: .disabled,
+            aiChangeSetPersistence: .disabled,
+            userNotificationCenter: CodexNoopUserNotificationCenter(),
+            remoteNotificationRegistrar: CodexNoopRemoteNotificationRegistrar(),
+            secureStateBootstrap: defaults == nil ? .ephemeral : .restorePersistedState
+        )
+        Self.retainedServices.append(service)
+        return service
     }
 }

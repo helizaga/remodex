@@ -29,14 +29,16 @@ extension CodexService {
 
         // Foreground polling is intentionally more aggressive so desktop-authored changes
         // feel closer to live on iPhone even when Codex.app itself doesn't push updates.
-        let listIntervalForegroundNs: UInt64 = 10_000_000_000
-        let listIntervalBackgroundNs: UInt64 = 75_000_000_000
-        let historyIntervalForegroundNs: UInt64 = 3_000_000_000
-        let historyIntervalForegroundMirroredNs: UInt64 = 1_000_000_000
-        let historyIntervalBackgroundIdleNs: UInt64 = 90_000_000_000
-        let historyIntervalBackgroundRunningNs: UInt64 = 12_000_000_000
-        let watchIntervalForegroundNs: UInt64 = 2_000_000_000
-        let watchIntervalBackgroundNs: UInt64 = 15_000_000_000
+        // Low-network multiplier stretches intervals when connectivity is constrained.
+        let networkMultiplier: UInt64 = isConstrainedNetwork ? 2 : 1
+        let listIntervalForegroundNs: UInt64 = 10_000_000_000 * networkMultiplier
+        let listIntervalBackgroundNs: UInt64 = 75_000_000_000 * networkMultiplier
+        let historyIntervalForegroundNs: UInt64 = 3_000_000_000 * networkMultiplier
+        let historyIntervalForegroundMirroredNs: UInt64 = 1_000_000_000 * networkMultiplier
+        let historyIntervalBackgroundIdleNs: UInt64 = 90_000_000_000 * networkMultiplier
+        let historyIntervalBackgroundRunningNs: UInt64 = 12_000_000_000 * networkMultiplier
+        let watchIntervalForegroundNs: UInt64 = 2_000_000_000 * networkMultiplier
+        let watchIntervalBackgroundNs: UInt64 = 15_000_000_000 * networkMultiplier
 
         threadListSyncTask = Task { [weak self] in
             while let self, !Task.isCancelled {
@@ -217,6 +219,7 @@ extension CodexService {
         let persistedDeletedIDs = locallyDeletedThreadIDs
 
         var merged: [String: CodexThread] = [:]
+        merged.reserveCapacity(max(threads.count, serverThreads.count))
         var snapshotOnlyPinnedIDs: Set<String> = []
 
         // Merge active server threads.
@@ -559,7 +562,7 @@ extension CodexService {
         threads.removeAll { $0.id == threadId }
         messagesByThread.removeValue(forKey: threadId)
         if persistMessages {
-            messagePersistence.save(messagesByThread)
+            persistCurrentMacMessages()
         }
 
         hydratedThreadIDs.remove(threadId)
@@ -1039,31 +1042,29 @@ extension CodexService {
 
     // MARK: - Persisted archive/delete sets
 
-    private static let locallyDeletedThreadIDsKey = "codex.locallyDeletedThreadIDs"
-
     var locallyArchivedThreadIDs: Set<String> {
-        Set(defaults.stringArray(forKey: Self.locallyArchivedThreadIDsKey) ?? [])
+        Set(defaults.stringArray(forKey: macScopedDefaultsKey(Self.locallyArchivedThreadIDsKey)) ?? [])
     }
 
     var locallyDeletedThreadIDs: Set<String> {
-        Set(defaults.stringArray(forKey: Self.locallyDeletedThreadIDsKey) ?? [])
+        Set(defaults.stringArray(forKey: macScopedDefaultsKey(Self.locallyDeletedThreadIDsKey)) ?? [])
     }
 
     private func addLocallyArchivedThreadID(_ threadId: String) {
         var ids = locallyArchivedThreadIDs
         ids.insert(threadId)
-        defaults.set(Array(ids), forKey: Self.locallyArchivedThreadIDsKey)
+        defaults.set(Array(ids), forKey: macScopedDefaultsKey(Self.locallyArchivedThreadIDsKey))
     }
 
     private func removeLocallyArchivedThreadID(_ threadId: String) {
         var ids = locallyArchivedThreadIDs
         ids.remove(threadId)
-        defaults.set(Array(ids), forKey: Self.locallyArchivedThreadIDsKey)
+        defaults.set(Array(ids), forKey: macScopedDefaultsKey(Self.locallyArchivedThreadIDsKey))
     }
 
     private func addLocallyDeletedThreadID(_ threadId: String) {
         var ids = locallyDeletedThreadIDs
         ids.insert(threadId)
-        defaults.set(Array(ids), forKey: Self.locallyDeletedThreadIDsKey)
+        defaults.set(Array(ids), forKey: macScopedDefaultsKey(Self.locallyDeletedThreadIDsKey))
     }
 }

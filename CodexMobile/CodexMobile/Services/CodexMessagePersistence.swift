@@ -8,53 +8,51 @@ import CryptoKit
 import Foundation
 
 nonisolated struct CodexMessagePersistence {
-    nonisolated(unsafe) private let loadImpl: () -> [String: [CodexMessage]]
-    nonisolated(unsafe) private let saveImpl: ([String: [CodexMessage]]) -> Void
+    private let disabled: Bool
+
+    // v6 encrypts the on-device message cache while keeping backward-compatible legacy fallbacks.
+    private let fileName = "codex-message-history-v6.bin"
+    private let legacyFileNames = [
+        "codex-message-history-v5.json",
+        "codex-message-history-v4.json",
+        "codex-message-history-v3.json",
+        "codex-message-history-v2.json",
+        "codex-message-history.json",
+    ]
 
     init() {
-        self.loadImpl = { Self.liveLoad() }
-        self.saveImpl = { value in Self.liveSave(value) }
+        self.disabled = false
     }
 
-    private init(
-        load: @escaping () -> [String: [CodexMessage]],
-        save: @escaping ([String: [CodexMessage]]) -> Void
-    ) {
-        self.loadImpl = load
-        self.saveImpl = save
+    private init(disabled: Bool) {
+        self.disabled = disabled
     }
 
     static var disabled: CodexMessagePersistence {
-        CodexMessagePersistence(load: { [:] }, save: { _ in })
+        CodexMessagePersistence(disabled: true)
     }
 
     // Loads the saved message map from disk. Returns an empty store on failure.
-    nonisolated func load() -> [String: [CodexMessage]] {
-        loadImpl()
-    }
+    func load(macDeviceId: String? = nil, includeLegacyFallback: Bool = false) -> [String: [CodexMessage]] {
+        guard !disabled else {
+            return [:]
+        }
 
-    // Persists all thread timelines atomically to avoid corrupt partial writes.
-    nonisolated func save(_ value: [String: [CodexMessage]]) {
-        saveImpl(value)
-    }
-
-    private nonisolated static func liveLoad() -> [String: [CodexMessage]] {
         let decoder = JSONDecoder()
-        let encryptedFileName = "codex-message-history-v6.bin"
 
-        for fileURL in storeURLs {
+        for fileURL in storeURLs(macDeviceId: macDeviceId, includeLegacyFallback: includeLegacyFallback) {
             guard let data = try? Data(contentsOf: fileURL) else {
                 continue
             }
 
-            if fileURL.lastPathComponent == encryptedFileName,
-               let decrypted = Self.decryptPersistedPayload(data),
+            if fileURL.lastPathComponent == fileName,
+               let decrypted = decryptPersistedPayload(data),
                let value = try? decoder.decode([String: [CodexMessage]].self, from: decrypted) {
-                return Self.sanitizedForPersistence(value)
+                return sanitizedForPersistence(value)
             }
 
             if let value = try? decoder.decode([String: [CodexMessage]].self, from: data) {
-                return Self.sanitizedForPersistence(value)
+                return sanitizedForPersistence(value)
             }
         }
 
@@ -62,54 +60,84 @@ nonisolated struct CodexMessagePersistence {
     }
 
     // Persists all thread timelines atomically to avoid corrupt partial writes.
-    private nonisolated static func liveSave(_ value: [String: [CodexMessage]]) {
+    func save(_ value: [String: [CodexMessage]], macDeviceId: String? = nil) {
+        guard !disabled else {
+            return
+        }
+
         let encoder = JSONEncoder()
         guard let plaintext = try? encoder.encode(sanitizedForPersistence(value)),
               let data = encryptPersistedPayload(plaintext) else {
             return
         }
 
-        let fileURL = Self.storeURL
-        Self.ensureParentDirectoryExists(for: fileURL)
+        let fileURL = storeURL(macDeviceId: macDeviceId)
+        ensureParentDirectoryExists(for: fileURL)
         try? data.write(to: fileURL, options: [.atomic])
     }
 
-    private nonisolated static var storeURL: URL {
-        Self.storeURLs[0]
+    // Removes the scoped timeline cache after a rotated device id has been merged elsewhere.
+    func delete(macDeviceId: String?) {
+        guard !disabled else {
+            return
+        }
+
+        for fileURL in storeURLs(macDeviceId: macDeviceId) {
+            try? FileManager.default.removeItem(at: fileURL)
+        }
     }
 
-    private nonisolated static var storeURLs: [URL] {
-        let fileName = "codex-message-history-v6.bin"
-        let legacyFileNames = [
-            "codex-message-history-v5.json",
-            "codex-message-history-v4.json",
-            "codex-message-history-v3.json",
-            "codex-message-history-v2.json",
-            "codex-message-history.json",
-        ]
+    private func storeURL(macDeviceId: String?) -> URL {
+        storeURLs(macDeviceId: macDeviceId)[0]
+    }
+
+    private func storeURLs(macDeviceId: String?, includeLegacyFallback: Bool = false) -> [URL] {
         let fm = FileManager.default
         let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fm.temporaryDirectory
         let bundleID = Bundle.main.bundleIdentifier ?? "com.codexmobile.app"
-        let directory = base.appendingPathComponent(bundleID, isDirectory: true)
+        let directory = messageHistoryDirectory(base: base, bundleID: bundleID, macDeviceId: macDeviceId)
         let names = [fileName] + legacyFileNames
-        return names.map { directory.appendingPathComponent($0, isDirectory: false) }
+        let scopedStoreURLs = names.map { directory.appendingPathComponent($0, isDirectory: false) }
+
+        guard normalizedMacDeviceId(macDeviceId) != nil else {
+            return scopedStoreURLs
+        }
+
+        guard includeLegacyFallback else {
+            return scopedStoreURLs
+        }
+
+        let legacyDirectory = base.appendingPathComponent(bundleID, isDirectory: true)
+        let legacyStoreURLs = names.map { legacyDirectory.appendingPathComponent($0, isDirectory: false) }
+        return scopedStoreURLs + legacyStoreURLs
     }
 
-    private nonisolated static func ensureParentDirectoryExists(for fileURL: URL) {
+    private func messageHistoryDirectory(base: URL, bundleID: String, macDeviceId: String?) -> URL {
+        let rootDirectory = base.appendingPathComponent(bundleID, isDirectory: true)
+        guard let normalizedMacDeviceId = normalizedMacDeviceId(macDeviceId) else {
+            return rootDirectory
+        }
+
+        return rootDirectory
+            .appendingPathComponent("mac", isDirectory: true)
+            .appendingPathComponent(normalizedMacDeviceId, isDirectory: true)
+    }
+
+    private func ensureParentDirectoryExists(for fileURL: URL) {
         let directory = fileURL.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
     // Uses a Keychain-backed AES key so chat history remains private if the app data is copied out.
-    private nonisolated static func encryptPersistedPayload(_ plaintext: Data) -> Data? {
+    private func encryptPersistedPayload(_ plaintext: Data) -> Data? {
         let key = messageHistoryKey()
         let sealedBox = try? AES.GCM.seal(plaintext, using: key)
         return sealedBox?.combined
     }
 
     // Opens the encrypted chat cache while still allowing plaintext fallbacks from older app versions.
-    private nonisolated static func decryptPersistedPayload(_ encryptedData: Data) -> Data? {
+    private func decryptPersistedPayload(_ encryptedData: Data) -> Data? {
         let key = messageHistoryKey()
         guard let sealedBox = try? AES.GCM.SealedBox(combined: encryptedData) else {
             return nil
@@ -117,7 +145,7 @@ nonisolated struct CodexMessagePersistence {
         return try? AES.GCM.open(sealedBox, using: key)
     }
 
-    private nonisolated static func messageHistoryKey() -> SymmetricKey {
+    private func messageHistoryKey() -> SymmetricKey {
         if let storedKey = SecureStore.readData(for: CodexSecureKeys.messageHistoryKey) {
             return SymmetricKey(data: storedKey)
         }
@@ -130,7 +158,7 @@ nonisolated struct CodexMessagePersistence {
 
     // Keep pending structured prompts on disk so reconnects and relaunches can still surface
     // a request the server is waiting on; lifecycle cleanup removes them once the request resolves.
-    private nonisolated static func sanitizedForPersistence(_ value: [String: [CodexMessage]]) -> [String: [CodexMessage]] {
+    private func sanitizedForPersistence(_ value: [String: [CodexMessage]]) -> [String: [CodexMessage]] {
         value.mapValues { messages in
             messages.map { message in
                 guard !message.attachments.isEmpty else {
@@ -145,5 +173,13 @@ nonisolated struct CodexMessagePersistence {
                 return sanitizedMessage
             }
         }
+    }
+
+    private func normalizedMacDeviceId(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
     }
 }
