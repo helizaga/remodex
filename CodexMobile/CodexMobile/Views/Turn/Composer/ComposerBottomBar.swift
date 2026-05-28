@@ -51,7 +51,8 @@ struct ComposerBottomBar: View {
     private let metaLabelColor = Color(.secondaryLabel)
     private var metaTextFont: Font { AppFont.subheadline() }
     private let composerIconSide: CGFloat = 22
-    private let composerCircleDiameter: CGFloat = 26
+    private let composerCircleDiameter: CGFloat = 30
+    private let composerActionIconSize: CGFloat = 14
     private let inlineAccessControlSize: CGFloat = 32
     private let inlineAccessControlIconSize: CGFloat = 20
 
@@ -130,7 +131,8 @@ struct ComposerBottomBar: View {
                         systemName: "stop.fill",
                         foreground: sendButtonPaletteColor.bubbleForeground(for: colorScheme),
                         background: sendButtonPaletteColor.bubbleBackground(for: colorScheme),
-                        diameter: composerCircleDiameter
+                        diameter: composerCircleDiameter,
+                        iconSize: composerActionIconSize
                     )
                 }
                 .accessibilityLabel("Stop current run")
@@ -145,7 +147,8 @@ struct ComposerBottomBar: View {
                         systemName: "arrow.up",
                         foreground: sendButtonIconColor,
                         background: sendButtonBackgroundColor,
-                        diameter: composerCircleDiameter
+                        diameter: composerCircleDiameter,
+                        iconSize: composerActionIconSize
                     )
                 }
                 .overlay(alignment: .topTrailing) {

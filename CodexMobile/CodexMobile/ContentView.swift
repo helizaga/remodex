@@ -27,6 +27,13 @@ enum ContentNavigationRoute: Hashable {
     case thread(id: String)
     case settings
     case terminal(preferredWorkingDirectory: String?)
+
+    var isTerminalRoute: Bool {
+        if case .terminal = self {
+            return true
+        }
+        return false
+    }
 }
 
 private struct MacContextTransitionSnapshot {
@@ -1092,6 +1099,17 @@ struct ContentView: View {
         navigationPath.append(route)
     }
 
+    // Terminal can be opened from several surfaces with different cwd payloads;
+    // replace the active terminal route instead of stacking near-identical pages.
+    private func appendTerminalNavigationRoute(preferredWorkingDirectory: String?) {
+        let route = ContentNavigationRoute.terminal(preferredWorkingDirectory: preferredWorkingDirectory)
+        if navigationPath.last?.isTerminalRoute == true {
+            navigationPath[navigationPath.count - 1] = route
+        } else {
+            appendNavigationRoute(route)
+        }
+    }
+
     // Keeps the native route and drawer presentations on the same fresh-thread sync path.
     private func requestSidebarFreshSyncIfNeeded() {
         if !isSidebarPrewarmed,
@@ -1189,16 +1207,15 @@ struct ContentView: View {
     }
 
     private func openTerminal(preferredWorkingDirectory: String?) {
-        appendNavigationRoute(.terminal(preferredWorkingDirectory: preferredWorkingDirectory))
+        appendTerminalNavigationRoute(preferredWorkingDirectory: preferredWorkingDirectory)
     }
 
     private func openTerminalFromSidebar(preferredWorkingDirectory: String?) {
-        let route = ContentNavigationRoute.terminal(preferredWorkingDirectory: preferredWorkingDirectory)
         if shouldPresentSidebarAsNavigation {
-            appendNavigationRoute(route)
+            appendTerminalNavigationRoute(preferredWorkingDirectory: preferredWorkingDirectory)
         } else {
             closeSidebar()
-            appendNavigationRoute(route)
+            appendTerminalNavigationRoute(preferredWorkingDirectory: preferredWorkingDirectory)
         }
     }
 

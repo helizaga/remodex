@@ -6,29 +6,6 @@
 
 import SwiftUI
 
-// MARK: - Glass back button
-
-/// Plain back chevron rendered against the transparent terminal nav bar.
-/// No fixed frame or background — sits in the toolbar like a stock system
-/// nav-bar button so it stops reading as a separate oval pill.
-struct TerminalGlassBackButton: View {
-    let theme: RemodexTerminalTheme
-    let action: () -> Void
-
-    var body: some View {
-        Button {
-            HapticFeedback.shared.triggerImpactFeedback(style: .light)
-            action()
-        } label: {
-            RemodexIcon.image(systemName: "chevron.backward")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(Color(hexString: theme.foreground))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Back")
-    }
-}
-
 // MARK: - Navigation title
 
 struct TerminalRouteTitle: View {

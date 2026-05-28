@@ -21,6 +21,7 @@ struct TerminalConnectionEditorSheet: View {
     @State private var isShowingAdvanced = false
     @State private var isShowingKeyEditor = false
     @State private var isConfirmingKnownHostReset = false
+    @State private var isShowingConnectionHelp = false
 
     private var keyLabel: String {
         RemodexTerminalPrivateKeyStore.hasPrivateKey(privateKey) ? "Imported" : "Import"
@@ -88,11 +89,25 @@ struct TerminalConnectionEditorSheet: View {
                         dismiss()
                     }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        HapticFeedback.shared.triggerImpactFeedback(style: .light)
+                        isShowingConnectionHelp = true
+                    } label: {
+                        RemodexIcon.image(systemName: "questionmark.circle")
+                            .font(.system(size: 17, weight: .medium))
+                    }
+                    .accessibilityLabel("SSH setup guide")
+
                     Button("Connect", action: onSave)
                         .font(.system(size: 15, weight: .bold))
                         .disabled(!canSave)
                 }
+            }
+            .sheet(isPresented: $isShowingConnectionHelp) {
+                TerminalConnectionHelpSheet()
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
             }
             .confirmationDialog(
                 "Reset saved SSH host key?",

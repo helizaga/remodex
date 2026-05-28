@@ -25,7 +25,6 @@ struct TerminalScreen: View {
     @State private var didApplyPreferredWorkingDirectory = false
     @State private var pendingModifier: TerminalPendingModifier?
     @State private var selectedModifier: TerminalPendingModifier = .ctrl
-    @Environment(\.dismiss) private var dismissRoute
     @AppStorage("codex.terminal.fontSize") private var terminalFontSize = remodexTerminalDefaultFontSize
 
     let preferredWorkingDirectory: String?
@@ -204,17 +203,11 @@ struct TerminalScreen: View {
             terminalRouteBody
         }
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(true)
         // Use the system bar (translucent over the black terminal background) instead
-        // of an opaque tinted bar — the glass back button and status pill float on top.
+        // of an opaque tinted bar so the native back button and status pill float on top.
         .toolbarBackground(.hidden, for: .navigationBar)
         .toolbarColorScheme(colorScheme, for: .navigationBar)
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                TerminalGlassBackButton(theme: theme) {
-                    dismissRoute()
-                }
-            }
             ToolbarItem(placement: .principal) {
                 TerminalRouteTitle(
                     topLine: navigationTopLine,

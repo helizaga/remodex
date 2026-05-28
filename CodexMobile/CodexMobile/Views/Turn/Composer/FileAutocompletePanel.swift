@@ -68,7 +68,7 @@ struct FileAutocompletePanel: View {
                                 onSelectPlugin(item)
                             } label: {
                                 HStack(spacing: 8) {
-                                    mentionIcon
+                                    mentionIcon(for: .plugin)
 
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(item.displayTitle)
@@ -104,7 +104,7 @@ struct FileAutocompletePanel: View {
                                 onSelect(item)
                             } label: {
                                 HStack(spacing: 8) {
-                                    mentionIcon
+                                    mentionIcon(for: .file)
 
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(item.fileName)
@@ -138,10 +138,10 @@ struct FileAutocompletePanel: View {
         .padding(.horizontal, 4)
     }
 
-    private var mentionIcon: some View {
-        RemodexIcon.image(systemName: "at")
+    private func mentionIcon(for style: TurnMentionChipStyle) -> some View {
+        RemodexIcon.image(systemName: style.symbolName)
             .font(AppFont.system(size: 14, weight: .semibold))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(style.tintColor)
             .frame(width: 18)
     }
 

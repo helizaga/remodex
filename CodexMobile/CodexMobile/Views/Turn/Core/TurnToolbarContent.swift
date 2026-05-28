@@ -43,10 +43,10 @@ struct TurnToolbarContent: ToolbarContent {
     var body: some ToolbarContent {
         let isThreadActionLoading = isHandingOffToMac || isStartingNewChat
         let canTapMacHandoff = onTapMacHandoff != nil && !isThreadActionLoading
+        // Worktree handoff has its own Git/worktree gates; keep it aligned with the composer Local menu.
         let canTapWorktreeHandoff = onTapWorktreeHandoff != nil
             && canHandOffToWorktree
             && !isCreatingGitWorktree
-            && !isThreadActionLoading
         let canTapNewChat = onTapNewChat != nil && !isThreadActionLoading
         let canTapTerminal = onTapTerminal != nil
         let threadActions = threadActionItems(

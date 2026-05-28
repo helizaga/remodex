@@ -391,7 +391,7 @@ final class CodexService {
         case ephemeral
     }
 
-    static let minimumSupportedBridgePackageVersion = "1.3.9"
+    static let minimumSupportedBridgePackageVersion = "2.0.0"
 
     // --- Public state ---------------------------------------------------------
 
@@ -510,6 +510,8 @@ final class CodexService {
     var threadCompletionBanner: CodexThreadCompletionBanner?
     // Explains why a push-opened chat could not be restored and offers a recovery path.
     var missingNotificationThreadPrompt: CodexMissingNotificationThreadPrompt?
+    // Owns the scarce App Store review prompt budget for successful in-app runs.
+    @ObservationIgnored let appReviewPromptCoordinator = AppReviewPromptCoordinator()
     // Interactive SSH terminal state is owned on-device so it can bootstrap a Mac before the bridge runs.
     var terminalSnapshot: RemodexTerminalSnapshot = .idle
     var terminalSnapshotsById: [String: RemodexTerminalSnapshot] = [:]
