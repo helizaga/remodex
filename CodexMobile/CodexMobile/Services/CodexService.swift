@@ -966,12 +966,16 @@ final class CodexService {
 
     deinit {
         MainActor.assumeIsolated {
+            networkPathMonitor?.cancel()
+            networkPathMonitor = nil
             if CodexRuntimeEnvironment.isRunningAutomatedTests {
                 releaseConnectionResourcesForAutomatedTestDeinit()
             } else {
                 releaseConnectionResourcesForDeinit()
             }
             releaseNotificationResourcesForDeinit()
+            notificationObserverTokens.removeAll()
+            notificationCenterDelegateProxy = nil
         }
     }
 
@@ -1192,23 +1196,6 @@ final class CodexService {
         setCurrentTrustedMacDeviceId(bootstrapDeviceId)
     }
 
-    deinit {
-        MainActor.assumeIsolated {
-            networkPathMonitor?.cancel()
-            trustedSessionResolveTask?.cancel()
-            messagePersistenceDebounceTask?.cancel()
-            coalescedRevertRefreshTask?.cancel()
-            threadListSyncTask?.cancel()
-            activeThreadSyncTask?.cancel()
-            runningThreadWatchSyncTask?.cancel()
-            postConnectSyncTask?.cancel()
-            gptAccountLoginSyncTask?.cancel()
-
-            notificationObserverTokens.forEach { NotificationCenter.default.removeObserver($0) }
-            notificationObserverTokens.removeAll()
-            notificationCenterDelegateProxy = nil
-        }
-    }
 }
 
 private extension String {

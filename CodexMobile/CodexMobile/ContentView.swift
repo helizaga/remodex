@@ -1832,6 +1832,8 @@ struct ContentView: View {
                     pairingPayload = try await codex.resolvePairingCode(code)
                 case .scanError(let message):
                     throw CodexSecureTransportError.invalidQR(message)
+                case .appUpdateRequired(let message):
+                    throw CodexSecureTransportError.invalidQR(message)
                 case .bridgeUpdateRequired(let prompt):
                     codex.bridgeUpdatePrompt = prompt
                     return

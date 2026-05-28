@@ -33,11 +33,6 @@ struct SubagentActionCard: View {
                 }
                 .padding(.top, agentRowsTopPadding)
             }
-
-            if isStreaming {
-                TypingIndicator()
-                    .padding(.top, agentRows.isEmpty ? 2 : 3)
-            }
         }
         .task(id: agentRows.map(\.threadId)) {
             await hydrateChildThreadMetadata()
