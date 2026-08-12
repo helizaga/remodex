@@ -6,7 +6,8 @@
 
 [![npm version](https://img.shields.io/npm/v/remodex)](https://www.npmjs.com/package/remodex)
 [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](LICENSE)
-[Follow on X](https://x.com/emanueledpt)
+
+> **Fork notice:** This is [Tom Elizaga](https://github.com/helizaga)'s fork of [Emanuele-web04/remodex](https://github.com/Emanuele-web04/remodex), created by [@emanueledpt](https://x.com/emanueledpt) — all credit for the core product belongs to the upstream author. This fork tracks upstream and carries my own changes: iOS build fixes after upstream syncs, personal-team iOS install support, and work toward an always-on ("24/7") bridge setup.
 
 Control [Codex](https://openai.com/index/codex/) from your iPhone. Remodex is a local-first open-source bridge + iOS app that keeps the Codex runtime on your Mac and lets your phone connect through a paired secure session.
 
